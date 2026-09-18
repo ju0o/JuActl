@@ -68,11 +68,14 @@ class Board:
         self.rows: list[dict] = []
         self.jobs: queue.Queue = queue.Queue()
         self.auto_refresh = True
+        self.refreshing = False
+        self.refresh_interval_ms = 12000
+        self.previous_rows: dict[str, dict] = {}
         self.log_visible = False
         self._build()
         self.refresh()
         self.root.after(100, self._drain)
-        self.root.after(5000, self._auto_tick)
+        self.root.after(self.refresh_interval_ms, self._auto_tick)
 
     def _style(self) -> None:
         from tkinter import ttk
@@ -109,7 +112,7 @@ class Board:
         conn = f"◈ ssh {self.ssh_target}" if self.ssh_target else "◈ 로컬"
         tk.Label(top, text=f"▓▒░ JUACTL // SIGNAL BOARD ░▒▓  {conn}", bg="#05050c", fg=NEON,
                  font=("Consolas", 12, "bold")).pack(side="left", padx=10, pady=6)
-        self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (5s)")
+        self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
                   bg="#05050c", fg=DIM, relief="flat", cursor="hand2").pack(side="left", padx=12)
         self.summary_var = tk.StringVar(value="정상 0 · 문제 0 · 미확인 0")
@@ -234,13 +237,13 @@ class Board:
 
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
-        self.auto_var.set("◉ 자동새로고침 ON (5s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
+        self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self.log(f"자동새로고침 {'켬' if self.auto_refresh else '끔'}")
 
     def _auto_tick(self) -> None:
         if self.auto_refresh:
             self.refresh(quiet=True)
-        self.root.after(5000, self._auto_tick)
+        self.root.after(self.refresh_interval_ms, self._auto_tick)
 
     def rows_now(self) -> list[dict]:
         from actl.tui import _rows
@@ -248,6 +251,9 @@ class Board:
         return _rows(self.config)
 
     def refresh(self, quiet: bool = False) -> None:
+        if self.refreshing:
+            return
+        self.refreshing = True
         self.set_status("새로고침 중…")
         if not quiet:
             self.log("새로고침 중…")
@@ -257,11 +263,20 @@ class Board:
         import tkinter as tk
 
         if isinstance(result, Exception):
+            self.refreshing = False
             self.set_status("새로고침 실패")
             self.log(f"새로고침 실패: {result}")
             return
         prev_sel = self.selected
+        from actl.core.events import detect_events
+
         self.rows = result
+        if self.previous_rows:
+            for event in detect_events(self.previous_rows, self.rows):
+                self.log(f"◆ {event['agent']} · {event['detail']}")
+        self.previous_rows = {r["agent"]: r for r in self.rows}
+        self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
+        self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
         counts = {
             "정상": sum(r["state"] == "UP" for r in self.rows),
@@ -278,6 +293,7 @@ class Board:
             self.selected = keep
             self._highlight(keep)
             self._update_action_state()
+        self.refreshing = False
 
     def _render_cards(self, selected: str | None = None) -> None:
         import tkinter as tk
@@ -312,7 +328,8 @@ class Board:
                      font=("Consolas", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
             sub = (r["preview"] or r["detail"] or "—")[:60]
-            activity = f"{r.get('busy', '-')} · {r.get('result_flag', '-')}"
+            result_label = {"READY": "결과 준비", "WAITING": "결과 대기", "UNKNOWN": "결과 미확인"}.get(r.get("result_state"), "결과 미확인")
+            activity = f"{r.get('busy', '-')} · {result_label}"
             tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Consolas", 9),
                      anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
             card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
@@ -358,7 +375,8 @@ class Board:
             return
         self.selected = row["agent"]
         tgt = row["target"]
-        self.detail_var.set(f"상태 {STATE_KO.get(row['state'], row['state'])} · {row.get('busy', '활동 미확인')} · 결과 {row.get('result_flag', '-')} · 대상 {tgt}")
+        result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(row.get("result_state"), "미확인")
+        self.detail_var.set(f"상태 {STATE_KO.get(row['state'], row['state'])} · {row.get('busy', '활동 미확인')} · 결과 {result_label} · 대상 {tgt}")
         if tgt == "-" or tgt.endswith("?"):
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")

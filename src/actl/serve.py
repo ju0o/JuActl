@@ -91,7 +91,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 <header>
   <h1 data-text="▓ JuActl 보드 ░">▓ JuActl 보드 ░</h1>
   <span class="st" id="conn">연결 중…</span>
-  <span class="st">자동새로고침 <span class="live" id="autoSt">ON</span> (5s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
+  <span class="st">자동감시 <span class="live" id="autoSt">ADAPTIVE</span> (3–12s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
   <span class="st" id="clock"></span>
 </header>
 <main>
@@ -123,7 +123,7 @@ BOARD_HTML = r"""<!DOCTYPE html>
 </main>
 <footer>복사 = 브라우저 클립보드 직행 · pane보드 = 전체 tmux 실시간 · 재매핑 = pane 행 클릭</footer>
 <script>
-let SEL = null, AUTO = true, ROWS = [], TOKEN = sessionStorage.getItem('actl-token') || new URLSearchParams(location.search).get('token') || '';
+let SEL = null, AUTO = true, ROWS = [], PREV = {}, NEXT_MS = 12000, TOKEN = sessionStorage.getItem('actl-token') || new URLSearchParams(location.search).get('token') || '';
 let FILTER = 'ALL';
 if(TOKEN) { sessionStorage.setItem('actl-token', TOKEN); history.replaceState(null, '', location.pathname); }
 const KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
@@ -131,9 +131,9 @@ const CLS = {"UP":"up","DOWN":"bad","MISMATCH":"warn","UNMAPPED":"dim","DETECTED
 function log(m){ const el=document.getElementById('log'); el.innerHTML=`<div>[${new Date().toLocaleTimeString()}] ${m}</div>`+el.innerHTML; }
 function tick(){ document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tick,1000); tick();
-function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ON":"OFF"; log("자동새로고침 "+(AUTO?"켬":"끔")); }
+function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ADAPTIVE":"OFF"; log("자동감시 "+(AUTO?"켬":"끔")); }
 function esc(v){ return String(v??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c])); }
-setInterval(()=>{ if(AUTO) refresh(true); },5000);
+function schedule(){ setTimeout(()=>{ if(AUTO) refresh(true); schedule(); },NEXT_MS); }
 async function api(path, opts){
   opts=opts||{}; opts.headers=Object.assign({},opts.headers||{},TOKEN?{'Authorization':'Bearer '+TOKEN}:{});
   const r = await fetch(path, opts);
@@ -146,6 +146,9 @@ async function refresh(quiet){
   try {
     const d = await api('/api/board');
     ROWS = d.agents;
+    if(Object.keys(PREV).length) ROWS.forEach(a=>{ const old=PREV[a.agent]||{}; if(old.activity_state==='RUNNING'&&a.activity_state==='IDLE') log(`◆ ${a.display} · 유휴 상태 전환`); if(a.result_hash&&a.result_hash!==old.result_hash) log(`◆ ${a.display} · 새 결과 준비`); });
+    PREV = Object.fromEntries(ROWS.map(a=>[a.agent,a]));
+    NEXT_MS = d.nextRefreshMs || (ROWS.some(a=>a.activity_state==='RUNNING') ? 3000 : 12000);
     const good=ROWS.filter(a=>a.state==='UP').length;
     const problem=ROWS.filter(a=>['DOWN','MISMATCH'].includes(a.state)).length;
     const unknown=ROWS.length-good-problem;
@@ -163,13 +166,15 @@ async function refresh(quiet){
       const div = document.createElement('div');
       div.className = "card"+(a.agent===SEL?" sel":"");
       div.dataset.agent = a.agent;
-      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.target)} · ${esc(KO[a.state]||a.state)}</span><div class="sub">${esc(a.activity_ko||a.activity||"미확인")} · ${esc(a.result_flag||"-")} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
+      const resultLabel={READY:'결과 준비',WAITING:'결과 대기',UNKNOWN:'결과 미확인'}[a.result_state]||'결과 미확인';
+      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.target)} · ${esc(KO[a.state]||a.state)}</span><div class="sub">${esc(a.activity_ko||a.activity||"미확인")} · ${esc(resultLabel)} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
       div.onclick = ()=>select(a.agent);
       box.appendChild(div);
     });
     if(!SEL && ROWS.length) select(ROWS[0].agent, true);
     document.getElementById('board').innerHTML = d.boardHtml;
     if(!quiet) log(`새로고침 완료 (live ${d.live})`);
+    if(!quiet) log(`다음 자동 확인 ${Math.round(NEXT_MS/1000)}초 후`);
   } catch(e){ log("새로고침 실패: "+e.message); }
 }
 document.getElementById('filter').addEventListener('input',()=>refresh(true));
@@ -228,6 +233,7 @@ document.getElementById('board').addEventListener('click', async e=>{
   } catch(err){ log("매핑 실패: "+err.message); }
 });
 refresh();
+schedule();
 </script>
 </body>
 </html>
@@ -272,12 +278,15 @@ def _board_data(*, reconcile: bool = False) -> dict:
             {"agent": r["agent"], "display": r["display"], "target": r["target"],
              "state": r["state"], "preview": r["preview"], "detail": r["detail"],
              "activity": r.get("busy", "미확인"), "activity_ko": r.get("busy", "미확인"),
-             "result_flag": r.get("result_flag", "-")}
+             "activity_state": r.get("activity_state", "UNKNOWN"), "result_flag": r.get("result_flag", "-"),
+             "result_state": r.get("result_state", "UNKNOWN"),
+             "result_hash": r.get("result_hash", "")}
             for r in rows
         ],
         "live": live,
         "boardHtml": board_html,
         "time": datetime.datetime.now().strftime("%H:%M:%S"),
+        "nextRefreshMs": 3000 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12000,
     }
 
 

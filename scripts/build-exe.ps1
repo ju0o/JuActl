@@ -9,8 +9,8 @@ python -m pip show pyinstaller *> $null
 if ($LASTEXITCODE -ne 0) {
   python -m pip install pyinstaller
 }
-python -m PyInstaller --clean --noconfirm --onefile --noconsole --name JuActlBoard --paths src src/juactl-board.py
-python -m PyInstaller --clean --noconfirm --onefile --console --name JuActl --paths src src/actl-run.py
+python -m PyInstaller --clean --noconfirm --onefile --noconsole --icon packaging\juactl.ico --name JuActlBoard --paths src src/juactl-board.py
+python -m PyInstaller --clean --noconfirm --onefile --console --icon packaging\juactl.ico --name JuActl --paths src src/actl-run.py
 $artifacts = @("JuActlBoard.exe", "JuActl.exe") | ForEach-Object { Join-Path $root ("dist\" + $_) }
 foreach ($artifact in $artifacts) {
   if (-not (Test-Path $artifact)) { throw "PyInstaller completed without producing $artifact" }

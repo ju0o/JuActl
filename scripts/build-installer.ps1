@@ -13,7 +13,19 @@ if (-not $iscc) {
   if ($isccPath) { $iscc = @{ Source = $isccPath } }
 }
 if (-not $iscc) {
-  throw "Inno Setup 6 not found. Install it, then rerun scripts\build-installer.ps1"
+  $choco = Get-Command choco.exe -ErrorAction SilentlyContinue
+  if ($choco) {
+    Write-Host "Inno Setup 6 not found; installing through Chocolatey..."
+    & $choco.Source install innosetup --yes --no-progress
+    $isccPath = @(
+      "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+      "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($isccPath) { $iscc = @{ Source = $isccPath } }
+  }
+}
+if (-not $iscc) {
+  throw "Inno Setup 6 not found. Install it from https://jrsoftware.org/isinfo.php, then rerun scripts\build-installer.ps1"
 }
 
 & "$PSScriptRoot\build-exe.ps1"

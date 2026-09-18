@@ -6,6 +6,7 @@ AppId={{B87D4C1D-4EA1-4F4D-9B0D-7F5CB2C2D7C1}
 AppName=JuActl
 AppVersion={#AppVersion}
 AppPublisher=JuActl
+SetupIconFile=..\packaging\juactl.ico
 DefaultDirName={localappdata}\Programs\JuActl
 DefaultGroupName=JuActl
 OutputDir=..\dist

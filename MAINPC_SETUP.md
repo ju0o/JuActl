@@ -38,7 +38,7 @@ actl doctor
 
 `doctor`는 클립보드에 테스트 문자열을 쓰지 않는 read-only 자가진단이다.
 MainPC에서 asus의 실제 pane 매핑까지 확인하려면 `actl doctor --ssh asus`를 사용한다.
-TUI는 5초마다 pane 상태와 결과 준비 여부를 자동 갱신한다. 동작 이력은
+TUI는 실행 중 3초, 안정 상태 12초의 adaptive 감시로 pane 상태와 결과 준비 여부를 갱신한다. 동작 이력은
 `actl audit 50`으로 확인할 수 있다.
 ```powershell
 # 3) asus SSH 확인 (이미 ssh asus가 되면 생략)

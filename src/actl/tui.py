@@ -15,6 +15,7 @@ curses 없이 ANSI + stdin만 사용. SSH에서도 동작하며, 클립보드가
 from __future__ import annotations
 
 import sys
+import hashlib
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
@@ -54,10 +55,16 @@ def _rows(config: dict) -> list[dict]:
         preview = ""
         detail = ""
         busy = "-"
+        activity_state = "UNKNOWN"
         result_flag = "-"
+        result_hash = ""
+        result_state = "UNKNOWN"
         if target != "-" and not target.endswith("?"):
             try:
-                busy = _pane_busy(target)
+                from actl.core.activity import observe_activity
+
+                activity_state, _ = observe_activity(target)
+                busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
             except Exception:
                 busy = "?"
             try:
@@ -66,9 +73,12 @@ def _rows(config: dict) -> list[dict]:
                     first = result.text.strip().splitlines()[0] if result.text.strip() else ""
                     preview = first[:100]
                     result_flag = f"●{len(result.text)}자"
+                    result_state = "READY"
+                    result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
                 else:
                     detail = result.detail or "no text"
                     result_flag = "○대기"
+                    result_state = "WAITING"
             except Exception as exc:
                 detail = str(exc)[:80]
                 result_flag = "?오류"
@@ -83,7 +93,10 @@ def _rows(config: dict) -> list[dict]:
                 "preview": preview,
                 "detail": detail,
                 "busy": busy,
+                "activity_state": activity_state,
                 "result_flag": result_flag,
+                "result_state": result_state,
+                "result_hash": result_hash,
                 "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
                                 "evidence": d.evidence} for d in cands],
             }
@@ -418,14 +431,15 @@ def run_tui() -> int:
     with _Cbreak(fd) as cb:
         import time
 
-        next_refresh = time.monotonic() + 5.0
+        next_refresh = time.monotonic() + 12.0
         while True:
             ch = cb.read_key(timeout=0.5)
             if ch is None:
                 if time.monotonic() >= next_refresh:
                     config = load_config()
                     rows = _rows(config)
-                    next_refresh = time.monotonic() + 5.0
+                    interval = 3.0 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12.0
+                    next_refresh = time.monotonic() + interval
                     _render(rows, selected, "자동 새로고침 완료")
                 continue
             if ch in {"q", "\x03"}:

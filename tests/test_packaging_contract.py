@@ -11,17 +11,20 @@ def test_windows_build_contract_checks_artifact_and_checksum():
     assert "Get-FileHash $artifact -Algorithm SHA256" in script
     assert "SHA256SUMS.txt" in script
     assert "JuActl.exe" in script
+    assert "packaging\\juactl.ico" in script
 
 
 def test_windows_installer_contract():
     script = (ROOT / "scripts" / "build-installer.ps1").read_text(encoding="utf-8")
     iss = (ROOT / "packaging" / "JuActl.iss").read_text(encoding="utf-8")
     assert "Inno Setup 6" in script
+    assert "choco.exe" in script
     assert "JuActl-Setup.exe" in script
     assert "PrivilegesRequired=lowest" in iss
     assert "JuActlBoard.exe" in iss
     assert "JuActl.exe" in iss
     assert "UninstallDisplayIcon" in iss
+    assert "SetupIconFile" in iss
 
 
 def test_ci_contract_separates_linux_tests_and_windows_package():
