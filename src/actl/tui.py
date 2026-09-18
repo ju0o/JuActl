@@ -332,10 +332,25 @@ class _Cbreak:
         if self.windows:
             import msvcrt
 
+            sys.stdout.flush()
             while True:
-                ch = msvcrt.getwch()
+                if not msvcrt.kbhit():
+                    import time as _time
+
+                    _time.sleep(0.05)
+                    continue
+                try:
+                    ch = msvcrt.getwch()
+                except OSError:
+                    import time as _time
+
+                    _time.sleep(0.05)
+                    continue
                 if ch in {"\x00", "\xe0"}:
-                    msvcrt.getwch()
+                    try:
+                        msvcrt.getwch()
+                    except OSError:
+                        pass
                     continue
                 return "\r" if ch == "\r" else ch
         raw = os.read(self.fd, 1).decode("utf-8", "replace")
@@ -364,11 +379,15 @@ def run_tui() -> int:
     rows = _rows(config)
     selected = 0
     message = ""
-    _render(rows, selected)
     if not _sys.stdin.isatty():
+        _render(rows, selected, "stdin이 터미널이 아님 — 출력 전용 모드")
+        return 2
+    _render(rows, selected)
+    try:
+        fd = sys.stdin.fileno()
+    except Exception:
         print("TUI는 터미널에서 실행하세요: actl tui")
         return 2
-    fd = sys.stdin.fileno()
     with _Cbreak(fd) as cb:
         while True:
             ch = cb.read_key()
