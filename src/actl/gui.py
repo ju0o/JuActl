@@ -117,64 +117,61 @@ class Board:
 
         main = ttk.Frame(self.root, padding=6)
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=3)
+        main.columnconfigure(0, weight=3)
+        main.columnconfigure(1, weight=2)
         main.rowconfigure(0, weight=1)
 
-        left = tk.Frame(main, bg=PANEL, highlightbackground=MAGENTA, highlightthickness=1)
+        left = tk.Frame(main, bg=PANEL, highlightbackground=NEON, highlightthickness=1)
         left.grid(row=0, column=0, sticky="nsew", padx=4)
-        left.rowconfigure(1, weight=1)
-        left.rowconfigure(3, weight=1)
-        tk.Label(left, text="▚ 에이전트 — 클릭=선택+미리보기", bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.agent_box = tk.Listbox(left, height=10, font=FONT_BIG, bg="#05050c", fg=TXT,
-                                    selectbackground="#003844", selectforeground=NEON,
-                                    highlightthickness=0, borderwidth=0)
-        self.agent_box.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
-        self.agent_box.bind("<<ListboxSelect>>", lambda _e: self.on_select())
-        tk.Label(left, text="▚ 메시지 전송", bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=2, column=0, sticky="w", padx=6, pady=4)
-        from tkinter import scrolledtext
-
-        self.msg = scrolledtext.ScrolledText(left, height=6, font=FONT, bg="#05050c", fg=TXT,
-                                             insertbackground=NEON, highlightthickness=0, borderwidth=0,
-                                             highlightbackground=LINE)
-        self.msg.grid(row=3, column=0, sticky="nsew", padx=6)
-        sendrow = tk.Frame(left, bg=PANEL)
-        sendrow.grid(row=4, column=0, sticky="ew", padx=6, pady=4)
-        self._btn(sendrow, "➤ 전송", self.on_send, primary=True).pack(side="left")
-        self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
-                                    bg=PANEL, fg=DIM, relief="flat", cursor="hand2")
-        self.log_toggle.pack(side="left", padx=6)
-        self.logw = scrolledtext.ScrolledText(left, height=8, state="disabled", font=("Consolas", 9),
-                                              bg="#05050c", fg=DIM, highlightthickness=0, borderwidth=0)
-
-        right = tk.Frame(main, bg=PANEL, highlightbackground=NEON, highlightthickness=1)
-        right.grid(row=0, column=1, sticky="nsew", padx=4)
-        right.rowconfigure(1, weight=3)
-        right.rowconfigure(4, weight=2)
-        self.pane_title = tk.StringVar(value="▚ live pane 미리보기")
-        tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.preview = tk.Text(right, wrap="none", font=("Consolas", 12), bg="#05050c", fg="#d8ffd8",
+        left.rowconfigure(2, weight=5)
+        left.rowconfigure(5, weight=3)
+        self.pane_title = tk.StringVar(value="▚ live pane — 에이전트 클릭")
+        tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.preview = tk.Text(left, wrap="none", font=("Consolas", 13), bg="#05050c", fg="#d8ffd8",
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.preview.grid(row=1, column=0, sticky="nsew", padx=6)
-        btns = tk.Frame(right, bg=PANEL)
-        btns.grid(row=2, column=0, sticky="ew", pady=4, padx=6)
+        self.preview.grid(row=2, column=0, sticky="nsew", padx=6)
+        cmdbar = tk.Frame(left, bg=PANEL)
+        cmdbar.grid(row=1, column=0, sticky="ew", pady=4, padx=6)
         for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("⇄ 재매핑", False),
                                ("▦ pane보드", False), ("↻ 새로고침", False)]:
             fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "⇄ 재매핑": self.on_remap,
                   "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
-            self._btn(btns, label, fn, primary=primary).pack(side="left", padx=3)
-        tk.Label(right, text="▚ 마지막 응답", bg=PANEL, fg=MAGENTA, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=6)
-        self.resp = tk.Text(right, wrap="word", font=FONT, bg="#05050c", fg=TXT,
+            self._btn(cmdbar, label, fn, primary=primary).pack(side="left", padx=3)
+        tk.Label(left, text="▚ 마지막 응답", bg=PANEL, fg=MAGENTA, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=6)
+        self.resp = tk.Text(left, wrap="word", font=FONT, bg="#05050c", fg=TXT,
                             highlightthickness=0, borderwidth=0)
-        self.resp.grid(row=4, column=0, sticky="nsew", padx=6, pady=4)
+        self.resp.grid(row=5, column=0, sticky="nsew", padx=6, pady=4)
+
+        right = tk.Frame(main, bg=BG, highlightthickness=0)
+        right.grid(row=0, column=1, sticky="nsew", padx=4)
+        right.rowconfigure(1, weight=1)
+        right.rowconfigure(4, weight=1)
+        tk.Label(right, text="▚ 에이전트", bg=BG, fg=DIM, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+        self.cards: dict[str, tk.Frame] = {}
+        self.agent_cards = tk.Frame(right, bg=BG)
+        self.agent_cards.grid(row=1, column=0, sticky="nsew")
+        tk.Label(right, text="▚ 메시지 전송", bg=BG, fg=DIM, font=FONT_HDR).grid(row=2, column=0, sticky="w", padx=2, pady=2)
+        from tkinter import scrolledtext
+
+        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL, fg=TXT,
+                                             insertbackground=NEON, highlightthickness=0, borderwidth=0)
+        self.msg.grid(row=3, column=0, sticky="ew", pady=2)
+        sendrow = tk.Frame(right, bg=BG)
+        sendrow.grid(row=4, column=0, sticky="nsew", pady=2)
+        self._btn(sendrow, "➤ 전송", self.on_send, primary=True).pack(side="left")
+        self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
+                                    bg=BG, fg=DIM, relief="flat", cursor="hand2")
+        self.log_toggle.pack(side="left", padx=6)
+        self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Consolas", 9),
+                                              bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
 
     def toggle_log(self) -> None:
         if self.log_visible:
-            self.logw.pack_forget()
-            self.log_toggle.configure(text="▸ 이벤트 로그 보기")
+            self.logw.grid_forget()
+            self.log_toggle.configure(text="▸ 로그")
         else:
-            self.logw.pack(fill="both", expand=True, padx=6, pady=4)
-            self.log_toggle.configure(text="▾ 이벤트 로그 숨기기")
+            self.logw.grid(row=5, column=0, sticky="nsew", pady=2)
+            self.log_toggle.configure(text="▾ 로그")
         self.log_visible = not self.log_visible
 
     def set_status(self, text: str) -> None:
@@ -228,37 +225,68 @@ class Board:
         self._bg(self.rows_now, lambda r: self._refresh_done(r, quiet))
 
     def _refresh_done(self, result, quiet: bool = False) -> None:
+        import tkinter as tk
+
         if isinstance(result, Exception):
             self.set_status("새로고침 실패")
             self.log(f"새로고침 실패: {result}")
             return
         prev_sel = self.selected
         self.rows = result
-        self.agent_box.delete(0, "end")
+        for child in self.agent_cards.winfo_children():
+            child.destroy()
+        self.cards = {}
         for i, r in enumerate(self.rows, 1):
             state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
-            self.agent_box.insert("end", f"{glyph} [{i}] {r['display']} {r['target']} {state}")
             color = STATUS_COLOR.get(r["state"], TXT)
-            self.agent_box.itemconfig(i - 1, fg=color)
+            card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=color,
+                            highlightthickness=1 if r["agent"] == prev_sel else 0,
+                            cursor="hand2")
+            card.pack(fill="x", pady=2)
+            top = tk.Frame(card, bg=PANEL)
+            top.pack(fill="x", padx=8, pady=(6, 0))
+            tk.Label(top, text=f"{glyph} {r['display']}", bg=PANEL, fg=color,
+                     font=("Consolas", 11, "bold")).pack(side="left")
+            tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
+            sub = (r["preview"] or r["detail"] or "—")[:60]
+            tk.Label(card, text=f"{state} · {sub}", bg=PANEL, fg=DIM, font=("Consolas", 9),
+                     anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
+            card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
+            for child in (card, top):
+                child.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
+            for w in top.winfo_children():
+                w.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
+            self.cards[r["agent"]] = card
         live = sum(1 for r in self.rows if r["state"] == "UP")
         self.set_status(f"live {live}/{len(self.rows)}")
         if not quiet:
             self.log(f"새로고침 완료 ({len(self.rows)} agents, live {live})")
         if self.rows:
-            keep = next((i for i, r in enumerate(self.rows) if r["agent"] == prev_sel), 0)
-            self.agent_box.selection_clear(0, "end")
-            self.agent_box.selection_set(keep)
-            self.selected = self.rows[keep]["agent"] if self.rows else None
+            keep = prev_sel if any(r["agent"] == prev_sel for r in self.rows) else self.rows[0]["agent"]
+            self.selected = keep
+            self._highlight(keep)
+
+    def _highlight(self, agent: str) -> None:
+        import tkinter as tk
+
+        for name, card in self.cards.items():
+            row = next((r for r in self.rows if r["agent"] == name), None)
+            color = STATUS_COLOR.get(row["state"], TXT) if row else LINE
+            card.configure(highlightbackground=color,
+                           highlightthickness=2 if name == agent else 0)
+
+    def select_agent(self, agent: str) -> None:
+        self.selected = agent
+        self._highlight(agent)
+        self.on_select()
 
     def current(self) -> dict | None:
-        try:
-            idx = self.agent_box.curselection()[0]
-        except IndexError:
-            return None
-        if idx >= len(self.rows):
-            return None
-        return self.rows[idx]
+        if self.selected:
+            row = next((r for r in self.rows if r["agent"] == self.selected), None)
+            if row:
+                return row
+        return self.rows[0] if self.rows else None
 
     def on_select(self) -> None:
         row = self.current()
