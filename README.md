@@ -1,68 +1,95 @@
-# actl — Agent Control CLI
+# JuActl — MainPC 에이전트 무전기
 
-A single control terminal for AI coding agents already running in tmux panes.
+asus tmux에서 돌고 있는 AI 에이전트 8종을 MainPC에서 버튼으로 조종.
+매핑·복사·전송 전부 자동. 터미널 명령어 외울 필요 없음.
 
-Supported: Claude Team, Claude Pro, OpenCode, Codex CLI, Cursor Agent CLI, CommandCode, Cline CLI, Grok CLI.
+지원: Claude Team, Claude Pro, OpenCode, Codex, Cursor, CommandCode, Cline, Grok.
 
-## Install
+## MainPC에서 실행 (프로그램)
 
-```bash
-cd actl
-./scripts/install.sh
+```powershell
+git clone https://github.com/ju0o/JuActl.git juactl
+```
+```powershell
+cd juactl
+```
+```powershell
+.\scripts\install.ps1
+```
+```powershell
+.\scripts\build-exe.ps1
 ```
 
-Ensure `~/.local/bin` is in PATH, then:
+`dist\JuActlBoard.exe` 더블클릭. 바탕화면 바로가기도 자동 생성.
+빌드 전에는 바로가기가 pythonw 폴백으로 동작.
+
+## MainPC에서 실행 (웹 보드)
+
+asus에서 서버 기동 (1회):
 
 ```bash
-actl
+actl serve 8765
 ```
 
-## Commands
+MainPC 브라우저:
 
-- `/switch AGENT`
-- `/copy [--print]` (deliver to clipboard, or print the exact Result)
-- `/result` (alias for `/copy --print`)
-- `/status [AGENT]`
-- `/paste` then terminate with a line containing only `::send`
-- `/discover` (suggestion-only; never rewrites config)
-- `/probe [AGENT]` (read-only local storage/schema probe; skips known sensitive filenames)
-- `/refresh` (re-run pane discovery + reconcile now; handles agents turned off/on or relaunched in another pane/project)
-- `/config`
-- `/reload`
-- `/quit`
+```
+http://100.82.108.31:8765/
+```
 
-Outside the interactive control loop, `actl discover` lists every live tmux pane with its process-backed Agent detection, cwd, confidence, and mapping state. `actl discover --apply` first backs up the config, then maps only unique exact/high-confidence detections using stable pane IDs (for example `%3`); stale or mismatched mappings are removed. `actl map AGENT` presents numbered live panes and validates the selected runtime before mapping it — enter the number or the pane ID directly (for example `%69`). `actl unmap AGENT` removes one mapping. `actl copy AGENT [--print]` extracts and copies (or prints) the last response without entering the REPL. `actl tui` opens the agent board: number keys select an agent and show a live pane preview, `c` copies, `p` prints, `r` refreshes, `q` quits — no curses dependency, works over plain SSH.
+5초 자동 폴링, 카드 클릭=미리보기, pane 행 클릭=즉시 매핑,
+복사는 브라우저 클립보드 직행.
 
-Mappings are resynced automatically: starting `actl` (and `/refresh`) remove stale mappings and map unique strong detections with no prompt needed. When several live panes of the same agent exist, the most recently started agent process wins automatically (existing live mappings are kept); ties or unreadable start times fall back to an inline pane prompt. `/copy` / prompt sends auto-re-map the same way, and OpenCode session IDs auto-bind (cmdline `--session`, else DB adoption) so no separate `actl bind opencode` step is needed. Zero live panes still fail closed with a clear message.
+## MainPC에서 실행 (CLI 원격)
 
-Aliases: `claude-team`/`ct`/`team`, `claude-pro`/`cp`/`pro`, `opencode`/`oc`, `codex`/`cx`, `cursor`/`cu`, `commandcode`/`cmd`, `cline`/`cl`, `grok`/`gr`.
+```powershell
+actl tui --ssh asus
+actl copy grok --print --ssh asus
+actl discover --ssh asus
+actl doctor
+```
 
-`claude-team` reads only `~/.claude-team`; `claude-pro` reads only `~/.claude-pro`. Existing single `claude` config is never migrated automatically: actl prints a warning so you can inspect `/discover` and set explicit targets.
+## TUI 보드 키 (asus 로컬 / ssh 터미널)
 
-## Safe prompt transport
+숫자=선택+미리보기, `c`=복사(실패시 자동출력), `p`=출력,
+`m`=재매핑, `s`=전송, `v`=pane보드, `V`=복사검증,
+`h`=도움말, `r`=새로고침, `q`=종료.
 
-Normal bracketed paste is enabled in the control terminal: pasting multiple lines produces one prompt event, rather than one prompt per line. It works over SSH terminals that preserve bracketed-paste escape sequences; `/paste` remains a delimiter-based fallback. Prompts are written verbatim to a temporary UTF-8 file, loaded into a uniquely named tmux buffer, then inserted with tmux `paste-buffer -p -r` and one separate Enter. `-p` respects the target TUI's bracketed-paste request and `-r` preserves LF rather than translating lines to Enter. The temporary file and tmux buffer are cleaned up.
+## 자동 매핑 규칙
 
-## `/copy` strategies
+- pane 1개 → 자동 매핑.
+- 같은 에이전트 pane 여러 개 → 가장 최근 시작 프로세스 자동 선택.
+  기존 live 매핑은 유지. 동점/판독불가만 직접 질문.
+- OpenCode `session_id` 자동 바인딩 (별도 `actl bind` 불필요).
+- pane이 죽거나 바뀌면 stale 제거 후 위 규칙으로 재매핑.
 
-1. CommandCode: `~/.commandcode/projects/<slug>/<uuid>.jsonl` is opened read-only; the session's `cwd` header plus process ownership (open FD, or the one file written within the process lifetime) pins the active conversation, and the final assistant `text` is extracted. Never copies a mid-stream turn.
-2. OpenCode: current SQLite layout at `~/.local/share/opencode/opencode*.db` is opened read-only; newest assistant message is reconstructed from `message` + `part`. OpenCode is correlated to a specific session: `opencode --session <ID>` is proven from the live process cmdline, and a TUI launched bare (`opencode` or `opencode --auto` / yolo mode) is adopted from deterministic DB evidence (the one session in the pane's cwd that was active during the process's lifetime). Adoption fails closed when zero or several sessions qualify, and is never a global "newest session" guess.
-3. Cursor: `~/.cursor/chats/**/store.db` is opened with SQLite `mode=ro`; `blobs.data` is decoded and assistant JSON is extracted.
-4. Codex: `~/.codex/sessions/**/rollout-*.jsonl` is parsed read-only. The live process's open rollout is decisive; when Codex has closed the file, the rollout written within the process lifetime in the pane's cwd is adopted (same fail-closed rule).
-5. Claude Team/Pro, Cline, and Grok: their own known local directories are scanned read-only for session records, correlated to the live pane process, project config, and cwd. Sensitive filenames such as auth/config/credentials are explicitly excluded.
-6. Fallback: read-only `tmux capture-pane`, marked as low confidence.
+## CLI 명령
 
-No auth or credential file is modified.
+- `actl` — REPL (`/help` 전체 명령)
+- `actl copy AGENT [--print]` — 마지막 응답 복사/출력
+- `actl extract AGENT [PANE]` — 기계 파이프 (stdout 텍스트만)
+- `actl send AGENT` — stdin 프롬프트 전송 (원격 위임용)
+- `actl map AGENT` — 번호 또는 `%ID` 직접 입력 (예: `%69`)
+- `actl push FILE [--print]` — 현 SSH 세션 경유 base64 전송
+- `actl discover [--apply]` / `actl status` / `actl doctor`
+- `actl gui [--ssh T]` / `actl tui` / `actl serve [port]`
+- 별칭: `claude-team`/`ct`, `claude-pro`/`cp`, `opencode`/`oc`,
+  `codex`/`cx`, `cursor`/`cu`, `commandcode`/`cmd`, `cline`/`cl`, `grok`/`gr`.
 
-## Clipboard
+## 클립보드
 
-Priority: on a local (non-SSH) session actl uses `wl-copy` → `xclip` → `xsel`; on an SSH session it always uses the terminal clipboard via OSC 52 (`\e]52;c;…\a`), targeting the SSH client's clipboard.
+- MainPC 네이티브: PowerShell `Set-Clipboard` 직행.
+- SSH: OSC52 (Windows Terminal 허용, 차단 시 `p` 출력 후 수동 복사).
+- 로컬 리눅스: `wl-copy` → `xclip` → `xsel`.
 
-The config key `clipboard_backend` (default `"auto"`) overrides the transport:
-- `"auto"` — SSH → OSC 52, otherwise local clipboard first.
-- `"osc52"` — always emit the OSC 52 terminal escape.
-- `"local"` — always require a genuine local Wayland/X11 clipboard; fail (no silent OSC 52) when none is usable.
+## 문제 해결
 
-When running under tmux, OSC 52 is wrapped in the DCS passthrough sequence (`\ePtmux;…\e\`) when `allow-passthrough` is `on`/`all`; otherwise (the common `off` + `set-clipboard external` case) tmux itself forwards a raw OSC 52 to the outer terminal.
+| 증상 | 조치 |
+|---|---|
+| 매핑 stale | 보드 `r` 또는 `actl discover --apply` |
+| OpenCode bind 요구 | 구버전 → `git pull` (신버전 자동 바인딩) |
+| 클립보드 안 붙음 | `p` 출력 후 수동 복사, OSC52 허용 확인 |
+| Windows `termios` 에러 | 구버전 → `git pull` (lazy import 패치됨) |
+| GUI cmd 팝업 | 구버전 → `git pull` (`CREATE_NO_WINDOW` 패치됨) |
 
-actl cannot verify that the outer Windows terminal actually accepted the OSC 52 sequence, so it never claims a guaranteed copy in that path — it reports "sent to terminal clipboard via OSC 52". If your terminal blocks OSC 52 (Windows Terminal supports it; some SSH clients/older terminals do not), use `/copy --print` or `/result` to print the exact extracted result for manual copy.
+자세한 MainPC↔asus 절차는 [MAINPC_SETUP.md](MAINPC_SETUP.md).
