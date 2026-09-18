@@ -53,7 +53,8 @@ def _commandcode_process(pid: int | None, target: str) -> int | None:
         return None
     try:
         pane_pid = int(pane_field(target, "#{pane_pid}"))
-    except (TypeError, ValueError, OSError):
+    except Exception:
+        # A missing/stale tmux server is an unresolved target, never a copy crash.
         return None
     return _commandcode_process(pane_pid, target)
 

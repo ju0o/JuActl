@@ -132,3 +132,9 @@ def test_commandcode_process_detection_matches_cmd_binary(monkeypatch):
     assert _is_commandcode(ProcessInfo(2, 1, "/usr/local/bin/commandcode"))
     assert _is_commandcode(ProcessInfo(3, 1, "node /x/commandcode.js"))
     assert not _is_commandcode(ProcessInfo(4, 1, "/usr/bin/bash"))
+
+
+def test_commandcode_stale_tmux_socket_fails_closed(monkeypatch):
+    monkeypatch.setattr(cc, "pane_field", lambda *_: (_ for _ in ()).throw(RuntimeError("stale tmux socket")))
+
+    assert cc._commandcode_process(None, "%3") is None
