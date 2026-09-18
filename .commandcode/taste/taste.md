@@ -10,3 +10,5 @@
 - When presented with a numbered list of tmux panes for selection, naturally enters the pane ID (`%XX`) shown in tmux listings rather than the 1-based numeric index the tool assigned; expects CLI prompts to accept direct pane ID input. Confidence: 0.85
 - Prefers TUI agent board with live pane previews and one-key copy over CLI/REPL copy commands — described as Windows radio-style operation where selecting an agent shows pane preview then copies; explicitly says TUI feels easier, especially over SSH where clipboard is unreliable. Confidence: 0.85
 - Expects fixes to include automatic end-to-end testing/QA by the agent (e.g., verifying copy for all agents after mapping changes) rather than asking the user to manually verify results. Confidence: 0.8
+- Wants visual correction for wrong auto-mappings: show all live tmux panes/windows in the TUI and allow drag-drop-style reassignment by picking from a visual list rather than fixing via CLI map commands. Confidence: 0.85
+- Wants unified bidirectional agent board on MainPC: single button-operated terminal UI where each mapped pane supports both sending messages and /copy extraction, not copy-only. Confidence: 0.85

@@ -849,6 +849,21 @@ def _paste_mode(agent: str, target: str) -> None:
     print(f"✓ Sent to {AGENTS[agent].display_name}")
 
 
+def _print_cli_help() -> None:
+    print(
+        "actl — Agent Control CLI\n"
+        "\n"
+        "  actl                REPL (Agent > prompt, /help for commands)\n"
+        "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
+        "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
+        "  actl copy AGENT [--print]   Copy (or print) last response\n"
+        "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
+        "  actl discover [--apply]     List (or apply) live pane detections\n"
+        "  actl status [AGENT] Probe-free mapping + liveness table\n"
+        "  actl bind opencode  One-command OpenCode session bind\n"
+    )
+
+
 def repl() -> int:
     config = load_config()
     config = _auto_reconcile(config)
@@ -897,7 +912,7 @@ def repl() -> int:
             if cmd in {"/quit", "/exit"}:
                 return 0
             if cmd == "/help":
-                print("/switch AGENT | /copy [--print] | /result | /bind | /status [AGENT] | /debug | /paste | /discover | /probe [AGENT] | /refresh | /config | /reload | /quit")
+                print("/switch AGENT | /copy [--print] | /result | /bind | /status [AGENT] | /debug | /paste | /discover | /probe [AGENT] | /refresh | /config | /reload | /tui | /quit")
             elif cmd == "/switch":
                 if len(parts) != 2:
                     print("Usage: /switch AGENT")
@@ -933,6 +948,11 @@ def repl() -> int:
                 _debug(config, current)
             elif cmd == "/paste":
                 _paste_mode(current, _resolve_live_target(config, current))
+            elif cmd == "/tui":
+                from actl.tui import run_tui
+
+                run_tui()
+                config = load_config()
             elif cmd == "/discover":
                 _discover(config)
             elif cmd == "/probe":
@@ -1127,9 +1147,12 @@ def main() -> None:
             from actl.tui import run_tui
 
             raise SystemExit(run_tui())
+        if args.command == "help" and not args.command_agent:
+            _print_cli_help()
+            return
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
-            "actl bind opencode | actl copy AGENT [--print] | actl tui | actl opencode-session ... | "
+            "actl bind opencode | actl copy AGENT [--print] | actl tui | actl help | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
     if args.discover:

@@ -8,6 +8,7 @@ Keys:
   c / p       copy to clipboard / print last response
   m           remap selected agent to another live pane (visual list)
   s           send a message to the selected agent's pane
+  h or ?      help overlay (all keys + first-run tutorial)
   r           refresh (auto-reconcile + rescan)
   q           quit
 """
@@ -71,11 +72,44 @@ def _rows(config: dict) -> list[dict]:
     return rows
 
 
+HELP_TEXT = """\
+actl agent board — help
+
+  1-8     Select agent + show its live tmux pane (last 12 non-empty lines)
+  c       Copy selected agent's last response to clipboard (OSC52 over SSH,
+          wl-copy/xclip/xsel locally — falls back with guidance)
+  p       Print last response on screen (SSH-safe manual copy, --print path)
+  m       Re-map: visual list of free live panes for this agent, pick by
+          number or %ID (e.g. %69). OpenCode session auto-binds on remap.
+  s       Send: multi-line composer, end with a line '::send' (::cancel aborts)
+  r       Refresh: auto-reconcile stale mappings + rescan all panes
+  h / ?   This help
+  q       Quit
+
+First-run tutorial (MainPC over SSH):
+  1. Start agents in tmux panes (e.g. grok, opencode, claude, codex).
+  2. Run: actl tui
+  3. Press 1-8 to select an agent — its live pane preview appears.
+     Wrong pane? Press m and pick the right one from the visual list.
+  4. Press c to copy the last response, p if the clipboard looks blocked.
+  5. Press s to send a message to the selected agent's pane.
+  6. Press r after starting/stopping agents; q to quit.
+
+Notes:
+  - Clipboard over SSH uses OSC52 (Windows Terminal: on; some SSH
+    clients block it — then use p and copy manually).
+  - Multiple panes of one agent: newest started wins automatically;
+    ties ask inline. Existing live mappings are kept.
+  - OpenCode needs no separate bind step: session auto-binds on map.
+Press any key to return.
+"""
+
+
 def _render(rows: list[dict], selected: int, message: str = "") -> None:
     sys.stdout.write(CLEAR)
     sys.stdout.write(
         f"{BOLD}actl — agent board{DIM}  (number=select+preview, c=copy, p=print, "
-        f"m=remap, s=send, r=refresh, q=quit){RESET}\n\n"
+        f"m=remap, s=send, h=help, r=refresh, q=quit){RESET}\n\n"
     )
     for i, row in enumerate(rows):
         marker = ">" if i == selected else " "
@@ -146,6 +180,16 @@ def run_tui() -> int:
             if ch in {"q", "\x03"}:
                 sys.stdout.write("\n")
                 return 0
+            if ch in {"h", "?"}:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                try:
+                    sys.stdout.write(CLEAR + HELP_TEXT)
+                    sys.stdout.flush()
+                    sys.stdin.readline()
+                finally:
+                    tty.setcbreak(fd)
+                _render(rows, selected, message)
+                continue
             if ch.isdigit():
                 idx = int(ch) - 1
                 if 0 <= idx < len(rows):
