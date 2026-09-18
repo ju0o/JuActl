@@ -39,7 +39,8 @@ def _ps_output() -> str:
     try:
         proc = subprocess.run(
             _remote_args(["ps", "-eo", "pid=,ppid=,args="]),
-            capture_output=True, text=True, check=False, timeout=10,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False, timeout=10,
         )
     except Exception:
         return ""

@@ -33,6 +33,8 @@ def _tmux_passthrough_enabled() -> bool:
             ["tmux", "show-option", "-gv", "allow-passthrough"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1,
         )
         return proc.stdout.strip() in {"on", "all"}

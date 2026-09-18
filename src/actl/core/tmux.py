@@ -75,7 +75,10 @@ def _remote_args(args: list[str]) -> list[str]:
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
     try:
-        return subprocess.run(args, check=check, capture_output=True, text=text, errors="replace")
+        return subprocess.run(
+            args, check=check, capture_output=True, text=text,
+            encoding="utf-8", errors="replace",
+        )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
         raise TmuxError(f"{hint} is not installed or not in PATH") from exc
@@ -94,6 +97,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
         _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"]),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         errors="replace",
         check=False,
     )

@@ -231,7 +231,8 @@ def _pane_busy(pane_id: str) -> str:
         pane_pid = int(pane_field(pane_id, "#{pane_pid}"))
         proc = subprocess.run(
             _remote_args(["ps", "-o", "%cpu=", "-g", str(pane_pid)]),
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=5,
         )
         total = sum(float(x) for x in proc.stdout.split() if x.strip())
         return "실행중" if total > 5.0 else "유휴"
