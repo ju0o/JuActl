@@ -42,6 +42,7 @@ def test_ci_contract_separates_linux_tests_and_windows_package():
     assert "Install and uninstall smoke" in workflow
     assert "JuActl-Setup.exe /VERYSILENT" in workflow
     assert "installedDoctor" in workflow
+    assert "/LOG=$installLog" in workflow
 
 
 def test_windows_qa_uses_the_same_isolated_package_builder():

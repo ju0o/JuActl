@@ -64,9 +64,14 @@ jobs:
         shell: pwsh
         run: |
           $installDir = Join-Path $env:TEMP "juactl-install-smoke"
+          $installLog = Join-Path $env:TEMP "juactl-install-smoke.log"
           if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
-          & .\dist\JuActl-Setup.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$installDir"
-          if ($LASTEXITCODE -ne 0) { throw "installer smoke failed" }
+          if (Test-Path $installLog) { Remove-Item -Force $installLog }
+          & .\dist\JuActl-Setup.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/LOG=$installLog" "/DIR=$installDir"
+          if ($LASTEXITCODE -ne 0) {
+            if (Test-Path $installLog) { Get-Content $installLog }
+            throw "installer smoke failed (exit $LASTEXITCODE)"
+          }
           foreach ($name in @("JuActlBoard.exe", "JuActl.exe", "SHA256SUMS.txt")) {
             if (-not (Test-Path (Join-Path $installDir $name))) { throw "installed file missing: $name" }
           }
