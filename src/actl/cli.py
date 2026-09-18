@@ -131,7 +131,9 @@ def _doctor(*, json_output: bool = False) -> int:
         except Exception as exc:
             line("live 매핑", False, str(exc)[:100])
     if json_output:
-        print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False, separators=(",", ":")))
+        # JSON is often piped through Windows PowerShell's legacy cp1252 stream;
+        # ASCII escapes keep the machine contract lossless on every console.
+        print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=True, separators=(",", ":")))
     else:
         print("OK" if ok else "일부 항목 확인 필요 (위 ✗ 참조)")
     return 0 if ok else 1

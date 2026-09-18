@@ -21,6 +21,21 @@ def test_doctor_json_is_machine_readable_without_clipboard_write(monkeypatch):
     assert all("name" in check and "ok" in check for check in payload["checks"])
 
 
+def test_doctor_json_is_safe_on_legacy_windows_console(monkeypatch):
+    class Cp1252Stream(io.StringIO):
+        def write(self, value):
+            value.encode("cp1252")
+            return super().write(value)
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _: "available")
+    monkeypatch.setattr(cli, "load_config", lambda: {"agents": {}})
+    out = Cp1252Stream()
+    with redirect_stdout(out):
+        assert cli._doctor(json_output=True) == 0
+    assert json.loads(out.getvalue())["ok"] is True
+
+
 def test_status_json_is_one_machine_readable_array(monkeypatch):
     monkeypatch.setattr(cli, "AGENTS", {"commandcode": cli.AGENTS["commandcode"]})
     monkeypatch.setattr(cli, "agent_status", lambda *_: {
