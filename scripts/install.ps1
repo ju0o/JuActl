@@ -6,7 +6,7 @@ $bin = "$env:USERPROFILE\.local\bin"
 New-Item -ItemType Directory -Force $bin | Out-Null
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) { throw "python not found in PATH (need 3.10+)" }
-$ shim = "@echo off`r`npython `"$root\src\actl-run.py`" %*`r`n"
+$shim = "@echo off`r`npython `"$root\src\actl-run.py`" %*`r`n"
 Set-Content -Path "$bin\actl.cmd" -Value $shim -Encoding Ascii
 & python "$root\src\actl-run.py" --init
 Write-Host "Installed: $bin\actl.cmd"
