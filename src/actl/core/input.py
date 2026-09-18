@@ -64,11 +64,18 @@ class BracketedPasteParser:
         return events
 
 
+def _safe_isatty(stream) -> bool:
+    try:
+        return bool(stream is not None and stream.isatty())
+    except Exception:
+        return False
+
+
 def read_event(prompt: str) -> InputEvent:
     """Read a normal line or one bracketed paste. SSH preserves these escapes."""
     if termios is None or tty is None:
         return InputEvent(input(prompt))
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
+    if not _safe_isatty(sys.stdin) or not _safe_isatty(sys.stdout):
         return InputEvent(input(prompt))
     fd = sys.stdin.fileno()
     pending = _PENDING.setdefault(fd, [])
