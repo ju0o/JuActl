@@ -67,10 +67,10 @@ jobs:
           $installLog = Join-Path $env:TEMP "juactl-install-smoke.log"
           if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
           if (Test-Path $installLog) { Remove-Item -Force $installLog }
-          & .\dist\JuActl-Setup.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/LOG=$installLog" "/DIR=$installDir"
-          if ($LASTEXITCODE -ne 0) {
+          $setup = Start-Process -FilePath ".\dist\JuActl-Setup.exe" -ArgumentList @('/VERYSILENT','/NORESTART','/SUPPRESSMSGBOXES',"/LOG=$installLog","/DIR=$installDir") -Wait -PassThru
+          if ($setup.ExitCode -ne 0) {
             if (Test-Path $installLog) { Get-Content $installLog }
-            throw "installer smoke failed (exit $LASTEXITCODE)"
+            throw "installer smoke failed (exit $($setup.ExitCode))"
           }
           foreach ($name in @("JuActlBoard.exe", "JuActl.exe", "SHA256SUMS.txt")) {
             if (-not (Test-Path (Join-Path $installDir $name))) { throw "installed file missing: $name" }
@@ -78,7 +78,8 @@ jobs:
           $installedDoctor = & (Join-Path $installDir "JuActl.exe") doctor --json | ConvertFrom-Json
           if ($null -eq $installedDoctor.ok) { throw "installed CLI doctor contract failed" }
           $uninstaller = Join-Path $installDir "unins000.exe"
-          & $uninstaller /VERYSILENT /NORESTART
+          $removed = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/NORESTART') -Wait -PassThru
+          if ($removed.ExitCode -ne 0) { throw "uninstaller smoke failed (exit $($removed.ExitCode))" }
           if (Test-Path $installDir) { throw "uninstaller smoke did not remove install directory" }
       - uses: actions/upload-artifact@v4
         with:
