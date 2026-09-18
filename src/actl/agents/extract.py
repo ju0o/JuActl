@@ -13,6 +13,12 @@ from actl.core.validation import validate_target
 
 
 def extract_last_response(agent: str, target: str, config: dict | None = None) -> CopyResult:
+    from actl.core.remote import is_remote, remote_extract
+
+    if is_remote():
+        delegated = remote_extract(agent, target)
+        if delegated is not None:
+            return delegated
     spec = AGENTS[agent]
     if agent in {"claude-team", "claude-pro"}:
         # tmux capture could expose a user prompt and cannot prove profile or

@@ -136,6 +136,31 @@ def _push_file(path: str, *, print_only: bool = False) -> int:
     return 0
 
 
+def _extract(config: dict, agent: str, target: str | None) -> int:
+    """Machine pipe: print extracted last-response text to stdout only.
+
+    No clipboard, no reconcile, no prompts. Used by MainPC remote mode:
+    ``ssh asus actl extract <agent> <pane>``. Target falls back to the
+    stored mapping when omitted. Detail goes to stderr, exit 1 on empty.
+    """
+    from actl.core.config import get_target as _get_target
+
+    pane = target
+    if not pane:
+        try:
+            pane = _get_target(config, agent).target
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+    result = extract_last_response(agent, pane, config)
+    if not result.text:
+        print(result.detail or "No response text found", file=sys.stderr)
+        return 1
+    sys.stdout.write(result.text)
+    sys.stdout.flush()
+    return 0
+
+
 def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     """Extract + deliver the last response. Returns 0 on delivery/print success."""
     try:
@@ -1163,8 +1188,9 @@ def main() -> None:
         "--ssh",
         help="Route tmux through 'ssh TARGET' (MainPC remote board, e.g. --ssh asus)",
     )
-    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, push, runtime, tui, help, or opencode-session")
-    parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy, or runtime operation")
+    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, help, doctor, or opencode-session")
+    parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, or runtime operation")
+    parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
     args = parser.parse_args()
 
     if args.ssh:
@@ -1238,6 +1264,11 @@ def main() -> None:
             if not agent:
                 raise SystemExit(f"Unknown agent: {args.command_agent}")
             raise SystemExit(_copy(load_config(), agent, print_only=args.print))
+        if args.command == "extract" and args.command_agent:
+            agent = _resolve_selection(args.command_agent)
+            if not agent:
+                raise SystemExit(f"Unknown agent: {args.command_agent}")
+            raise SystemExit(_extract(load_config(), agent, args.command_extra or args.session))
         if args.command == "tui" and not args.command_agent:
             from actl.tui import run_tui
 
@@ -1251,7 +1282,7 @@ def main() -> None:
             raise SystemExit(_doctor())
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
-            "actl bind opencode | actl copy AGENT [--print] | actl push FILE [--print] | "
+            "actl bind opencode | actl copy AGENT [--print] | actl extract AGENT [PANE] | actl push FILE [--print] | "
             "actl tui | actl help | actl doctor | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
