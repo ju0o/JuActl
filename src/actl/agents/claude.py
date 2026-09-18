@@ -41,9 +41,14 @@ def _same_path(left: str | Path, right: str | Path) -> bool:
 
 
 def _pid_parent(pid: int) -> int | None:
+    from actl.core.validation import _remote_file_text
+
     try:
         # comm can contain spaces/parentheses; ppid follows its final ") ".
-        tail = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        text = _remote_file_text(f"/proc/{pid}/stat")
+        if text is None:
+            return None
+        tail = text.rsplit(") ", 1)[1].split()
         return int(tail[1])
     except (IndexError, OSError, ValueError):
         return None
@@ -65,8 +70,13 @@ def _pid_in_pane_tree(pid: int, pane_pid: int) -> bool:
 
 def _process_profile_matches(pid: int, profile_root: Path) -> bool:
     """Reject an explicit conflicting CLAUDE_CONFIG_DIR without exposing env."""
+    from actl.core.validation import _remote_file_bytes
+
+    raw = _remote_file_bytes(f"/proc/{pid}/environ")
+    if raw is None:
+        return False
     try:
-        entries = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        entries = raw.split(b"\0")
     except OSError:
         return False
     prefix = b"CLAUDE_CONFIG_DIR="
@@ -77,20 +87,23 @@ def _process_profile_matches(pid: int, profile_root: Path) -> bool:
 
 
 def _process_looks_like_claude(pid: int) -> bool:
-    try:
-        command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").lower()
-    except OSError:
+    from actl.core.validation import _remote_file_bytes
+
+    raw = _remote_file_bytes(f"/proc/{pid}/cmdline")
+    if raw is None:
         return False
+    command = raw.replace(b"\0", b" ").decode("utf-8", "replace").lower()
     return "claude" in command
 
 
 def _process_tty(pid: int) -> str | None:
     """Return the controlling terminal without reading pane content."""
-    try:
-        tty = Path(f"/proc/{pid}/fd/0").resolve(strict=True)
-    except OSError:
+    from actl.core.validation import _remote_resolve_link
+
+    tty = _remote_resolve_link(f"/proc/{pid}/fd/0")
+    if tty is None:
         return None
-    return str(tty) if str(tty).startswith("/dev/pts/") else None
+    return tty if tty.startswith("/dev/pts/") else None
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

@@ -104,6 +104,37 @@ def _remote_file_bytes(path: str) -> bytes | None:
     return proc.stdout
 
 
+def _remote_file_text(path: str) -> str | None:
+    raw = _remote_file_bytes(path)
+    if raw is None:
+        return None
+    return raw.decode("utf-8", "replace")
+
+
+def _remote_resolve_link(path: str) -> str | None:
+    """readlink -f 원격 지원 (fd/0 tty 확인용)."""
+    from actl.core.tmux import REMOTE_SSH_TARGET, _remote_args
+
+    if not REMOTE_SSH_TARGET:
+        try:
+            return str(Path(path).resolve(strict=True))
+        except OSError:
+            return None
+    import subprocess as _sp
+
+    try:
+        proc = _sp.run(
+            _remote_args(["readlink", "-f", path]),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False, timeout=10,
+        )
+    except Exception:
+        return None
+    if proc.returncode:
+        return None
+    return proc.stdout.strip() or None
+
+
 def process_environment(pid: int) -> dict[str, str]:
     raw = _remote_file_bytes(f"/proc/{pid}/environ")
     if raw is None:

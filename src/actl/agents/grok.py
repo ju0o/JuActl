@@ -45,15 +45,55 @@ def _grok_process(pid: int | None, target: str) -> int | None:
     return _grok_pid(target)
 
 
+def _fd_targets(pid: int) -> list[str]:
+    """fd 심볼릭링크 목적지 목록. 원격(--ssh)은 ssh ls+readlink 경유."""
+    from actl.core.tmux import REMOTE_SSH_TARGET, _remote_args
+
+    if not REMOTE_SSH_TARGET:
+        try:
+            fds = list(Path(f"/proc/{pid}/fd").iterdir())
+        except OSError:
+            return []
+        out = []
+        for fd in fds:
+            try:
+                out.append(os.readlink(fd))
+            except OSError:
+                continue
+        return out
+    import subprocess as _sp
+
+    try:
+        ls = _sp.run(
+            _remote_args(["ls", f"/proc/{pid}/fd"]),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False, timeout=10,
+        )
+    except Exception:
+        return []
+    if ls.returncode:
+        return []
+    out = []
+    for name in ls.stdout.split():
+        try:
+            rl = _sp.run(
+                _remote_args(["readlink", f"/proc/{pid}/fd/{name}"]),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", check=False, timeout=10,
+            )
+        except Exception:
+            continue
+        if rl.returncode:
+            continue
+        out.append(rl.stdout.strip())
+    return out
+
+
 def _open_event_files(pid: int, root: Path) -> list[Path]:
     found: set[Path] = set()
-    try:
-        fds = list(Path(f"/proc/{pid}/fd").iterdir())
-    except OSError:
-        return []
-    for fd in fds:
+    for target in _fd_targets(pid):
         try:
-            path = Path(os.readlink(fd)).resolve(strict=False)
+            path = Path(target).resolve(strict=False)
             path.relative_to(root)
         except (OSError, ValueError):
             continue
