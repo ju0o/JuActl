@@ -1,11 +1,12 @@
 """JuActl GUI: Windows native agent board (tkinter, stdlib only).
 
-No terminal input needed — buttons + clicks only. Reuses the same remote
-backend as the TUI (--ssh delegation for tmux/ps/extract).
+Dark theme, status colors, card layout. No terminal input — buttons and
+clicks only. Reuses the same remote backend as the TUI (--ssh delegation
+for tmux/ps/extract).
 
 Layout mirrors board-wireframe.html:
-  left    agent list (click = select + preview)
-  center  live pane preview + Copy/Print/Remap/Refresh buttons + last response
+  left    agent cards (click = select + preview)
+  center  live pane preview + Copy/Print/Remap/Board/Refresh + last response
   right   message composer + Send + event log
 """
 from __future__ import annotations
@@ -21,14 +22,19 @@ from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
+BG = "#0d1117"
+PANEL = "#161b22"
+LINE = "#30363d"
+TXT = "#e6edf3"
+DIM = "#8b949e"
+ACC = "#2f81f7"
+OK = "#3fb950"
+WARN = "#d29922"
+BAD = "#f85149"
+FONT = ("Consolas", 10)
+FONT_BIG = ("Consolas", 11, "bold")
 
-def _tk():
-    try:
-        import tkinter as tk
-        from tkinter import scrolledtext, ttk
-    except ImportError as exc:
-        raise SystemExit(f"tkinter 없음 (python.org python 재설치 시 Tcl/Tk 포함): {exc}")
-    return tk, scrolledtext, ttk
+STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": ACC}
 
 
 class Board:
@@ -49,7 +55,8 @@ class Board:
             pass
         self.root = tk.Tk()
         self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
-        self.root.geometry("1100x640")
+        self.root.geometry("1200x700")
+        self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
         self.jobs: queue.Queue = queue.Queue()
@@ -57,45 +64,83 @@ class Board:
         self.refresh()
         self.root.after(100, self._drain)
 
+    def _style(self) -> None:
+        from tkinter import ttk
+
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("TFrame", background=BG)
+        style.configure("Card.TFrame", background=PANEL, borderwidth=1, relief="solid")
+        style.configure("TLabel", background=PANEL, foreground=TXT, font=FONT)
+        style.configure("Title.TLabel", background=BG, foreground=DIM, font=("Consolas", 9, "bold"))
+        style.configure("TButton", font=FONT, padding=4)
+        style.configure("Primary.TButton", background=ACC, foreground="white")
+
     def _build(self) -> None:
         import tkinter as tk
         from tkinter import ttk
 
-        main = ttk.Frame(self.root, padding=8)
+        self._style()
+        top = ttk.Frame(self.root, padding=6)
+        top.pack(fill="x")
+        conn = f"● ssh {self.ssh_target} 연결" if self.ssh_target else "● 로컬"
+        ttk.Label(top, text=f"📻 JuActl 보드  {conn}", style="Title.TLabel").pack(side="left")
+        self.status_var = tk.StringVar(value="준비")
+        ttk.Label(top, textvariable=self.status_var, style="Title.TLabel").pack(side="right")
+
+        main = ttk.Frame(self.root, padding=6)
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=1)
         main.columnconfigure(1, weight=2)
         main.columnconfigure(2, weight=1)
 
-        left = ttk.LabelFrame(main, text="에이전트 (클릭=선택+미리보기)", padding=6)
+        left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         left.grid(row=0, column=0, sticky="nsew", padx=4)
-        self.agent_box = tk.Listbox(left, height=12, font=("Consolas", 11))
-        self.agent_box.pack(fill="both", expand=True)
+        tk.Label(left, text="에이전트 (클릭=선택+미리보기)", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6, pady=4)
+        self.agent_box = tk.Listbox(left, height=12, font=FONT_BIG, bg="#000000", fg=TXT,
+                                    selectbackground=ACC, selectforeground="white",
+                                    highlightthickness=0, borderwidth=0)
+        self.agent_box.pack(fill="both", expand=True, padx=6, pady=4)
         self.agent_box.bind("<<ListboxSelect>>", lambda _e: self.on_select())
 
-        center = ttk.LabelFrame(main, text="live pane 미리보기", padding=6)
+        center = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         center.grid(row=0, column=1, sticky="nsew", padx=4)
-        self.preview = tk.Text(center, height=16, wrap="word", font=("Consolas", 10))
-        self.preview.pack(fill="both", expand=True)
-        btns = ttk.Frame(center)
-        btns.pack(fill="x", pady=4)
-        for label, fn in [("복사", self.on_copy), ("출력", self.on_print),
-                          ("재매핑", self.on_remap), ("pane보드", self.on_board),
-                          ("새로고침", self.refresh)]:
-            ttk.Button(btns, text=label, command=fn).pack(side="left", padx=2)
-        self.resp = tk.Text(center, height=8, wrap="word", font=("Consolas", 10))
-        self.resp.pack(fill="both", expand=True)
+        tk.Label(center, text="live pane 미리보기", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6, pady=4)
+        self.preview = tk.Text(center, height=16, wrap="word", font=FONT, bg="#000000", fg=TXT,
+                               insertbackground=TXT, highlightthickness=0, borderwidth=0)
+        self.preview.pack(fill="both", expand=True, padx=6)
+        btns = tk.Frame(center, bg=PANEL)
+        btns.pack(fill="x", pady=4, padx=6)
+        for label in ["복사", "출력", "재매핑", "pane보드", "새로고침"]:
+            fn = {"복사": self.on_copy, "출력": self.on_print, "재매핑": self.on_remap,
+                  "pane보드": self.on_board, "새로고침": self.refresh}[label]
+            tk.Button(btns, text=label, command=fn, bg="#21262d", fg=TXT,
+                      activebackground=ACC, relief="flat", padx=10, pady=4).pack(side="left", padx=2)
+        tk.Label(center, text="마지막 응답", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6)
+        self.resp = tk.Text(center, height=8, wrap="word", font=FONT, bg="#000000", fg=TXT,
+                            highlightthickness=0, borderwidth=0)
+        self.resp.pack(fill="both", expand=True, padx=6, pady=4)
 
-        right = ttk.LabelFrame(main, text="메시지 전송", padding=6)
+        right = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         right.grid(row=0, column=2, sticky="nsew", padx=4)
+        tk.Label(right, text="메시지 전송", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6, pady=4)
         from tkinter import scrolledtext
 
-        self.msg = scrolledtext.ScrolledText(right, height=8, font=("Consolas", 10))
-        self.msg.pack(fill="x")
-        ttk.Button(right, text="전송", command=self.on_send).pack(pady=4)
-        ttk.Label(right, text="이벤트 로그").pack(anchor="w")
-        self.logw = scrolledtext.ScrolledText(right, height=14, state="disabled", font=("Consolas", 9))
-        self.logw.pack(fill="both", expand=True)
+        self.msg = scrolledtext.ScrolledText(right, height=8, font=FONT, bg="#000000", fg=TXT,
+                                             insertbackground=TXT, highlightthickness=0, borderwidth=0)
+        self.msg.pack(fill="x", padx=6)
+        tk.Button(right, text="➤ 전송", command=self.on_send, bg=ACC, fg="white",
+                  activebackground=ACC, relief="flat", padx=10, pady=4).pack(pady=4)
+        tk.Label(right, text="이벤트 로그", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6)
+        self.logw = scrolledtext.ScrolledText(right, height=12, state="disabled", font=("Consolas", 9),
+                                              bg="#000000", fg=DIM, highlightthickness=0, borderwidth=0)
+        self.logw.pack(fill="both", expand=True, padx=6, pady=4)
+
+    def set_status(self, text: str) -> None:
+        self.status_var.set(text)
 
     def log(self, text: str) -> None:
         import datetime
@@ -129,11 +174,13 @@ class Board:
         return _rows(self.config)
 
     def refresh(self) -> None:
+        self.set_status("새로고침 중…")
         self.log("새로고침 중…")
         self._bg(self.rows_now, self._refresh_done)
 
     def _refresh_done(self, result) -> None:
         if isinstance(result, Exception):
+            self.set_status("새로고침 실패")
             self.log(f"새로고침 실패: {result}")
             return
         self.rows = result
@@ -141,7 +188,11 @@ class Board:
         for i, r in enumerate(self.rows, 1):
             state = STATE_KO.get(r["state"], r["state"])
             self.agent_box.insert("end", f"[{i}] {r['display']} {r['target']} {state}")
-        self.log(f"새로고침 완료 ({len(self.rows)} agents)")
+            color = STATUS_COLOR.get(r["state"], TXT)
+            self.agent_box.itemconfig(i - 1, fg=color)
+        live = sum(1 for r in self.rows if r["state"] == "UP")
+        self.set_status(f"live {live}/{len(self.rows)}")
+        self.log(f"새로고침 완료 ({len(self.rows)} agents, live {live})")
         if self.selected is None and self.rows:
             self.agent_box.selection_set(0)
             self.on_select()
@@ -165,6 +216,7 @@ class Board:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")
             return
+        self.set_status(f"{row['display']} 로딩…")
         self.log(f"{row['display']} 미리보기 로딩…")
 
         def work():
@@ -173,6 +225,7 @@ class Board:
         def done(result) -> None:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+            self.set_status("준비")
 
         self._bg(work, done)
 
@@ -184,6 +237,7 @@ class Board:
         if tgt == "-" or tgt.endswith("?"):
             self.log(f"{row['display']} live pane 없음")
             return
+        self.set_status("복사 중…")
 
         def work():
             result = extract_last_response(row["agent"], tgt, self.config)
@@ -196,6 +250,7 @@ class Board:
                 return ("clip-fail", str(exc), result.text[:2000])
 
         def done(result) -> None:
+            self.set_status("준비")
             if result[0] == "ok":
                 self.log(f"{row['display']} 복사됨 ({result[1]}, {result[2]}자)")
             elif result[0] == "empty":
@@ -242,9 +297,11 @@ class Board:
             return
         top = tk.Toplevel(self.root)
         top.title(f"{row['display']} 재매핑")
+        top.configure(bg=BG)
+        tk.Label(top, text="pane 선택 (클릭=즉시 매핑)", bg=BG, fg=DIM).pack(padx=8, pady=4)
         for i, det in enumerate(dets, 1):
             tk.Button(
-                top, anchor="w",
+                top, anchor="w", bg=PANEL, fg=TXT, relief="flat",
                 text=f"[{i}] {det.pane.pane_id} {det.pane.current_path} — {det.evidence}",
                 command=lambda d=det: (self._do_remap(row, d), top.destroy()),
             ).pack(fill="x", padx=8, pady=2)
@@ -262,12 +319,15 @@ class Board:
         self.refresh()
 
     def on_board(self) -> None:
+        self.set_status("pane 보드 로딩…")
+
         def work():
             return _pane_board(self.config)
 
         def done(result) -> None:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+            self.set_status("준비")
 
         self._bg(work, done)
 
@@ -279,6 +339,7 @@ class Board:
         if not text:
             self.log("빈 메시지 — 전송 안 함")
             return
+        self.set_status("전송 중…")
 
         def work():
             from actl.cli import _send_to_selected
@@ -287,6 +348,7 @@ class Board:
             return True
 
         def done(result) -> None:
+            self.set_status("준비")
             if result is True:
                 self.log(f"{row['display']}에 전송됨")
                 self.msg.delete("1.0", "end")
