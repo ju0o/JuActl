@@ -394,12 +394,23 @@ def _apply_discovery(config: dict, detections: list[Detection] | None = None) ->
 
 def _map(config: dict, agent: str, session_id: str | None = None) -> dict:
     detections = _discover(config)
-    try:
-        choice = int(input("Choose pane: ").strip())
-        detection = detections[choice - 1]
-    except (ValueError, IndexError):
-        print("✗ Invalid pane selection")
-        return config
+    raw = input("Choose pane: ").strip()
+    detection = None
+    if raw.startswith("%"):
+        for d in detections:
+            if d.pane.pane_id == raw:
+                detection = d
+                break
+        if detection is None:
+            print(f"✗ No pane matching {raw}")
+            return config
+    else:
+        try:
+            choice = int(raw)
+            detection = detections[choice - 1]
+        except (ValueError, IndexError):
+            print("✗ Invalid pane selection")
+            return config
     try:
         updated = manual_map(config, agent, detection)
     except ValueError as exc:
