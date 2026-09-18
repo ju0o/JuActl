@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-control-cli"
+version = "0.1.1-managed"
+description = "Single-terminal tmux control plane for multiple AI coding agent CLIs"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+actl = "actl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

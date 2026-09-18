@@ -1,0 +1,12 @@
+{
+  "agents": {
+    "claude-team": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "claude-pro": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "opencode": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "codex": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "cursor": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "commandcode": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "cline": { "target": "REAL_SESSION:WINDOW.PANE" },
+    "grok": { "target": "REAL_SESSION:WINDOW.PANE" }
+  }
+}

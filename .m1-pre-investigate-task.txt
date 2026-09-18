@@ -1,0 +1,34 @@
+TASK ID: M1-PRE-INVESTIGATE-001
+ROLE: Root-Cause Investigator (READ-ONLY — do not edit any file, do not run git commit, do not run any live actl command against a real reservation/pane)
+WORKSPACE: This directory only (the operational, promoted actl install `actl-v0.1.1-managed`). Read-only.
+
+CONTEXT: JuControler's Managed collect (`actl runtime collect`) reliably admits FINAL results on the historically-certified default tmux pane range (%0-%3), but has a real, previously-observed failure on a JuControler-created, non-default-numbered pane (observed as `%4` in an earlier dogfood run, TASK-AUDIT-001): transport succeeds (TRANSPORT_SENT, INPUT_OBSERVED), Codex visibly completes a response in the pane, its session JSONL exists on disk and is freshly modified — but `actl runtime collect` returns `RESULT_NOT_FINAL` / "no matching UserMessage after cursor" on repeated bounded attempts. The result was only recoverable via direct pane-capture read (OBSERVED tier, not VERIFIED/collect-admitted).
+
+SUSPECTED SCOPE (unconfirmed — this is exactly what you're investigating, not a given): the BOOTSTRAP-cursor enrichment path. Specifically:
+- `core/runtime.py` around lines 2330-2390 (the enrichment function that resolves a BOOTSTRAP observationCursor to a real session path via `codex_agent.resolve_codex(Path(profile_root), pane_id, codex_pid=agent_pid)`, and only accepts `confidence == "exact"`).
+- `agents/codex.py`'s `resolve_codex` function (line ~166) and whatever produces its `confidence` value (line ~222 sets `confidence="exact"` in at least one path) — this is the actual place that decides whether a given pane's session gets correlated at all.
+- `core/live_observe.py` (not yet read this round — check it too).
+
+GOAL: Determine, with real evidence (not speculation), WHY collect correlation fails specifically for non-default/dynamically-created panes but works for %0-%3. Do NOT fix anything yet. Follow this session's own diagnostic discipline: check the obvious first hypothesis, but also actively look for alternative explanations (does `resolve_codex` use anything pane-number-specific like a hardcoded range, a discovery order that happens to only enumerate the historical panes, a race condition that's more likely on a freshly-created pane, a workspace/profile-root mismatch, a timing issue with how fresh a newly-created pane's session file is when collect is attempted, etc?). State your confidence level explicitly (UNKNOWN/SUSPECTED/PROBABLE/CONFIRMED) rather than rounding up.
+
+SPECIFICALLY ANSWER:
+1. Read `resolve_codex` in `agents/codex.py` fully. What determines whether it returns `confidence == "exact"` vs something lower? Is there anything in that logic that would behave differently for a pane number outside %0-%3, or for a pane that was JUST created (vs one that's existed for a while)?
+2. Read the BOOTSTRAP-cursor enrichment function in `core/runtime.py` (~2320-2390) fully, and trace what happens when `resolve_codex` returns a non-exact confidence or `None` — does the cursor just stay unenriched (`return cursor` unchanged), and does THAT explain the `RESULT_NOT_FINAL` / "no matching UserMessage after cursor" symptom downstream in collect?
+3. Read `core/live_observe.py` and check for any pane_id or pane-number-specific logic that could explain the same symptom from a different angle (SEE WIDE — don't assume it's only in runtime.py/codex.py just because that's the suspected area).
+4. If you can find or construct a reproducible test case (read-only — e.g. write a temporary throwaway script in `/tmp`, NOT in this repo, to call `resolve_codex` directly against real session files on disk for both a historical-range pane and a hypothetical non-default one, without touching any live reservation) that demonstrates the actual failure mode, do so and report exact evidence.
+5. What is the MINIMUM bounded fix this suggests? (Do not implement it — just describe it precisely: which function, what specific logic change, estimated blast radius.)
+
+FORBIDDEN: Editing any file in this repo. Git commit/push. Any live `actl runtime reserve/send/collect` call. Touching JuControler-Private, the Agent-Relay worktree, or any product repo. Touching the pre-existing stale actl reservation if you happen to discover it (leave any live reservation state exactly as found).
+
+RETURN EXACTLY THIS FORMAT:
+
+STATUS: DONE
+CURRENT_HYPOTHESIS: <one sentence>
+ALTERNATIVE_HYPOTHESES: <list, and why each was or wasn't ruled out>
+EVIDENCE_FOR: <specific file:line citations and/or reproduction output>
+EVIDENCE_AGAINST: <if any>
+CONFIDENCE: UNKNOWN|SUSPECTED|PROBABLE|CONFIRMED
+RECOMMENDED_FIX_SCOPE: <precise, minimal — function/file, not a redesign>
+UNKNOWNS: <anything still unclear>
+
+End your final message with exactly this line on its own: M1_PRE_INVESTIGATE_001_DONE

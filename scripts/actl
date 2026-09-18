@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ACTL_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+ACTL_ROOT="$(cd "$(dirname "$ACTL_SCRIPT")/.." && pwd)"
+export PYTHONPATH="$ACTL_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m actl.cli "$@"

@@ -1,0 +1,36 @@
+TASK ID: M1-PRE-LIVE-REPRO-001
+ROLE: Investigator, now authorized for ONE bounded live reproduction (Owner GO given). Still forbidden from implementing any fix.
+WORKSPACE: This directory (read the operational actl source) + you may run real `actl` commands (the promoted `/home/skkse12/.local/bin/actl`) against a dedicated target.
+
+TARGET: A fresh, dedicated Codex 0.153.4 process is running in tmux pane `%5` (a dynamically-created pane in the current tmux session — this session only has panes %0-%5 total, so %5 is structurally "a dynamically-created, non-default pane" for reproduction purposes, matching the original TASK-AUDIT-001 scenario shape). It is idle at its prompt, cwd = the B1.5 worktree, no reservation history.
+
+ABSOLUTE PROHIBITIONS (same as your prior task):
+- Do NOT touch, query, or reference the old stale reservation `rsv_eb1fc35a035146b19696efe510c87987` / runtime `rt1_fcafbf8d58ed2efaaa6ea1618a583a796e23ae71be171d4794060c59a76da6c4` in any way.
+- Do NOT send anything to any pane other than %5.
+- Do NOT blindly resend on any ambiguous outcome. If you hit DELIVERY_AMBIGUOUS or any transport ambiguity, STOP immediately, preserve all state, and report BLOCKED — do not retry.
+- Do NOT edit any file in this repo (still read-only for source). Do NOT commit/push anything.
+- Do NOT touch JuControler-Private, any product repo, or the earlier B1.5 smoke's dataRoot.
+
+GOAL: Reproduce, with real live evidence, the exact failure mode from TASK-AUDIT-001: does `actl runtime collect` fail to correlate/admit FINAL on this dynamically-created pane (%5), the way it did on the original %4 pane? If it succeeds cleanly (as the B1.5 live smoke did against a different fresh pane), that is ALSO a valid and important result — report it exactly as observed, do not force a failure to happen.
+
+STEPS:
+1. Discover the pane-%5 Codex's real runtimeId via `actl runtime discover --request-stdin` (read-only).
+2. Reserve it (`action:'acquire'`), confirming the pane is genuinely idle first (direct pane capture check).
+3. Send a trivial, harmless prompt via real `actl runtime send` — something like "Reply with exactly the single word DONE and nothing else." — following the same fresh-snapshot-immediately-before-send discipline used in the B1.5 smoke.
+4. Attempt `actl runtime collect` with bounded retries (do not loop forever — 3-5 bounded attempts with brief waits is enough). Capture the EXACT response at each attempt: full JSON, including any `RESULT_NOT_FINAL` detail text, `completionKind`, `stage`, cursor state.
+5. In parallel/after, independently inspect: the real Codex session JSONL file for pane %5 (find it via the profile root, confirm it exists and is fresh), and manually run (read-only) the same `resolve_codex` correlation logic you studied in your prior investigation against this REAL session — do NOT just trust actl's own collect response, cross-check it yourself against the raw session file, matching this session's own "PM verifies independently" discipline.
+6. Whatever the outcome (success or the same failure as before), release the reservation cleanly and correctly per the real protocol you already verified in your prior B15-FIX-03 review context (captureAck field in the release request, FINAL_CAPTURE if a result was admitted, RECONCILE otherwise) — do not leave anything HELD.
+7. If you can identify the SPECIFIC field/timing/state that differs between a successful correlation and a failed one (based on directly comparing your own resolve_codex read against actl's actual collect response), report that precisely — this is the actual acceptance criterion for moving from SUSPECTED to PROBABLE/CONFIRMED.
+
+RETURN EXACTLY THIS FORMAT:
+
+STATUS: DONE
+REPRODUCED: YES (same RESULT_NOT_FINAL failure as TASK-AUDIT-001) / NO (collect succeeded cleanly) / PARTIAL (different symptom)
+DISCOVERED RUNTIME ID: <value>
+SEND/COLLECT EVIDENCE: <exact JSON responses at each collect attempt>
+INDEPENDENT SESSION-FILE CROSS-CHECK: <what you found reading the real session JSONL and resolve_codex logic directly, vs what actl's collect actually returned>
+ROOT CAUSE UPDATE: <CONFIRMED / still SUSPECTED / now a DIFFERENT hypothesis — be precise, do not round up confidence>
+RESERVATION CLOSEOUT: <confirm RELEASED cleanly>
+RECOMMENDED_FIX_SCOPE: <only if confidence is now PROBABLE or CONFIRMED; otherwise say what additional evidence would be needed>
+
+End your final message with exactly this line on its own: M1_PRE_LIVE_REPRO_001_DONE

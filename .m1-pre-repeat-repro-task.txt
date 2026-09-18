@@ -1,0 +1,56 @@
+TASK ID: M1-PRE-REPEAT-REPRO-001
+ROLE: Investigator, continuing the already-authorized live reproduction work (no new GO needed — this is inside the already-approved M1-PRE prerequisite's own Done Criteria, per Owner instruction; do not ask for further approval).
+WORKSPACE: This directory (read-only for source, as before) + real `actl`/tmux commands against dedicated target panes you create yourself in the current tmux session.
+
+GOAL: Exercise the full M1-PRE-ACTL-DYNAMIC-PANE-COLLECT Done Criteria with real evidence, not just one clean attempt. The M1-PRE prerequisite requires ALL of the following to be demonstrated, honestly, before it can close:
+(a) default pane regression (not your job this round — already covered historically)
+(b) a freshly-created non-default pane — already done once (round M1-PRE-LIVE-REPRO-001, pane %5, success)
+(c) a pane numbered ABOVE the historical certification range (%0-%3) — %5 already qualifies, but do at least one more at an even higher number to be unambiguous
+(d) REPEATED create/destroy/recreate cycles — not yet done, do this round
+(e) no cross-pane result confusion — requires TWO live Codex targets existing at once and confirming their results don't get swapped — not yet done, do this round
+(f) no stale-session result admission
+(g) no blind resend anywhere in the recovery path
+
+ABSOLUTE PROHIBITIONS (same as all prior rounds):
+- Do NOT touch/query/reference the two known stale reservations: `rsv_eb1fc35a035146b19696efe510c87987` (runtime `rt1_fcafbf8d58ed2efaaa6ea1618a583a796e23ae71be171d4794060c59a76da6c4`) and `rsv_cc4c1207aee146068f92378485e8310b` (runtime `rt1_092f0e2798c166ad75a7898c5036103fc0a0e3df5fe4f1316b68da877fb0f0da`) — leave both exactly as found, do not release/mutate them.
+- Do NOT send anything to tmux panes %0-%4 (your own pane is %4 — never target yourself; %0-%3 are historical/other work).
+- Do NOT blindly resend on any ambiguous outcome — STOP and report that specific round as BLOCKED/AMBIGUOUS, preserve state, move to the next round rather than retrying the same one.
+- Do NOT edit any file in this repo. Do NOT commit/push. Do NOT touch JuControler-Private, product repos, or the B1.5 worktree.
+- Do NOT intentionally manufacture a failure — if every attempt stays clean, report that honestly; do not force or fabricate a failure to seem more thorough.
+
+ROUNDS TO RUN (in order; each is a fresh discover -> reserve -> send -> collect -> independent cross-check -> clean release, same discipline as M1-PRE-LIVE-REPRO-001):
+
+ROUND 2 — pane above historical range, fresh identity:
+1. Create a new tmux pane at a high window index (e.g. via `tmux new-window`) and launch the pinned Codex 0.153.4 binary in it (same launch command as before: `/home/skkse12/.codex/packages/standalone/releases/0.153.4-x86_64-unknown-linux-musl/bin/codex --disable in_app_updates -c check_for_update_on_startup=false`), cwd = the B1.5 worktree.
+2. Discover -> reserve -> send (trivial prompt, e.g. "Reply with exactly the single word DONE and nothing else.") -> collect (bounded retries). Record exact evidence.
+3. Independently cross-check against the raw session JSONL + a direct `resolve_codex` call, same as before.
+4. Release cleanly (FINAL_CAPTURE if admitted).
+
+ROUND 3 — destroy/recreate lifecycle on the SAME logical slot:
+1. Kill the pane you just used in Round 2 (`tmux kill-pane` or send `/exit` then close it).
+2. Create a NEW pane, launch a fresh Codex process in it (new runtimeId will result).
+3. Repeat the same discover -> reserve -> send -> collect -> cross-check -> release cycle.
+4. Note explicitly: did anything about the destroy/recreate cycle change collect's behavior (stale cursor pointing at the old pane's session, wrong runtime picked up, etc.)?
+
+ROUND 4 — cross-pane confusion probe (two live Codex targets concurrently):
+1. With Round 3's pane still alive (do not close it yet), create ANOTHER new pane and launch a second fresh Codex process in it.
+2. You now have two live, separate Codex targets. Send a DIFFERENT distinguishable prompt to each (e.g. pane A: "Reply with exactly the word ALPHA and nothing else." / pane B: "Reply with exactly the word BETA and nothing else.").
+3. Collect from BOTH. Verify each collect result matches the CORRECT pane's prompt (ALPHA came from pane A's collect, BETA from pane B's collect, not swapped).
+4. Release both reservations cleanly.
+
+AFTER ALL ROUNDS:
+- If every round stayed clean (no reproduction of the original TASK-AUDIT-001 failure, no cross-pane confusion, no stale-session admission): say so plainly, and evaluate this against the FULL M1-PRE Done Criteria list above — which items are now satisfied with real evidence, which (if any) remain unaddressed.
+- If the original failure DOES reproduce in any round: STOP further rounds immediately, do not continue the broad repetition, and instead instrument that exact failure as precisely as you can (adopted rollout path, PID, profile root, thread locks, cursor path/byteOffset, JSONL size/mtime at the moment of failure) — this becomes the priority finding, more valuable than completing the remaining rounds.
+
+RETURN EXACTLY THIS FORMAT:
+
+STATUS: DONE
+ROUND 2 RESULT: <REPRODUCED/CLEAN, with evidence>
+ROUND 3 RESULT: <REPRODUCED/CLEAN, with evidence, plus destroy/recreate-specific observations>
+ROUND 4 RESULT: <REPRODUCED/CLEAN/CROSS-PANE-CONFUSED, with evidence for both panes>
+DONE CRITERIA COVERAGE: <checklist against (a)-(g) above, what's now satisfied with real evidence vs still open>
+ROOT CAUSE UPDATE: <CONFIRMED / still SUSPECTED / now something else — precise, no rounding up>
+RECOMMENDATION: <close M1-PRE / needs N more rounds of what specifically / needs instrumentation of a caught failure>
+ALL RESERVATIONS CLOSED: <confirm every reservation you created this round ended RELEASED>
+
+End your final message with exactly this line on its own: M1_PRE_REPEAT_REPRO_001_DONE

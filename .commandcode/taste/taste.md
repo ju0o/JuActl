@@ -1,0 +1,4 @@
+- Communicates in Korean; expects Korean-language explanations and summaries. Confidence: 0.97
+- Prefers end-to-end automation — gets frustrated when a workflow requires multiple manual commands or user-driven diagnosis steps (e.g., "아니 이거 하나하나 다 내가 하는게 아니라"); wants the tool to map, bind, and work without user intervention between steps. Confidence: 0.85
+- Uses multiple AI agent panes simultaneously (e.g., OpenCode + Grok) — expects actl to detect and auto-map any open AI agent, not just one; explicitly wants all agents to auto-map without per-agent configuration. Confidence: 0.65
+- Prefers interactive resolution over fatal errors — when ambiguity arises (e.g., multiple panes match), the tool should present choices and continue rather than aborting with an error message. Confidence: 0.6
