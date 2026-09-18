@@ -32,16 +32,30 @@ class TargetValidation:
         return self.state == "UP"
 
 
+def _ps_output() -> str:
+    """ps 출력: 로컬 직접 실행, 원격(--ssh)은 ssh 경유."""
+    from actl.core.tmux import _remote_args
+
+    try:
+        proc = subprocess.run(
+            _remote_args(["ps", "-eo", "pid=,ppid=,args="]),
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except Exception:
+        return ""
+    if proc.returncode:
+        return ""
+    return proc.stdout
+
+
 def pane_processes(pane_pid: int) -> list[ProcessInfo]:
     """Return the pane process tree using read-only process-table inspection."""
-    proc = subprocess.run(
-        ["ps", "-eo", "pid=,ppid=,args="], capture_output=True, text=True, check=False
-    )
-    if proc.returncode:
+    stdout = _ps_output()
+    if not stdout:
         return []
     all_processes: dict[int, ProcessInfo] = {}
     children: dict[int, list[int]] = {}
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         parts = line.strip().split(None, 2)
         if len(parts) < 3:
             continue
@@ -66,10 +80,32 @@ def pane_processes(pane_pid: int) -> list[ProcessInfo]:
     return found
 
 
-def process_environment(pid: int) -> dict[str, str]:
+def _remote_file_bytes(path: str) -> bytes | None:
+    """원격(--ssh)은 ssh cat, 로컬은 직접 읽기. 실패 시 None."""
+    from actl.core.tmux import REMOTE_SSH_TARGET, _remote_args
+
+    if not REMOTE_SSH_TARGET:
+        try:
+            return Path(path).read_bytes()
+        except OSError:
+            return None
+    import subprocess as _sp
+
     try:
-        raw = Path(f"/proc/{pid}/environ").read_bytes()
-    except OSError:
+        proc = _sp.run(
+            _remote_args(["cat", path]),
+            capture_output=True, check=False, timeout=10,
+        )
+    except Exception:
+        return None
+    if proc.returncode:
+        return None
+    return proc.stdout
+
+
+def process_environment(pid: int) -> dict[str, str]:
+    raw = _remote_file_bytes(f"/proc/{pid}/environ")
+    if raw is None:
         return {}
     values: dict[str, str] = {}
     for entry in raw.split(b"\0"):
