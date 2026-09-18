@@ -88,6 +88,7 @@ actl 에이전트 보드 — 도움말
   v       전체 live pane 보드 (모든 tmux pane + 감지 에이전트 + 매핑 상태)
   V       v + 전 에이전트 복사 자동검증
   pane키   v 목록의 [번호] 키: 미리보기 + 그 pane로 즉시 매핑
+  (c 실패 시 응답 텍스트를 바로 화면에 자동 출력 — 수동 복사 가능)
   h / ?   이 도움말
   q       종료
 
@@ -485,7 +486,10 @@ def run_tui() -> int:
                     backend = copy_text(result.text, preferred=config.get("clipboard_backend", "auto"))
                     message = f"✓ {row['display']} 복사됨 ({backend}, {len(result.text)}자)"
                 except Exception as exc:
-                    message = f"✗ 클립보드 실패: {exc} — p 눌러 화면 출력으로 복사"
+                    message = (
+                        f"✗ 클립보드 실패: {exc}\n"
+                        f"--- {row['display']} 마지막 응답 (수동 복사) ---\n{result.text[:2000]}"
+                    )
                 _render(rows, selected, message)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)

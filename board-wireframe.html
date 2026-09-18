@@ -51,6 +51,7 @@
       <button class="primary" onclick="act('c')">⧉ 복사 <span class="kbd">c</span></button>
       <button onclick="act('p')">⎙ 출력 <span class="kbd">p</span></button>
       <button onclick="act('m')">⇄ 재매핑 <span class="kbd">m</span></button>
+      <button onclick="act('v')">▦ pane보드 <span class="kbd">v</span></button>
       <button onclick="act('r')">↻ 새로고침 <span class="kbd">r</span></button>
       <button onclick="act('h')">? 도움말 <span class="kbd">h</span></button>
     </div>
@@ -68,7 +69,7 @@
     <div class="log" id="log"></div>
   </section>
 </main>
-<footer>복사 = 클립보드 (SSH는 OSC52) · 출력 = SSH 안전 수동 복사 · 재매핑 = 번호 또는 %ID · 목록에서 고르기 (터미널 제약상 드래그 대신 선택 방식)</footer>
+<footer>복사 = 클립보드, 실패 시 응답 자동 출력 (수동 복사) · 출력 = SSH 안전 수동 복사 · 재매핑 = 번호 또는 %ID · v = 전체 pane 보드 · 목록에서 고르기 (터미널 제약상 드래그 대신 선택 방식)</footer>
 <script>
 const STATE_KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
 const AGENTS = [
@@ -108,8 +109,9 @@ function act(k) {
   if (k==='c') { document.getElementById('resp').textContent = `[OSC52로 복사됨 — ${a.n} 마지막 응답…]`; log(`${a.n} 복사됨`); }
   if (k==='p') { document.getElementById('resp').textContent = `${a.pv}\n…(전체 텍스트, SSH 안전)…`; log(`${a.n} 출력됨`); }
   if (k==='m') { document.getElementById('free').innerHTML = `[1] %69 JuCommerce-Private — pid 812913: grok<br>[2] %70 JuControler — pid 922637: claude<br>번호 또는 %ID 선택…`; log(`${a.n} 재매핑 목록`); }
+  if (k==='v') { document.getElementById('free').innerHTML = `[53] %53 bash — 미매핑<br>[55] %55 claude claude-pro MATCH<br>[57] %57 grok MATCH<br>[9] %9 opencode MATCH<br>…전체 15 pane · 번호키=미리보기+즉시매핑`; log("pane 보드 표시"); }
   if (k==='r') { log("새로고침 완료 (자동 재매핑)"); }
-  if (k==='h') { alert("1-8 선택 · c 복사 · p 출력 · m 재매핑 · s 전송 · r 새로고침 · q 종료"); }
+  if (k==='h') { alert("1-8 선택 · c 복사(실패시 자동출력) · p 출력 · m 재매핑 · v pane보드 · s 전송 · r 새로고침 · q 종료"); }
 }
 function send() {
   const a = AGENTS[sel];
