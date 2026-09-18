@@ -55,14 +55,17 @@ class Board:
             pass
         self.root = tk.Tk()
         self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
-        self.root.geometry("1500x900")
+        self.root.geometry("1600x950")
         self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
         self.jobs: queue.Queue = queue.Queue()
+        self.auto_refresh = False
+        self.log_visible = False
         self._build()
         self.refresh()
         self.root.after(100, self._drain)
+        self.root.after(5000, self._auto_tick)
 
     def _style(self) -> None:
         from tkinter import ttk
@@ -88,6 +91,9 @@ class Board:
         top.pack(fill="x")
         conn = f"● ssh {self.ssh_target} 연결" if self.ssh_target else "● 로컬"
         ttk.Label(top, text=f"📻 JuActl 보드  {conn}", style="Title.TLabel").pack(side="left")
+        self.auto_var = tk.StringVar(value="자동새로고침 OFF")
+        tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
+                  bg=PANEL, fg=DIM, relief="flat").pack(side="left", padx=12)
         self.status_var = tk.StringVar(value="준비")
         ttk.Label(top, textvariable=self.status_var, style="Title.TLabel").pack(side="right")
 
@@ -181,21 +187,33 @@ class Board:
             pass
         self.root.after(100, self._drain)
 
+    def toggle_auto(self) -> None:
+        self.auto_refresh = not self.auto_refresh
+        self.auto_var.set("자동새로고침 ON (5s)" if self.auto_refresh else "자동새로고침 OFF")
+        self.log(f"자동새로고침 {'켬' if self.auto_refresh else '끔'}")
+
+    def _auto_tick(self) -> None:
+        if self.auto_refresh:
+            self.refresh(quiet=True)
+        self.root.after(5000, self._auto_tick)
+
     def rows_now(self) -> list[dict]:
         from actl.tui import _rows
 
         return _rows(self.config)
 
-    def refresh(self) -> None:
+    def refresh(self, quiet: bool = False) -> None:
         self.set_status("새로고침 중…")
-        self.log("새로고침 중…")
-        self._bg(self.rows_now, self._refresh_done)
+        if not quiet:
+            self.log("새로고침 중…")
+        self._bg(self.rows_now, lambda r: self._refresh_done(r, quiet))
 
-    def _refresh_done(self, result) -> None:
+    def _refresh_done(self, result, quiet: bool = False) -> None:
         if isinstance(result, Exception):
             self.set_status("새로고침 실패")
             self.log(f"새로고침 실패: {result}")
             return
+        prev_sel = self.selected
         self.rows = result
         self.agent_box.delete(0, "end")
         for i, r in enumerate(self.rows, 1):
@@ -205,10 +223,13 @@ class Board:
             self.agent_box.itemconfig(i - 1, fg=color)
         live = sum(1 for r in self.rows if r["state"] == "UP")
         self.set_status(f"live {live}/{len(self.rows)}")
-        self.log(f"새로고침 완료 ({len(self.rows)} agents, live {live})")
-        if self.selected is None and self.rows:
-            self.agent_box.selection_set(0)
-            self.on_select()
+        if not quiet:
+            self.log(f"새로고침 완료 ({len(self.rows)} agents, live {live})")
+        if self.rows:
+            keep = next((i for i, r in enumerate(self.rows) if r["agent"] == prev_sel), 0)
+            self.agent_box.selection_clear(0, "end")
+            self.agent_box.selection_set(keep)
+            self.selected = self.rows[keep]["agent"] if self.rows else None
 
     def current(self) -> dict | None:
         try:
