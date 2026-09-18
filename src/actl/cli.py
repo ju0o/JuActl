@@ -964,6 +964,7 @@ def _print_cli_help() -> None:
         "  actl                REPL (Agent > prompt, /help for commands)\n"
         "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
         "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
+        "  actl gui [--ssh T]  Windows GUI board (buttons, no terminal keys)\n"
         "  actl copy AGENT [--print]   Copy (or print) last response\n"
         "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
         "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
@@ -1273,6 +1274,10 @@ def main() -> None:
             from actl.tui import run_tui
 
             raise SystemExit(run_tui())
+        if args.command == "gui" and not args.command_agent:
+            from actl.gui import run_gui
+
+            raise SystemExit(run_gui(ssh_target=args.ssh))
         if args.command == "help" and not args.command_agent:
             _print_cli_help()
             return
