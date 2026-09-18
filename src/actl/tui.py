@@ -77,7 +77,8 @@ STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED
 HELP_TEXT = """\
 actl 에이전트 보드 — 도움말
 
-  1-8     에이전트 선택 + live tmux pane 미리보기 (최근 빈줄 제외 12줄)
+  1-8     에이전트 선택 + live pane 전체 미리보기 (터미널 크기에 맞춤)
+          + 매핑/복사 상태 검증행 (정상·복사 가능/불가 즉시 표시)
   c       선택한 에이전트의 마지막 응답 복사 (SSH=OSC52, 로컬=wl-copy/xclip/xsel)
   p       마지막 응답 화면 출력 (클립보드 막히면 수동 복사)
   m       재매핑: 이 에이전트의 빈 live pane 목록 표시, 번호 또는 %ID 선택
@@ -124,13 +125,61 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
     sys.stdout.flush()
 
 
-def _pane_preview(target: str, lines: int = 12) -> str:
+def _term_size() -> tuple[int, int]:
+    import shutil
+
     try:
-        text = capture_pane(target, history=60)
+        size = shutil.get_terminal_size()
+        return max(40, size.columns), max(10, size.lines)
+    except Exception:
+        return 100, 30
+
+
+def _pane_preview(target: str, lines: int = 0) -> str:
+    """Full-terminal pane preview: wrap to width, fill available height.
+
+    lines=0 (default) auto-sizes to the terminal minus board chrome so the
+    preview reads like the real pane, not a 12-line snippet.
+    """
+    cols, rows = _term_size()
+    if lines <= 0:
+        lines = max(10, rows - 16)
+    width = max(40, cols - 4)
+    try:
+        text = capture_pane(target, history=max(200, lines * 3))
     except Exception as exc:
         return f"(미리보기 불가: {exc})"
-    kept = [ln for ln in text.splitlines() if ln.strip()][-lines:]
-    return "\n".join(kept) or "(빈 pane)"
+    import textwrap
+
+    out: list[str] = []
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if len(line) <= width:
+            out.append(line)
+        else:
+            out.extend(textwrap.wrap(line, width=width, replace_whitespace=False, drop_whitespace=False))
+    kept = out[-lines:] if out else ["(빈 pane)"]
+    return "\n".join(kept)
+
+
+def _verify_row(agent: str, target: str, config: dict) -> str:
+    """One-line mapping/copy health check for the selected pane."""
+    from actl.core.validation import validate_target
+
+    if target == "-" or target.endswith("?"):
+        return "매핑: 없음 — m 눌러 pane 선택"
+    validation = validate_target(agent, target)
+    if not validation.valid:
+        return f"매핑: {validation.state} — {validation.detail} (m 눌러 재매핑)"
+    try:
+        result = extract_last_response(agent, target, config)
+    except Exception as exc:
+        return f"매핑: 정상 proc 확인, 추출 실패: {exc}"
+    if result.text:
+        return f"매핑: 정상 · 복사: 가능 ({len(result.text)}자, {result.source})"
+    return f"매핑: 정상 · 복사: 불가 ({result.detail or '응답 없음'})"
 
 
 def _unmapped_panes(config: dict, agent: str) -> list:
@@ -199,7 +248,11 @@ def run_tui() -> int:
                     row = rows[selected]
                     tgt = row["target"]
                     if tgt != "-" and not tgt.endswith("?"):
-                        message = f"--- {row['display']} {tgt} live pane ---\n{_pane_preview(tgt)}"
+                        message = (
+                            f"--- {row['display']} {tgt} live pane ---\n"
+                            f"{_verify_row(row['agent'], tgt, config)}\n"
+                            f"{_pane_preview(tgt)}"
+                        )
                     else:
                         state_ko = STATE_KO.get(row["state"], row["state"])
                         message = (
