@@ -52,13 +52,28 @@ def set_remote_ssh(target: str | None) -> None:
 
 
 def _tmux_base(socket_path: str | None = None) -> list[str]:
-    base = ["tmux", "-S", socket_path] if socket_path else ["tmux"]
-    if REMOTE_SSH_TARGET:
-        return ["ssh", REMOTE_SSH_TARGET, *base]
-    return base
+    if socket_path:
+        return ["tmux", "-S", socket_path]
+    return ["tmux"]
+
+
+def _remote_args(args: list[str]) -> list[str]:
+    """Wrap a full tmux argv for ``ssh TARGET`` as one remote shell command.
+
+    ssh joins its arguments with spaces for the remote shell, so every part
+    (``-F '#{...}'`` formats, ``#{pane_id}`` targets, socket paths) must be
+    shell-quoted, otherwise quotes are stripped and tmux misparses flags.
+    Local (non-ssh) calls pass through untouched.
+    """
+    if not REMOTE_SSH_TARGET:
+        return args
+    import shlex
+
+    return ["ssh", REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args)]
 
 
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+    args = _remote_args(args)
     try:
         return subprocess.run(args, check=check, capture_output=True, text=text, errors="replace")
     except FileNotFoundError as exc:
@@ -76,7 +91,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
     # affecting this inventory read, and check=False so ssh/tmux failures
     # report False instead of raising.
     proc = subprocess.run(
-        [*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"],
+        _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"]),
         capture_output=True,
         text=True,
         errors="replace",
@@ -251,7 +266,7 @@ def send_prompt_staged(
         try:
             import subprocess as _sp
 
-            _sp.run([*base, "delete-buffer", "-b", buffer_name], capture_output=True)
+            _sp.run(_remote_args([*base, "delete-buffer", "-b", buffer_name]), capture_output=True)
         except OSError:
             pass
 

@@ -12,3 +12,4 @@
 - Expects fixes to include automatic end-to-end testing/QA by the agent (e.g., verifying copy for all agents after mapping changes) rather than asking the user to manually verify results. Confidence: 0.8
 - Wants visual correction for wrong auto-mappings: show all live tmux panes/windows in the TUI and allow drag-drop-style reassignment by picking from a visual list rather than fixing via CLI map commands. Confidence: 0.85
 - Wants unified bidirectional agent board on MainPC: single button-operated terminal UI where each mapped pane supports both sending messages and /copy extraction, not copy-only. Confidence: 0.85
+- Prefers MainPC-local install that remotely drives asus tmux over SSH (e.g., `actl tui --ssh asus` from MainPC); explicitly rejects ssh-into-asus-then-clone-and-run workflow. Confidence: 0.9
