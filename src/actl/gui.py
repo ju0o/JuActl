@@ -22,19 +22,25 @@ from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
-BG = "#0d1117"
-PANEL = "#161b22"
-LINE = "#30363d"
-TXT = "#e6edf3"
-DIM = "#8b949e"
-ACC = "#2f81f7"
-OK = "#3fb950"
-WARN = "#d29922"
-BAD = "#f85149"
+BG = "#0a0a12"
+PANEL = "#12121f"
+PANEL2 = "#1a1a2e"
+LINE = "#2a2a45"
+TXT = "#e8e8f2"
+DIM = "#6e6e8c"
+NEON = "#00f0ff"
+MAGENTA = "#ff2fb3"
+LIME = "#a6ff00"
+OK = "#00ff9d"
+WARN = "#ffb300"
+BAD = "#ff3355"
+ACC = NEON
 FONT = ("Consolas", 10)
 FONT_BIG = ("Consolas", 11, "bold")
-
-STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": ACC}
+FONT_HDR = ("Consolas", 9, "bold")
+GLITCH_A = "▓▒░"
+STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": NEON}
+STATUS_GLYPH = {"UP": "●", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○", "DETECTED": "◉"}
 
 
 class Board:
@@ -78,24 +84,36 @@ class Board:
         style.configure("TFrame", background=BG)
         style.configure("Card.TFrame", background=PANEL, borderwidth=1, relief="solid")
         style.configure("TLabel", background=PANEL, foreground=TXT, font=FONT)
-        style.configure("Title.TLabel", background=BG, foreground=DIM, font=("Consolas", 9, "bold"))
+        style.configure("Title.TLabel", background=BG, foreground=NEON, font=FONT_HDR)
         style.configure("TButton", font=FONT, padding=4)
         style.configure("Primary.TButton", background=ACC, foreground="white")
+
+    def _btn(self, parent, text: str, fn, primary: bool = False):
+        import tkinter as tk
+
+        bg = "#003844" if primary else "#1e1e35"
+        fg = NEON if primary else TXT
+        return tk.Button(parent, text=text, command=fn, bg=bg, fg=fg,
+                         activebackground="#005566", activeforeground="#ffffff",
+                         relief="flat", padx=12, pady=5, cursor="hand2",
+                         font=("Consolas", 10, "bold" if primary else "normal"))
 
     def _build(self) -> None:
         import tkinter as tk
         from tkinter import ttk
 
         self._style()
-        top = ttk.Frame(self.root, padding=6)
-        top.pack(fill="x")
-        conn = f"● ssh {self.ssh_target} 연결" if self.ssh_target else "● 로컬"
-        ttk.Label(top, text=f"📻 JuActl 보드  {conn}", style="Title.TLabel").pack(side="left")
-        self.auto_var = tk.StringVar(value="자동새로고침 OFF")
+        top = tk.Frame(self.root, bg="#05050c", highlightbackground=NEON, highlightthickness=1)
+        top.pack(fill="x", padx=6, pady=(6, 0))
+        conn = f"◈ ssh {self.ssh_target}" if self.ssh_target else "◈ 로컬"
+        tk.Label(top, text=f"▓ JuActl 보드 ░ {conn}", bg="#05050c", fg=NEON,
+                 font=("Consolas", 12, "bold")).pack(side="left", padx=10, pady=6)
+        self.auto_var = tk.StringVar(value="◌ 자동새로고침 OFF")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
-                  bg=PANEL, fg=DIM, relief="flat").pack(side="left", padx=12)
+                  bg="#05050c", fg=DIM, relief="flat", cursor="hand2").pack(side="left", padx=12)
         self.status_var = tk.StringVar(value="준비")
-        ttk.Label(top, textvariable=self.status_var, style="Title.TLabel").pack(side="right")
+        tk.Label(top, textvariable=self.status_var, bg="#05050c", fg=MAGENTA,
+                 font=FONT_HDR).pack(side="right", padx=10)
 
         main = ttk.Frame(self.root, padding=6)
         main.pack(fill="both", expand=True)
@@ -103,49 +121,50 @@ class Board:
         main.columnconfigure(1, weight=3)
         main.rowconfigure(0, weight=1)
 
-        left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        left = tk.Frame(main, bg=PANEL, highlightbackground=MAGENTA, highlightthickness=1)
         left.grid(row=0, column=0, sticky="nsew", padx=4)
         left.rowconfigure(1, weight=1)
         left.rowconfigure(3, weight=1)
-        tk.Label(left, text="에이전트 (클릭=선택+미리보기)", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.agent_box = tk.Listbox(left, height=10, font=FONT_BIG, bg="#000000", fg=TXT,
-                                    selectbackground=ACC, selectforeground="white",
+        tk.Label(left, text="▚ 에이전트 — 클릭=선택+미리보기", bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.agent_box = tk.Listbox(left, height=10, font=FONT_BIG, bg="#05050c", fg=TXT,
+                                    selectbackground="#003844", selectforeground=NEON,
                                     highlightthickness=0, borderwidth=0)
         self.agent_box.grid(row=1, column=0, sticky="nsew", padx=6, pady=4)
         self.agent_box.bind("<<ListboxSelect>>", lambda _e: self.on_select())
-        tk.Label(left, text="메시지 전송", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        tk.Label(left, text="▚ 메시지 전송", bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=2, column=0, sticky="w", padx=6, pady=4)
         from tkinter import scrolledtext
 
-        self.msg = scrolledtext.ScrolledText(left, height=6, font=FONT, bg="#000000", fg=TXT,
-                                             insertbackground=TXT, highlightthickness=0, borderwidth=0)
+        self.msg = scrolledtext.ScrolledText(left, height=6, font=FONT, bg="#05050c", fg=TXT,
+                                             insertbackground=NEON, highlightthickness=0, borderwidth=0,
+                                             highlightbackground=LINE)
         self.msg.grid(row=3, column=0, sticky="nsew", padx=6)
         sendrow = tk.Frame(left, bg=PANEL)
         sendrow.grid(row=4, column=0, sticky="ew", padx=6, pady=4)
-        tk.Button(sendrow, text="➤ 전송", command=self.on_send, bg=ACC, fg="white",
-                  activebackground=ACC, relief="flat", padx=10, pady=4).pack(side="left")
+        self._btn(sendrow, "➤ 전송", self.on_send, primary=True).pack(side="left")
         self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
-                                    bg=PANEL, fg=DIM, relief="flat")
+                                    bg=PANEL, fg=DIM, relief="flat", cursor="hand2")
         self.log_toggle.pack(side="left", padx=6)
         self.logw = scrolledtext.ScrolledText(left, height=8, state="disabled", font=("Consolas", 9),
-                                              bg="#000000", fg=DIM, highlightthickness=0, borderwidth=0)
+                                              bg="#05050c", fg=DIM, highlightthickness=0, borderwidth=0)
 
-        right = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        right = tk.Frame(main, bg=PANEL, highlightbackground=NEON, highlightthickness=1)
         right.grid(row=0, column=1, sticky="nsew", padx=4)
         right.rowconfigure(1, weight=3)
         right.rowconfigure(4, weight=2)
-        tk.Label(right, text="live pane 미리보기", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.preview = tk.Text(right, wrap="none", font=("Consolas", 12), bg="#000000", fg=TXT,
-                               insertbackground=TXT, highlightthickness=0, borderwidth=0)
+        self.pane_title = tk.StringVar(value="▚ live pane 미리보기")
+        tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.preview = tk.Text(right, wrap="none", font=("Consolas", 12), bg="#05050c", fg="#d8ffd8",
+                               insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.preview.grid(row=1, column=0, sticky="nsew", padx=6)
         btns = tk.Frame(right, bg=PANEL)
         btns.grid(row=2, column=0, sticky="ew", pady=4, padx=6)
-        for label in ["복사", "출력", "재매핑", "pane보드", "새로고침"]:
-            fn = {"복사": self.on_copy, "출력": self.on_print, "재매핑": self.on_remap,
-                  "pane보드": self.on_board, "새로고침": self.refresh}[label]
-            tk.Button(btns, text=label, command=fn, bg="#21262d", fg=TXT,
-                      activebackground=ACC, relief="flat", padx=10, pady=4).pack(side="left", padx=2)
-        tk.Label(right, text="마지막 응답", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=3, column=0, sticky="w", padx=6)
-        self.resp = tk.Text(right, wrap="word", font=FONT, bg="#000000", fg=TXT,
+        for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("⇄ 재매핑", False),
+                               ("▦ pane보드", False), ("↻ 새로고침", False)]:
+            fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "⇄ 재매핑": self.on_remap,
+                  "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
+            self._btn(btns, label, fn, primary=primary).pack(side="left", padx=3)
+        tk.Label(right, text="▚ 마지막 응답", bg=PANEL, fg=MAGENTA, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=6)
+        self.resp = tk.Text(right, wrap="word", font=FONT, bg="#05050c", fg=TXT,
                             highlightthickness=0, borderwidth=0)
         self.resp.grid(row=4, column=0, sticky="nsew", padx=6, pady=4)
 
@@ -189,7 +208,7 @@ class Board:
 
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
-        self.auto_var.set("자동새로고침 ON (5s)" if self.auto_refresh else "자동새로고침 OFF")
+        self.auto_var.set("◉ 자동새로고침 ON (5s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self.log(f"자동새로고침 {'켬' if self.auto_refresh else '끔'}")
 
     def _auto_tick(self) -> None:
@@ -218,7 +237,8 @@ class Board:
         self.agent_box.delete(0, "end")
         for i, r in enumerate(self.rows, 1):
             state = STATE_KO.get(r["state"], r["state"])
-            self.agent_box.insert("end", f"[{i}] {r['display']} {r['target']} {state}")
+            glyph = STATUS_GLYPH.get(r["state"], "·")
+            self.agent_box.insert("end", f"{glyph} [{i}] {r['display']} {r['target']} {state}")
             color = STATUS_COLOR.get(r["state"], TXT)
             self.agent_box.itemconfig(i - 1, fg=color)
         live = sum(1 for r in self.rows if r["state"] == "UP")
@@ -259,6 +279,7 @@ class Board:
         def done(result) -> None:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+            self.pane_title.set(f"▚ {row['display']} {tgt} — live")
             self.set_status("준비")
 
         self._bg(work, done)
