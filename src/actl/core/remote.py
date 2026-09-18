@@ -30,6 +30,8 @@ def remote_extract(agent: str, target: str, timeout: float = 30.0) -> CopyResult
     if not REMOTE_SSH_TARGET:
         return None
     try:
+        from actl.core.tmux import _no_window
+
         proc = subprocess.run(
             ["ssh", REMOTE_SSH_TARGET, "~/.local/bin/actl", "extract", agent, target],
             capture_output=True,
@@ -38,6 +40,7 @@ def remote_extract(agent: str, target: str, timeout: float = 30.0) -> CopyResult
             errors="replace",
             timeout=timeout,
             check=False,
+            **_no_window(),
         )
     except Exception as exc:
         return CopyResult(None, f"{agent}-remote-unresolved", "none", f"ssh failed: {exc}")

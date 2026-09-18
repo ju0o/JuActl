@@ -37,10 +37,12 @@ def _ps_output() -> str:
     from actl.core.tmux import _remote_args
 
     try:
+        from actl.core.tmux import _no_window
+
         proc = subprocess.run(
             _remote_args(["ps", "-eo", "pid=,ppid=,args="]),
             capture_output=True, text=True, encoding="utf-8",
-            errors="replace", check=False, timeout=10,
+            errors="replace", check=False, timeout=10, **_no_window(),
         )
     except Exception:
         return ""
@@ -93,9 +95,11 @@ def _remote_file_bytes(path: str) -> bytes | None:
     import subprocess as _sp
 
     try:
+        from actl.core.tmux import _no_window
+
         proc = _sp.run(
             _remote_args(["cat", path]),
-            capture_output=True, check=False, timeout=10,
+            capture_output=True, check=False, timeout=10, **_no_window(),
         )
     except Exception:
         return None
@@ -123,10 +127,12 @@ def _remote_resolve_link(path: str) -> str | None:
     import subprocess as _sp
 
     try:
+        from actl.core.tmux import _no_window
+
         proc = _sp.run(
             _remote_args(["readlink", "-f", path]),
             capture_output=True, text=True, encoding="utf-8",
-            errors="replace", check=False, timeout=10,
+            errors="replace", check=False, timeout=10, **_no_window(),
         )
     except Exception:
         return None

@@ -64,10 +64,12 @@ def _fd_targets(pid: int) -> list[str]:
     import subprocess as _sp
 
     try:
+        from actl.core.tmux import _no_window
+
         ls = _sp.run(
             _remote_args(["ls", f"/proc/{pid}/fd"]),
             capture_output=True, text=True, encoding="utf-8",
-            errors="replace", check=False, timeout=10,
+            errors="replace", check=False, timeout=10, **_no_window(),
         )
     except Exception:
         return []
@@ -76,10 +78,12 @@ def _fd_targets(pid: int) -> list[str]:
     out = []
     for name in ls.stdout.split():
         try:
+            from actl.core.tmux import _no_window as _nw
+
             rl = _sp.run(
                 _remote_args(["readlink", f"/proc/{pid}/fd/{name}"]),
                 capture_output=True, text=True, encoding="utf-8",
-                errors="replace", check=False, timeout=10,
+                errors="replace", check=False, timeout=10, **_nw(),
             )
         except Exception:
             continue

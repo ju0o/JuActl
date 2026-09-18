@@ -72,12 +72,26 @@ def _remote_args(args: list[str]) -> list[str]:
     return ["ssh", REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args)]
 
 
+def _no_window() -> dict:
+    """Windows: ssh/tmux 자식 콘솔창 팝업 방지 (pythonw GUI용)."""
+    import sys as _sys
+
+    if _sys.platform != "win32":
+        return {}
+    try:
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        return {"startupinfo": info, "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    except Exception:
+        return {}
+
+
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
     try:
         return subprocess.run(
             args, check=check, capture_output=True, text=text,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8", errors="replace", **_no_window(),
         )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
@@ -100,6 +114,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
         encoding="utf-8",
         errors="replace",
         check=False,
+        **_no_window(),
     )
     if proc.returncode:
         return False
