@@ -61,6 +61,8 @@ actl tui --ssh asus
 actl copy grok --print --ssh asus
 actl discover --ssh asus
 actl doctor
+# asus의 실제 pane 매핑까지 확인할 때
+actl doctor --ssh asus
 ```
 
 ## TUI 보드 키 (asus 로컬 / ssh 터미널)

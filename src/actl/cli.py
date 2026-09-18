@@ -79,6 +79,11 @@ def _doctor(*, json_output: bool = False) -> int:
         mark = "✓" if good else "✗"
         print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
 
+    def note(name: str, detail: str) -> None:
+        checks.append({"name": name, "ok": None, "detail": detail})
+        if not json_output:
+            print(f"- {name} — {detail}")
+
     line("python", _sys.version_info >= (3, 10), _sys.version.split()[0])
     from actl.core.registry import registry_issues
 
@@ -88,7 +93,10 @@ def _doctor(*, json_output: bool = False) -> int:
     if _sys.platform == "win32":
         line("tmux", True, "MainPC에서는 로컬 tmux 불필요")
         line("ssh", shutil.which("ssh") is not None)
-        line("tmux 서버", True, "asus 원격 (--ssh asus 사용)" if remote else "원격 확인은 --ssh asus 사용")
+        if remote:
+            line("tmux 서버", True, "asus 원격")
+        else:
+            note("tmux 서버", "원격 확인은 --ssh asus 사용")
     else:
         line("tmux", shutil.which("tmux") is not None)
         line("ssh", shutil.which("ssh") is not None)
@@ -99,23 +107,29 @@ def _doctor(*, json_output: bool = False) -> int:
             line("tmux 서버", True, f"{len(panes)} panes")
         except Exception as exc:
             line("tmux 서버", False, str(exc)[:100])
-    local_backend = next(
-        (name for name in ("wl-copy", "xclip", "xsel") if shutil.which(name)),
-        None,
-    )
-    line("로컬 클립보드", local_backend is not None, local_backend or "OSC52/수동 복사 사용")
-    try:
-        config = load_config()
-        from actl.core.validation import validate_target
-
-        live = sum(
-            1
-            for a, e in config.get("agents", {}).items()
-            if isinstance(e, dict) and e.get("target") and validate_target(a, e["target"]).valid
+    if _sys.platform == "win32":
+        line("로컬 클립보드", True, "Windows Set-Clipboard")
+    else:
+        local_backend = next(
+            (name for name in ("wl-copy", "xclip", "xsel") if shutil.which(name)),
+            None,
         )
-        line("live 매핑", True, f"{live}/{len(AGENTS)} agents")
-    except Exception as exc:
-        line("live 매핑", False, str(exc)[:100])
+        line("로컬 클립보드", local_backend is not None, local_backend or "OSC52/수동 복사 사용")
+    if _sys.platform == "win32" and not remote:
+        note("live 매핑", "원격 확인은 actl doctor --ssh asus")
+    else:
+        try:
+            config = load_config()
+            from actl.core.validation import validate_target
+
+            live = sum(
+                1
+                for a, e in config.get("agents", {}).items()
+                if isinstance(e, dict) and e.get("target") and validate_target(a, e["target"]).valid
+            )
+            line("live 매핑", True, f"{live}/{len(AGENTS)} agents")
+        except Exception as exc:
+            line("live 매핑", False, str(exc)[:100])
     if json_output:
         print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False, separators=(",", ":")))
     else:
