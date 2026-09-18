@@ -138,9 +138,13 @@ function tick(){ document.getElementById('clock').textContent = new Date().toLoc
 setInterval(tick,1000); tick();
 function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ADAPTIVE":"OFF"; log("자동감시 "+(AUTO?"켬":"끔")); }
 function esc(v){ return String(v??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c])); }
-function schedule(){ setTimeout(()=>{ if(AUTO) refresh(true); schedule(); },NEXT_MS); }
+function schedule(){ setTimeout(async()=>{ if(AUTO) await refresh(true); schedule(); },NEXT_MS); }
 const COMMANDS=[['새로고침',()=>refresh(false)],['자동감시 전환',()=>toggleAuto()],['문제만 보기',()=>{FILTER='PROBLEM';document.getElementById('stateFilter').value='PROBLEM';refresh(true)}],['전체 보기',()=>{FILTER='ALL';document.getElementById('stateFilter').value='ALL';refresh(true)}],['선택 결과 복사',()=>doCopy()]];
-function palette(){ const p=document.getElementById('palette'), i=document.getElementById('paletteInput'), box=document.getElementById('paletteItems'); p.style.display='block'; i.value=''; box.innerHTML=''; COMMANDS.forEach(([name,fn],n)=>{ const b=document.createElement('button'); b.textContent=`${n+1}. ${name}`; b.onclick=()=>{fn();p.style.display='none'}; box.appendChild(b); }); i.focus(); }
+let PALETTE_MATCH=[], PALETTE_INDEX=0;
+function renderPalette(){ const box=document.getElementById('paletteItems'), q=document.getElementById('paletteInput').value.toLowerCase(); PALETTE_MATCH=COMMANDS.filter(([name])=>name.toLowerCase().includes(q)); PALETTE_INDEX=0; box.innerHTML=''; PALETTE_MATCH.forEach(([name,fn],n)=>{ const b=document.createElement('button'); b.textContent=`${n+1}. ${name}`; b.onclick=()=>{fn();document.getElementById('palette').style.display='none'}; box.appendChild(b); }); }
+function palette(){ const p=document.getElementById('palette'), i=document.getElementById('paletteInput'); p.style.display='block'; i.value=''; renderPalette(); i.focus(); }
+document.getElementById('paletteInput').addEventListener('input',renderPalette);
+document.getElementById('paletteInput').addEventListener('keydown',e=>{ if(e.key==='ArrowDown'){e.preventDefault();PALETTE_INDEX=Math.min(PALETTE_INDEX+1,PALETTE_MATCH.length-1)} if(e.key==='ArrowUp'){e.preventDefault();PALETTE_INDEX=Math.max(PALETTE_INDEX-1,0)} if(e.key==='Enter'&&PALETTE_MATCH[PALETTE_INDEX]){e.preventDefault();PALETTE_MATCH[PALETTE_INDEX][1]();document.getElementById('palette').style.display='none'} });
 document.addEventListener('keydown',e=>{ if(e.ctrlKey&&e.key.toLowerCase()==='k'){e.preventDefault();palette()} if(e.key==='Escape')document.getElementById('palette').style.display='none'; });
 async function api(path, opts){
   opts=opts||{}; opts.headers=Object.assign({},opts.headers||{},TOKEN?{'Authorization':'Bearer '+TOKEN}:{});
@@ -207,13 +211,16 @@ async function select(agent, silent){
 }
 async function doCopy(){
   if(!SEL) return;
+  let d;
   try {
-    const d = await api('/api/copy?agent='+encodeURIComponent(SEL));
+    d = await api('/api/copy?agent='+encodeURIComponent(SEL));
     await navigator.clipboard.writeText(d.text);
+  } catch(e){ log("복사 실패: "+e.message+" — 출력 버튼으로 수동 복사"); return doPrint(); }
+  document.getElementById('resp').textContent = d.text.slice(0,8000);
+  try {
     await api('/api/ack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:SEL,result_hash:d.result_hash})});
-    document.getElementById('resp').textContent = d.text.slice(0,8000);
     log(`${d.display} 복사됨 (${d.text.length}자, 브라우저 클립보드)`);
-  } catch(e){ log("복사 실패: "+e.message+" — 출력 버튼으로 수동 복사"); doPrint(); }
+  } catch(e){ log(`복사는 완료됐지만 상태 확인 실패: ${e.message}`); }
 }
 async function doPrint(){
   if(!SEL) return;

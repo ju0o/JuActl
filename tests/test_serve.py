@@ -40,6 +40,14 @@ def test_board_html_escapes_dynamic_card_values():
     assert "esc((a.preview||a.detail" in serve.BOARD_HTML
 
 
+def test_web_copy_ack_is_separate_from_clipboard_fallback():
+    assert "복사는 완료됐지만 상태 확인 실패" in serve.BOARD_HTML
+    assert "return doPrint()" in serve.BOARD_HTML
+    assert "result_hash:d.result_hash" in serve.BOARD_HTML
+    assert "REFRESHING" in serve.BOARD_HTML
+    assert "ArrowDown" in serve.BOARD_HTML
+
+
 def test_web_input_contract_canonicalizes_and_rejects_bad_values():
     assert serve._canonical_agent("cmd") == "commandcode"
     assert serve._prompt_value("hello") == "hello"
