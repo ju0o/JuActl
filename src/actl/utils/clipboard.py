@@ -112,16 +112,24 @@ def _osc52_sequence(text: str) -> tuple[str, str]:
     return seq, "raw"
 
 
+def _safe_isatty(stream) -> bool:
+    try:
+        return bool(stream is not None and stream.isatty())
+    except Exception:
+        return False
+
+
 def _write_osc52(seq: str) -> None:
     """Best-effort write of seq to the controlling terminal."""
     # Primary: current stdout (the pane pty when inside tmux).
     try:
-        sys.stdout.write(seq)
-        sys.stdout.flush()
+        if sys.stdout is not None:
+            sys.stdout.write(seq)
+            sys.stdout.flush()
     except Exception:
         pass
     # If stdout was redirected/captured (e.g. piped tests), also try /dev/tty.
-    if not sys.stdout.isatty():
+    if not _safe_isatty(sys.stdout):
         try:
             with open("/dev/tty", "w", encoding="utf-8") as fh:
                 fh.write(seq)
@@ -131,7 +139,7 @@ def _write_osc52(seq: str) -> None:
     # Additionally write to stderr if it is a tty and differs from stdout,
     # so the sequence reaches the terminal even when stdout is redirected.
     try:
-        if sys.stderr.isatty() and sys.stderr is not sys.stdout:
+        if _safe_isatty(sys.stderr) and sys.stderr is not sys.stdout:
             sys.stderr.write(seq)
             sys.stderr.flush()
     except Exception:
