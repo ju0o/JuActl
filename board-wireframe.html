@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JuActl — MainPC Agent Board (wireframe)</title>
+<title>JuActl — MainPC 에이전트 보드 (와이어프레임)</title>
 <style>
   :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3; --dim:#8b949e; --acc:#2f81f7; --ok:#3fb950; --warn:#d29922; }
-  * { box-sizing:border-box; font-family: ui-monospace, Consolas, "D2Coding", monospace; }
+  * { box-sizing:border-box; font-family: ui-monospace, Consolas, "D2Coding", "Malgun Gothic", monospace; }
   body { margin:0; background:var(--bg); color:var(--txt); }
   header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; }
   header h1 { font-size:15px; margin:0; }
   header .sub { color:var(--dim); font-size:12px; }
   main { display:grid; grid-template-columns: 300px 1fr 360px; gap:12px; padding:12px 16px; height: calc(100vh - 53px); }
   .col { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; }
-  .col h2 { font-size:12px; color:var(--dim); margin:0 0 8px; text-transform:uppercase; letter-spacing:.06em; }
+  .col h2 { font-size:12px; color:var(--dim); margin:0 0 8px; letter-spacing:.04em; }
   .agent { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:8px; cursor:pointer; }
   .agent.sel { border-color:var(--acc); box-shadow:0 0 0 1px var(--acc); }
   .agent .nm { font-weight:bold; }
@@ -33,43 +33,44 @@
 </head>
 <body>
 <header>
-  <h1>📻 JuActl — MainPC Agent Board</h1>
-  <span class="sub">wireframe prototype · <span class="kbd">actl tui --ssh asus</span> maps to this layout</span>
-  <span class="sub" id="conn">● asus via ssh — live</span>
+  <h1>📻 JuActl — MainPC 에이전트 보드</h1>
+  <span class="sub">와이어프레임 · <span class="kbd">actl tui --ssh asus</span> 실행 시 이 배치</span>
+  <span class="sub" id="conn">● asus SSH 연결 — 정상</span>
 </header>
 <main>
   <section class="col">
-    <h2>Agents (1–8 select)</h2>
+    <h2>에이전트 (1–8 선택)</h2>
     <div id="agents"></div>
-    <h2>Unmapped live panes</h2>
-    <div id="free" class="log">— press <span class="kbd">m</span> on an agent to list free panes here —</div>
+    <h2>미매핑 live pane</h2>
+    <div id="free" class="log">— 에이전트에서 <span class="kbd">m</span> 누르면 빈 pane 목록 표시 —</div>
   </section>
   <section class="col">
-    <h2>Live pane preview</h2>
-    <pre class="pane" id="preview">Select an agent (1–8)…</pre>
+    <h2>live pane 미리보기</h2>
+    <pre class="pane" id="preview">에이전트 선택 (1–8)…</pre>
     <div class="btns">
-      <button class="primary" onclick="act('c')">⧉ Copy <span class="kbd">c</span></button>
-      <button onclick="act('p')">⎙ Print <span class="kbd">p</span></button>
-      <button onclick="act('m')">⇄ Re-map <span class="kbd">m</span></button>
-      <button onclick="act('r')">↻ Refresh <span class="kbd">r</span></button>
-      <button onclick="act('h')">? Help <span class="kbd">h</span></button>
+      <button class="primary" onclick="act('c')">⧉ 복사 <span class="kbd">c</span></button>
+      <button onclick="act('p')">⎙ 출력 <span class="kbd">p</span></button>
+      <button onclick="act('m')">⇄ 재매핑 <span class="kbd">m</span></button>
+      <button onclick="act('r')">↻ 새로고침 <span class="kbd">r</span></button>
+      <button onclick="act('h')">? 도움말 <span class="kbd">h</span></button>
     </div>
-    <h2>Last response</h2>
-    <pre class="pane" id="resp">— press c / p —</pre>
+    <h2>마지막 응답</h2>
+    <pre class="pane" id="resp">— c / p 누르기 —</pre>
   </section>
   <section class="col">
-    <h2>Send message (::send to dispatch)</h2>
-    <textarea id="msg" placeholder="Type message to selected agent pane…"></textarea>
+    <h2>메시지 전송 (::send로 발송)</h2>
+    <textarea id="msg" placeholder="선택한 에이전트 pane에 보낼 메시지…"></textarea>
     <div class="btns">
-      <button class="primary" onclick="send()">➤ Send <span class="kbd">s</span></button>
-      <button onclick="document.getElementById('msg').value=''">Clear</button>
+      <button class="primary" onclick="send()">➤ 전송 <span class="kbd">s</span></button>
+      <button onclick="document.getElementById('msg').value=''">지우기</button>
     </div>
-    <h2>Event log</h2>
+    <h2>이벤트 로그</h2>
     <div class="log" id="log"></div>
   </section>
 </main>
-<footer>Copy = clipboard (OSC52 over SSH) · Print = SSH-safe manual copy · Remap = number or %ID · drag-drop = pick from visual list (terminal constraint)</footer>
+<footer>복사 = 클립보드 (SSH는 OSC52) · 출력 = SSH 안전 수동 복사 · 재매핑 = 번호 또는 %ID · 목록에서 고르기 (터미널 제약상 드래그 대신 선택 방식)</footer>
 <script>
+const STATE_KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
 const AGENTS = [
   {n:"Claude Team", t:"%0",  s:"UP",       pv:"Phase-I triage complete. No merge…"},
   {n:"Claude Pro",  t:"%55", s:"UP",       pv:"Windows Red Triage 완료…"},
@@ -88,7 +89,7 @@ function render() {
     const d = document.createElement('div');
     d.className = "agent" + (i===sel ? " sel" : "");
     const cls = a.s==="UP" ? "up" : (a.s==="UNMAPPED" ? "unmap" : "stale");
-    d.innerHTML = `<span class="nm">[${i+1}] ${a.n}</span><span class="pill ${cls}">${a.t} · ${a.s}</span><div class="prev">${a.pv||"—"}</div>`;
+    d.innerHTML = `<span class="nm">[${i+1}] ${a.n}</span><span class="pill ${cls}">${a.t} · ${STATE_KO[a.s]||a.s}</span><div class="prev">${a.pv||"—"}</div>`;
     d.onclick = ()=>{ sel=i; render(); preview(); };
     box.appendChild(d);
   });
@@ -99,22 +100,22 @@ function preview() {
 `--- ${a.n} ${a.t} live pane ---
 $ grok --session ses_01a0…
 > working on JuCommerce S1 audit…
-…(last 12 non-empty lines of tmux capture-pane)…`;
-  log(`selected ${a.n} (${a.t})`);
+…(tmux capture-pane 최근 빈줄 제외 12줄)…`;
+  log(`선택: ${a.n} (${a.t})`);
 }
 function act(k) {
   const a = AGENTS[sel];
-  if (k==='c') { document.getElementById('resp').textContent = `[copied via OSC52 — ${a.n} last response…]`; log(`copied ${a.n}`); }
-  if (k==='p') { document.getElementById('resp').textContent = `${a.pv}\n…(full text, SSH-safe)…`; log(`printed ${a.n}`); }
-  if (k==='m') { document.getElementById('free').innerHTML = `[1] %69 JuCommerce-Private — pid 812913: grok<br>[2] %70 JuControler — pid 922637: claude<br>pick number or %ID…`; log(`remap picker for ${a.n}`); }
-  if (k==='r') { log("refreshed (auto-reconcile)"); }
-  if (k==='h') { alert("1-8 select · c copy · p print · m remap · s send · r refresh · q quit"); }
+  if (k==='c') { document.getElementById('resp').textContent = `[OSC52로 복사됨 — ${a.n} 마지막 응답…]`; log(`${a.n} 복사됨`); }
+  if (k==='p') { document.getElementById('resp').textContent = `${a.pv}\n…(전체 텍스트, SSH 안전)…`; log(`${a.n} 출력됨`); }
+  if (k==='m') { document.getElementById('free').innerHTML = `[1] %69 JuCommerce-Private — pid 812913: grok<br>[2] %70 JuControler — pid 922637: claude<br>번호 또는 %ID 선택…`; log(`${a.n} 재매핑 목록`); }
+  if (k==='r') { log("새로고침 완료 (자동 재매핑)"); }
+  if (k==='h') { alert("1-8 선택 · c 복사 · p 출력 · m 재매핑 · s 전송 · r 새로고침 · q 종료"); }
 }
 function send() {
   const a = AGENTS[sel];
   const v = document.getElementById('msg').value;
-  if (!v.trim()) { log("empty message — not sent"); return; }
-  log(`sent to ${a.n} (${a.t}): ${v.slice(0,60)}…`);
+  if (!v.trim()) { log("빈 메시지 — 전송 안 함"); return; }
+  log(`${a.n} (${a.t})에 전송: ${v.slice(0,60)}…`);
   document.getElementById('msg').value = "";
 }
 function log(m) {
@@ -126,7 +127,7 @@ document.addEventListener('keydown', e=>{
   if (e.key >= '1' && e.key <= '8') { sel = +e.key - 1; render(); preview(); }
   else if ('cpmrh'.includes(e.key)) act(e.key);
   else if (e.key === 's') document.getElementById('msg').focus();
-  else if (e.key === 'q') log("quit (prototype — real board: exits TUI)");
+  else if (e.key === 'q') log("종료 (프로토타입 — 실제 보드는 TUI 종료)");
 });
 render(); preview();
 </script>

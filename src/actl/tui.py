@@ -1,16 +1,16 @@
-"""Agent board for MainPC: select, preview, copy, remap, send.
+"""MainPC용 에이전트 보드: 선택, 미리보기, 복사, 재매핑, 전송.
 
-No curses dependency — plain ANSI + stdin. Works over plain SSH where
-curses/OSC52 may be limited. ``--print`` paths avoid the clipboard entirely.
+curses 없이 ANSI + stdin만 사용. SSH에서도 동작하며, 클립보드가 막히면
+``--print``(화면 출력) 경로로 수동 복사 가능.
 
-Keys:
-  number      select agent, show live pane preview
-  c / p       copy to clipboard / print last response
-  m           remap selected agent to another live pane (visual list)
-  s           send a message to the selected agent's pane
-  h or ?      help overlay (all keys + first-run tutorial)
-  r           refresh (auto-reconcile + rescan)
-  q           quit
+키:
+  숫자        에이전트 선택 + live pane 미리보기
+  c / p       마지막 응답 복사 / 화면 출력
+  m           재매핑 (빈 live pane 목록에서 선택)
+  s           선택한 에이전트 pane에 메시지 전송
+  h 또는 ?    도움말 (전체 키 + 첫실행 튜토리얼)
+  r           새로고침 (자동 재매핑 + 전체 재탐색)
+  q           종료
 """
 from __future__ import annotations
 
@@ -72,50 +72,52 @@ def _rows(config: dict) -> list[dict]:
     return rows
 
 
+STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED": "미매핑", "DETECTED": "감지됨"}
+
 HELP_TEXT = """\
-actl agent board — help
+actl 에이전트 보드 — 도움말
 
-  1-8     Select agent + show its live tmux pane (last 12 non-empty lines)
-  c       Copy selected agent's last response to clipboard (OSC52 over SSH,
-          wl-copy/xclip/xsel locally — falls back with guidance)
-  p       Print last response on screen (SSH-safe manual copy, --print path)
-  m       Re-map: visual list of free live panes for this agent, pick by
-          number or %ID (e.g. %69). OpenCode session auto-binds on remap.
-  s       Send: multi-line composer, end with a line '::send' (::cancel aborts)
-  r       Refresh: auto-reconcile stale mappings + rescan all panes
-  h / ?   This help
-  q       Quit
+  1-8     에이전트 선택 + live tmux pane 미리보기 (최근 빈줄 제외 12줄)
+  c       선택한 에이전트의 마지막 응답 복사 (SSH=OSC52, 로컬=wl-copy/xclip/xsel)
+  p       마지막 응답 화면 출력 (클립보드 막히면 수동 복사)
+  m       재매핑: 이 에이전트의 빈 live pane 목록 표시, 번호 또는 %ID 선택
+          (예: %69). OpenCode 세션은 재매핑 시 자동 바인딩.
+  s       전송: 여러 줄 입력 후 '::send' 줄로 종료 (::cancel은 취소)
+  r       새로고침: 오래된 매핑 제거 + 자동 매핑 + 전체 재탐색
+  h / ?   이 도움말
+  q       종료
 
-First-run tutorial (MainPC over SSH):
-  1. Start agents in tmux panes (e.g. grok, opencode, claude, codex).
-  2. Run: actl tui
-  3. Press 1-8 to select an agent — its live pane preview appears.
-     Wrong pane? Press m and pick the right one from the visual list.
-  4. Press c to copy the last response, p if the clipboard looks blocked.
-  5. Press s to send a message to the selected agent's pane.
-  6. Press r after starting/stopping agents; q to quit.
+첫실행 튜토리얼 (MainPC → SSH → asus):
+  1. tmux pane에서 에이전트 실행 (grok, opencode, claude, codex …).
+  2. 실행: actl tui  (MainPC 로컬이면: actl tui --ssh asus)
+  3. 1-8 눌러 에이전트 선택 — live pane 미리보기가 뜸.
+     pane이 틀리면 m → 목록에서 올바른 pane 선택.
+  4. c 복사 (안 되면 p 출력 후 수동 복사).
+  5. s 메시지 전송 (::send로 종료).
+  6. 에이전트 켜고 끈 뒤엔 r 새로고침. q 종료.
 
-Notes:
-  - Clipboard over SSH uses OSC52 (Windows Terminal: on; some SSH
-    clients block it — then use p and copy manually).
-  - Multiple panes of one agent: newest started wins automatically;
-    ties ask inline. Existing live mappings are kept.
-  - OpenCode needs no separate bind step: session auto-binds on map.
-Press any key to return.
+참고:
+  - SSH 클립보드는 OSC52 사용 (Windows Terminal: 켜짐, 일부 SSH
+    클라이언트는 차단 — 그땐 p 눌러 수동 복사).
+  - 같은 에이전트 pane 여러 개: 가장 최근 시작 프로세스 자동 선택,
+    기존 live 매핑은 유지. 동점/판독불가만 직접 질문.
+  - OpenCode는 별도 bind 불필요: 매핑 시 세션 자동 바인딩.
+아무 키나 눌러 돌아가기.
 """
 
 
 def _render(rows: list[dict], selected: int, message: str = "") -> None:
     sys.stdout.write(CLEAR)
     sys.stdout.write(
-        f"{BOLD}actl — agent board{DIM}  (number=select+preview, c=copy, p=print, "
-        f"m=remap, s=send, h=help, r=refresh, q=quit){RESET}\n\n"
+        f"{BOLD}actl — 에이전트 보드{DIM}  (숫자=선택+미리보기, c=복사, p=출력, "
+        f"m=재매핑, s=전송, h=도움말, r=새로고침, q=종료){RESET}\n\n"
     )
     for i, row in enumerate(rows):
         marker = ">" if i == selected else " "
         state_color = "" if row["state"] == "UP" else DIM
+        state_ko = STATE_KO.get(row["state"], row["state"])
         sys.stdout.write(
-            f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} {row['state']:<9}{RESET} {row['preview'] or row['detail']}\n"
+            f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} {state_ko:<9}{RESET} {row['preview'] or row['detail']}\n"
         )
     if message:
         sys.stdout.write(f"\n{message}\n")
@@ -126,9 +128,9 @@ def _pane_preview(target: str, lines: int = 12) -> str:
     try:
         text = capture_pane(target, history=60)
     except Exception as exc:
-        return f"(preview unavailable: {exc})"
+        return f"(미리보기 불가: {exc})"
     kept = [ln for ln in text.splitlines() if ln.strip()][-lines:]
-    return "\n".join(kept) or "(empty pane)"
+    return "\n".join(kept) or "(빈 pane)"
 
 
 def _unmapped_panes(config: dict, agent: str) -> list:
@@ -199,9 +201,10 @@ def run_tui() -> int:
                     if tgt != "-" and not tgt.endswith("?"):
                         message = f"--- {row['display']} {tgt} live pane ---\n{_pane_preview(tgt)}"
                     else:
+                        state_ko = STATE_KO.get(row["state"], row["state"])
                         message = (
-                            f"{row['display']}: no live pane ({row['state']}). "
-                            "Press m to pick a pane, r to refresh."
+                            f"{row['display']}: live pane 없음 ({state_ko}). "
+                            "m 눌러 pane 선택, r 눌러 새로고침."
                         )
                     _render(rows, selected, message)
                 continue
@@ -214,27 +217,27 @@ def run_tui() -> int:
                 except Exception:
                     pass
                 rows = _rows(config)
-                message = "refreshed"
+                message = "새로고침 완료"
                 _render(rows, selected, message)
                 continue
             if ch == "m":
                 row = rows[selected]
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 try:
-                    sys.stdout.write(f"\nLive {row['display']} panes (0 = cancel):\n")
+                    sys.stdout.write(f"\n{row['display']} live pane 목록 (0 = 취소):\n")
                     candidates = _unmapped_panes(config, row["agent"])
                     if not candidates:
-                        message = f"No free live {row['display']} panes"
+                        message = f"빈 {row['display']} live pane 없음"
                     else:
                         for i, det in enumerate(candidates, 1):
                             sys.stdout.write(
                                 f"  [{i}] {det.pane.pane_id} {det.pane.current_path} — {det.evidence}\n"
                             )
-                        sys.stdout.write("Pick pane: ")
+                        sys.stdout.write("pane 선택 (번호 또는 %ID): ")
                         sys.stdout.flush()
                         choice = sys.stdin.readline().strip()
                         if choice == "0" or not choice:
-                            message = "remap cancelled"
+                            message = "재매핑 취소"
                         else:
                             det = None
                             if choice.startswith("%"):
@@ -245,7 +248,7 @@ def run_tui() -> int:
                                 except (ValueError, IndexError):
                                     det = None
                             if det is None:
-                                message = "✗ Invalid pane selection"
+                                message = "✗ 잘못된 pane 선택"
                             else:
                                 try:
                                     updated = manual_map(config, row["agent"], det)
@@ -257,8 +260,8 @@ def run_tui() -> int:
                                     config = updated
                                     rows = _rows(config)
                                     message = (
-                                        f"✓ {row['display']} mapped to {det.pane.pane_id} "
-                                        f"(backup {backup.name})"
+                                        f"✓ {row['display']} → {det.pane.pane_id} 매핑됨 "
+                                        f"(백업 {backup.name})"
                                     )
                 finally:
                     tty.setcbreak(fd)
@@ -268,40 +271,40 @@ def run_tui() -> int:
                 row = rows[selected]
                 tgt = row["target"]
                 if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} has no live pane (press m first)"
+                    message = f"✗ {row['display']} live pane 없음 (먼저 m 눌러 매핑)"
                     _render(rows, selected, message)
                     continue
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 send_message = ""
                 try:
-                    sys.stdout.write(f"\nMessage to {row['display']} ({tgt}), end with a line '::send':\n")
+                    sys.stdout.write(f"\n{row['display']} ({tgt})에 보낼 메시지, '::send' 줄로 종료:\n")
                     sys.stdout.flush()
                     lines: list[str] = []
                     cancelled = False
                     while True:
                         line = sys.stdin.readline()
                         if not line:
-                            send_message = "✗ Send cancelled (EOF)"
+                            send_message = "✗ 전송 취소 (EOF)"
                             cancelled = True
                             break
                         line = line.rstrip("\n")
                         if line == "::send":
                             break
                         if line == "::cancel":
-                            send_message = "✗ Send cancelled"
+                            send_message = "✗ 전송 취소"
                             cancelled = True
                             break
                         lines.append(line)
                     if not cancelled:
                         prompt = "\n".join(lines)
                         if not prompt:
-                            send_message = "✗ Empty message"
+                            send_message = "✗ 빈 메시지"
                         else:
                             from actl.cli import _send_to_selected
 
                             try:
                                 _send_to_selected(config, row["agent"], prompt)
-                                send_message = f"✓ Sent to {row['display']}"
+                                send_message = f"✓ {row['display']}에 전송됨"
                             except Exception as exc:
                                 send_message = f"✗ {exc}"
                 finally:
@@ -313,7 +316,7 @@ def run_tui() -> int:
                 row = rows[selected]
                 tgt = row["target"]
                 if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} has no live pane"
+                    message = f"✗ {row['display']} live pane 없음"
                     _render(rows, selected, message)
                     continue
                 try:
@@ -323,18 +326,18 @@ def run_tui() -> int:
                     _render(rows, selected, message)
                     continue
                 if not result.text:
-                    message = f"✗ No response text ({result.detail or 'empty'})"
+                    message = f"✗ 응답 텍스트 없음 ({result.detail or '비어 있음'})"
                     _render(rows, selected, message)
                     continue
                 if ch == "p":
-                    message = f"--- {row['display']} last response ---\n{result.text[:2000]}"
+                    message = f"--- {row['display']} 마지막 응답 ---\n{result.text[:2000]}"
                     _render(rows, selected, message)
                     continue
                 try:
                     backend = copy_text(result.text, preferred=config.get("clipboard_backend", "auto"))
-                    message = f"✓ {row['display']} copied via {backend} ({len(result.text)} chars)"
+                    message = f"✓ {row['display']} 복사됨 ({backend}, {len(result.text)}자)"
                 except Exception as exc:
-                    message = f"✗ Clipboard failed: {exc} — press p to print instead"
+                    message = f"✗ 클립보드 실패: {exc} — p 눌러 화면 출력으로 복사"
                 _render(rows, selected, message)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
