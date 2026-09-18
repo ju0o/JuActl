@@ -244,6 +244,9 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         record("copy", agent=agent, target=target, ok=True, mode="print", source=result.source,
                confidence=result.confidence, chars=len(result.text),
                result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
+        from actl.core.state import acknowledge
+
+        acknowledge(agent, hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
         return 0
     preferred = config.get("clipboard_backend", "auto")
     try:
@@ -274,6 +277,9 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     record("copy", agent=agent, target=target, ok=True, mode=backend,
            source=result.source, confidence=result.confidence, chars=len(result.text),
            result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
+    from actl.core.state import acknowledge
+
+    acknowledge(agent, hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
     return 0
 
 

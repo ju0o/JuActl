@@ -18,6 +18,7 @@ Endpoints (all JSON except /):
 from __future__ import annotations
 
 import json
+import hashlib
 import hmac
 import os
 import secrets
@@ -83,6 +84,9 @@ BOARD_HTML = r"""<!DOCTYPE html>
   .filter { color:var(--dim); font-size:11px; }
   footer { padding:8px 16px; color:var(--dim); font-size:11px; }
   #verify { color:var(--ok); font-size:12px; margin:6px 0; }
+  #palette { display:none; position:fixed; z-index:20; top:14%; left:50%; transform:translateX(-50%); width:min(520px,90vw); background:#0b0b18; border:1px solid var(--neon); box-shadow:0 0 28px rgba(0,240,255,.25); padding:12px; }
+  #palette input { width:100%; background:#05050c; color:var(--txt); border:1px solid var(--line); padding:10px; }
+  #palette button { display:block; width:100%; text-align:left; margin-top:6px; }
   @media (max-width:820px) { main { grid-template-columns:1fr; height:auto; } header::after { display:none; } .col { min-height:420px; } }
   @media (prefers-reduced-motion:reduce) { .card { transition:none; } }
 </style>
@@ -121,9 +125,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
     <div class="log" id="log"></div>
   </section>
 </main>
+<div id="palette" role="dialog" aria-label="명령 팔레트"><input id="paletteInput" placeholder="명령 검색… (Esc 닫기)"><div id="paletteItems"></div></div>
 <footer>복사 = 브라우저 클립보드 직행 · pane보드 = 전체 tmux 실시간 · 재매핑 = pane 행 클릭</footer>
 <script>
-let SEL = null, AUTO = true, ROWS = [], PREV = {}, NEXT_MS = 12000, TOKEN = sessionStorage.getItem('actl-token') || new URLSearchParams(location.search).get('token') || '';
+let SEL = null, AUTO = true, ROWS = [], PREV = {}, NEXT_MS = 12000, REFRESHING = false, TOKEN = sessionStorage.getItem('actl-token') || new URLSearchParams(location.search).get('token') || '';
 let FILTER = 'ALL';
 if(TOKEN) { sessionStorage.setItem('actl-token', TOKEN); history.replaceState(null, '', location.pathname); }
 const KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
@@ -134,6 +139,9 @@ setInterval(tick,1000); tick();
 function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ADAPTIVE":"OFF"; log("자동감시 "+(AUTO?"켬":"끔")); }
 function esc(v){ return String(v??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c])); }
 function schedule(){ setTimeout(()=>{ if(AUTO) refresh(true); schedule(); },NEXT_MS); }
+const COMMANDS=[['새로고침',()=>refresh(false)],['자동감시 전환',()=>toggleAuto()],['문제만 보기',()=>{FILTER='PROBLEM';document.getElementById('stateFilter').value='PROBLEM';refresh(true)}],['전체 보기',()=>{FILTER='ALL';document.getElementById('stateFilter').value='ALL';refresh(true)}],['선택 결과 복사',()=>doCopy()]];
+function palette(){ const p=document.getElementById('palette'), i=document.getElementById('paletteInput'), box=document.getElementById('paletteItems'); p.style.display='block'; i.value=''; box.innerHTML=''; COMMANDS.forEach(([name,fn],n)=>{ const b=document.createElement('button'); b.textContent=`${n+1}. ${name}`; b.onclick=()=>{fn();p.style.display='none'}; box.appendChild(b); }); i.focus(); }
+document.addEventListener('keydown',e=>{ if(e.ctrlKey&&e.key.toLowerCase()==='k'){e.preventDefault();palette()} if(e.key==='Escape')document.getElementById('palette').style.display='none'; });
 async function api(path, opts){
   opts=opts||{}; opts.headers=Object.assign({},opts.headers||{},TOKEN?{'Authorization':'Bearer '+TOKEN}:{});
   const r = await fetch(path, opts);
@@ -143,6 +151,8 @@ async function api(path, opts){
   return j.data;
 }
 async function refresh(quiet){
+  if(REFRESHING) return;
+  REFRESHING = true;
   try {
     const d = await api('/api/board');
     ROWS = d.agents;
@@ -161,6 +171,10 @@ async function refresh(quiet){
       const stateMatch=FILTER==='ALL' || (FILTER==='UP' && a.state==='UP') || (FILTER==='PROBLEM' && ['DOWN','MISMATCH'].includes(a.state)) || (FILTER==='UNKNOWN' && !['UP','DOWN','MISMATCH'].includes(a.state));
       return textMatch && stateMatch;
     });
+    visible.sort((a,b)=>(Number(!!b.unread)-Number(!!a.unread)) ||
+      (Number(b.activity_state==='RUNNING')-Number(a.activity_state==='RUNNING')) ||
+      (Number(['DOWN','MISMATCH'].includes(b.state))-Number(['DOWN','MISMATCH'].includes(a.state))) ||
+      String(a.display).localeCompare(String(b.display)));
     document.getElementById('count').textContent=`${visible.length}/${ROWS.length}`;
     visible.forEach(a=>{
       const div = document.createElement('div');
@@ -176,6 +190,7 @@ async function refresh(quiet){
     if(!quiet) log(`새로고침 완료 (live ${d.live})`);
     if(!quiet) log(`다음 자동 확인 ${Math.round(NEXT_MS/1000)}초 후`);
   } catch(e){ log("새로고침 실패: "+e.message); }
+  finally { REFRESHING = false; }
 }
 document.getElementById('filter').addEventListener('input',()=>refresh(true));
 document.getElementById('stateFilter').addEventListener('change',e=>{FILTER=e.target.value;refresh(true);});
@@ -195,6 +210,7 @@ async function doCopy(){
   try {
     const d = await api('/api/copy?agent='+encodeURIComponent(SEL));
     await navigator.clipboard.writeText(d.text);
+    await api('/api/ack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:SEL,result_hash:d.result_hash})});
     document.getElementById('resp').textContent = d.text.slice(0,8000);
     log(`${d.display} 복사됨 (${d.text.length}자, 브라우저 클립보드)`);
   } catch(e){ log("복사 실패: "+e.message+" — 출력 버튼으로 수동 복사"); doPrint(); }
@@ -204,6 +220,7 @@ async function doPrint(){
   try {
     const d = await api('/api/copy?agent='+encodeURIComponent(SEL));
     document.getElementById('resp').textContent = d.text.slice(0,8000);
+    await api('/api/ack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:SEL,result_hash:d.result_hash})});
     log(`${d.display} 출력됨`);
   } catch(e){ log("출력 실패: "+e.message); }
 }
@@ -280,7 +297,7 @@ def _board_data(*, reconcile: bool = False) -> dict:
              "activity": r.get("busy", "미확인"), "activity_ko": r.get("busy", "미확인"),
              "activity_state": r.get("activity_state", "UNKNOWN"), "result_flag": r.get("result_flag", "-"),
              "result_state": r.get("result_state", "UNKNOWN"),
-             "result_hash": r.get("result_hash", "")}
+             "result_hash": r.get("result_hash", ""), "unread": bool(r.get("unread"))}
             for r in rows
         ],
         "live": live,
@@ -341,7 +358,8 @@ def _copy_data(agent: str) -> dict:
     record("copy", agent=agent, target=target, ok=True, mode="browser",
            source=result.source, confidence=result.confidence, chars=len(result.text),
            result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
-    return {"display": spec.display_name, "target": target, "text": result.text}
+    return {"display": spec.display_name, "target": target, "text": result.text,
+            "result_hash": hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -444,6 +462,21 @@ class Handler(BaseHTTPRequestHandler):
                 spec = AGENTS[agent]
                 self._json(True, {"display": spec.display_name, "target": det.pane.pane_id,
                                   "backup": backup.name})
+                return
+            if self.path == "/api/ack":
+                agent = _canonical_agent(payload.get("agent"))
+                config = load_config()
+                target = get_target(config, agent).target
+                result = extract_last_response(agent, target, config)
+                if not result.text:
+                    raise ValueError("확인할 결과가 없습니다")
+                from actl.core.state import acknowledge
+                result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
+                requested_hash = payload.get("result_hash")
+                if requested_hash and requested_hash != result_hash:
+                    raise ValueError("결과가 갱신되어 확인 처리를 취소했습니다")
+                acknowledge(agent, result_hash)
+                self._json(True, {"agent": agent})
                 return
             if self.path == "/api/refresh":
                 self._json(True, _board_data(reconcile=True))

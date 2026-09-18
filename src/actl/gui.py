@@ -164,6 +164,7 @@ class Board:
                           insertbackground=NEON, relief="flat", highlightthickness=1,
                           highlightbackground=LINE, highlightcolor=NEON)
         search.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.search = search
         search.insert(0, "검색…")
         search.bind("<FocusIn>", lambda _e: search.delete(0, "end") if search.get() == "검색…" else None)
         search.bind("<KeyRelease>", lambda _e: self._render_cards(self.selected))
@@ -193,6 +194,7 @@ class Board:
         self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Consolas", 9),
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
+        self.root.bind("<Control-k>", lambda _e: self.command_palette())
         self.root.bind("<Control-l>", lambda _e: search.focus_set())
         self.root.bind("<Control-Return>", lambda _e: self.on_send())
         self.root.bind("<Escape>", lambda _e: self.root.focus_set())
@@ -205,6 +207,26 @@ class Board:
             self.logw.grid(row=6, column=0, sticky="nsew", pady=2)
             self.log_toggle.configure(text="▾ 로그")
         self.log_visible = not self.log_visible
+
+    def command_palette(self) -> None:
+        import tkinter as tk
+
+        win = tk.Toplevel(self.root)
+        win.title("JuActl Command Palette")
+        win.configure(bg=BG)
+        win.transient(self.root)
+        win.geometry("430x250")
+        tk.Label(win, text="COMMAND // 실행할 작업 선택", bg=BG, fg=NEON, font=FONT_HDR).pack(anchor="w", padx=12, pady=10)
+        actions = [("새로고침", self.refresh), ("자동새로고침 전환", self.toggle_auto),
+                   ("문제만 보기", lambda: (self.filter_mode.set("문제"), self._render_cards(self.selected))),
+                   ("전체 보기", lambda: (self.filter_mode.set("전체"), self._render_cards(self.selected))),
+                   ("검색창 포커스", lambda: self.search.focus_set())]
+        for label, action in actions:
+            tk.Button(win, text=label, anchor="w", command=lambda a=action: (a(), win.destroy()),
+                      bg=PANEL, fg=TXT, activebackground=NEON, activeforeground=BG,
+                      relief="flat", font=FONT, padx=10, pady=6).pack(fill="x", padx=12, pady=2)
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.focus_force()
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
@@ -314,6 +336,12 @@ class Board:
                             (mode == "미확인" and r["state"] not in {"UP", "DOWN", "MISMATCH"}))
             if matches_mode and (not query or query in haystack):
                 visible.append(r)
+        visible.sort(key=lambda r: (
+            0 if r.get("unread") else 1,
+            0 if r.get("activity_state") == "RUNNING" else 1,
+            0 if r.get("state") in {"DOWN", "MISMATCH"} else 1,
+            r.get("display", ""),
+        ))
         for r in visible:
             state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
@@ -408,6 +436,7 @@ class Board:
 
         def work():
             from actl.core.audit import record
+            import hashlib
 
             result = extract_last_response(row["agent"], tgt, self.config)
             if not result.text:
@@ -416,12 +445,11 @@ class Board:
                 return ("empty", result.detail)
             try:
                 backend = copy_text(result.text, preferred=self.config.get("clipboard_backend", "auto"))
-                import hashlib
-
+                result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
                 record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
                        source=result.source, confidence=result.confidence, chars=len(result.text),
-                       result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
-                return ("ok", backend, len(result.text))
+                       result_hash=result_hash)
+                return ("ok", backend, len(result.text), result_hash)
             except Exception as exc:
                 record("copy", agent=row["agent"], target=tgt, ok=False,
                        source=result.source, confidence=result.confidence, error=type(exc).__name__)
@@ -430,6 +458,9 @@ class Board:
         def done(result) -> None:
             self.set_status("준비")
             if result[0] == "ok":
+                from actl.core.state import acknowledge
+
+                acknowledge(row["agent"], result[3])
                 self.log(f"{row['display']} 복사됨 ({result[1]}, {result[2]}자)")
             elif result[0] == "empty":
                 self.log(f"응답 없음 ({result[1] or '비어 있음'})")
@@ -458,6 +489,10 @@ class Board:
                 self.resp.insert("end", f"실패: {result}")
             elif result.text:
                 self.resp.insert("end", result.text[:8000])
+                import hashlib
+                from actl.core.state import acknowledge
+
+                acknowledge(row["agent"], hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
             else:
                 self.resp.insert("end", f"응답 없음 ({result.detail or '비어 있음'})")
 

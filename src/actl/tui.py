@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
@@ -39,9 +40,11 @@ def _rows(config: dict) -> list[dict]:
     by_agent: dict[str, list] = {}
     for d in all_dets:
         by_agent.setdefault(d.agent, []).append(d)
-    rows: list[dict] = []
-    for idx, name in enumerate(AGENTS, 1):
-        spec = AGENTS[name]
+    from actl.core.state import seen_results
+    seen = seen_results()
+
+    def build(item: tuple[int, tuple[str, object]]) -> dict:
+        idx, (name, spec) = item
         target = "-"
         state = "UNMAPPED"
         try:
@@ -83,25 +86,21 @@ def _rows(config: dict) -> list[dict]:
                 detail = str(exc)[:80]
                 result_flag = "?오류"
         cands = [d for d in by_agent.get(name, []) if d.pane.pane_id != target]
-        rows.append(
-            {
-                "key": str(idx),
-                "agent": name,
-                "display": spec.display_name,
-                "target": target,
-                "state": state,
-                "preview": preview,
-                "detail": detail,
-                "busy": busy,
-                "activity_state": activity_state,
-                "result_flag": result_flag,
-                "result_state": result_state,
-                "result_hash": result_hash,
-                "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
-                                "evidence": d.evidence} for d in cands],
-            }
-        )
-    return rows
+        return {
+            "key": str(idx), "agent": name, "display": spec.display_name,
+            "target": target, "state": state, "preview": preview, "detail": detail,
+            "busy": busy, "activity_state": activity_state, "result_flag": result_flag,
+            "result_state": result_state, "result_hash": result_hash,
+            "unread": bool(result_hash and seen.get(name) != result_hash),
+            "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
+                            "evidence": d.evidence} for d in cands],
+        }
+
+    items = list(enumerate(AGENTS.items(), 1))
+    # ponytail: bounded workers hide slow independent pane/storage reads;
+    # increase only after measuring a real remote saturation problem.
+    with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
+        return list(pool.map(build, items))
 
 
 STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED": "미매핑", "DETECTED": "감지됨"}
