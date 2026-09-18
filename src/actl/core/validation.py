@@ -32,10 +32,24 @@ class TargetValidation:
         return self.state == "UP"
 
 
-def _ps_output() -> str:
-    """ps 출력: 로컬 직접 실행, 원격(--ssh)은 ssh 경유."""
-    from actl.core.tmux import _remote_args
+_PS_CACHE: tuple[float, str] = (0.0, "")
 
+
+def clear_ps_cache() -> None:
+    global _PS_CACHE
+    _PS_CACHE = (0.0, "")
+
+
+def _ps_output() -> str:
+    """ps 출력: 로컬 직접 실행, 원격(--ssh)은 ssh 경유. 원격만 2초 캐시."""
+    import time as _time
+
+    from actl.core.tmux import REMOTE_SSH_TARGET, _remote_args
+
+    global _PS_CACHE
+    now = _time.monotonic()
+    if REMOTE_SSH_TARGET and now - _PS_CACHE[0] < 2.0 and _PS_CACHE[1]:
+        return _PS_CACHE[1]
     try:
         from actl.core.tmux import _no_window
 
@@ -45,9 +59,11 @@ def _ps_output() -> str:
             errors="replace", check=False, timeout=10, **_no_window(),
         )
     except Exception:
-        return ""
+        return _PS_CACHE[1] if REMOTE_SSH_TARGET else ""
     if proc.returncode:
-        return ""
+        return _PS_CACHE[1] if REMOTE_SSH_TARGET else ""
+    if REMOTE_SSH_TARGET:
+        _PS_CACHE = (now, proc.stdout)
     return proc.stdout
 
 

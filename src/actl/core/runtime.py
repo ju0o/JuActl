@@ -209,7 +209,12 @@ def local_host_key() -> str:
 
 
 def local_uid() -> str:
-    return str(os.getuid())
+    try:
+        return str(os.getuid())
+    except AttributeError:
+        import getpass
+
+        return getpass.getuser()
 
 
 def scope_id_for_socket(host_key: str, uid: int | str, socket_path: str) -> str:
@@ -1199,7 +1204,7 @@ def canonical_tmux_socket_path(socket_path: str | None = None) -> str:
         if sock:
             path = Path(sock)
             return str(path if path.is_absolute() else path.resolve())
-    return f"/tmp/tmux-{os.getuid()}/default"
+    return f"/tmp/tmux-{local_uid()}/default"
 
 
 def _context_blocks_direct_target(context: Any, target: str) -> bool:
