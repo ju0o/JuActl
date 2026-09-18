@@ -53,6 +53,36 @@ def _print_status(config: dict, agent: str | None = None) -> None:
             print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
 
 
+def _push_file(path: str, *, print_only: bool = False) -> int:
+    """Push a local file to the MainPC side over the current SSH session.
+
+    Two transports, no MainPC sshd setup required:
+    - default: base64 payload delimited by BEGIN/END lines for the MainPC
+      receiver (PowerShell snippet in MAINPC_SETUP.md §10).
+    - --print: raw file bytes to stdout for manual copy/paste.
+    """
+    import base64
+    import hashlib
+
+    src = Path(path).expanduser()
+    if not src.is_file():
+        print(f"✗ Not a file: {path}")
+        return 1
+    data = src.read_bytes()
+    if print_only:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+        return 0
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    b64 = base64.b64encode(data).decode("ascii")
+    print(f"ACTL_PUSH_BEGIN {src.name} {len(data)} {digest}")
+    for i in range(0, len(b64), 76):
+        print(b64[i : i + 76])
+    print(f"ACTL_PUSH_END {digest}")
+    print(f"→ On MainPC: save the block between BEGIN/END, then decode (see MAINPC_SETUP.md §10).", file=sys.stderr)
+    return 0
+
+
 def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     """Extract + deliver the last response. Returns 0 on delivery/print success."""
     try:
@@ -857,6 +887,7 @@ def _print_cli_help() -> None:
         "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
         "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
         "  actl copy AGENT [--print]   Copy (or print) last response\n"
+        "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
         "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
         "  actl discover [--apply]     List (or apply) live pane detections\n"
         "  actl status [AGENT] Probe-free mapping + liveness table\n"
@@ -1078,7 +1109,7 @@ def main() -> None:
         "--ssh",
         help="Route tmux through 'ssh TARGET' (MainPC remote board, e.g. --ssh asus)",
     )
-    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, runtime, tui, help, or opencode-session")
+    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, push, runtime, tui, help, or opencode-session")
     parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy, or runtime operation")
     args = parser.parse_args()
 
@@ -1160,9 +1191,12 @@ def main() -> None:
         if args.command == "help" and not args.command_agent:
             _print_cli_help()
             return
+        if args.command == "push" and args.command_agent:
+            raise SystemExit(_push_file(args.command_agent, print_only=args.print))
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
-            "actl bind opencode | actl copy AGENT [--print] | actl tui | actl help | actl opencode-session ... | "
+            "actl bind opencode | actl copy AGENT [--print] | actl push FILE [--print] | "
+            "actl tui | actl help | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
     if args.discover:

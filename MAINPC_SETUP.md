@@ -12,21 +12,43 @@ MainPC(Windows)에서 asus 리눅스 박스의 tmux 에이전트들을
 | JuActl 리포 | `https://github.com/ju0o/JuActl.git` |
 | asus 로컬 경로 | `/home/skkse12/Desktop/Projects/Core/actl-v0.1.1-managed` |
 
-## 1. MainPC에서 다운로드 + 실행 (최초 1회)
+## 1. MainPC 로컬 설치 + 원격 보드 (권장: ssh-into-asus 불필요)
+
+MainPC에 actl 한 번 깔고, 이후 `actl tui --ssh asus` 한 방으로
+asus tmux를 조종. asus 쪽에 추가 설치 없음 (tmux만 있으면 됨).
 
 ```powershell
-# 1) Windows Terminal에서 asus 접속
-ssh asus
+# 1) MainPC(Windows, Git Bash 또는 WSL)에서 JuActl 받기
+cd ~
+git clone https://github.com/ju0o/JuActl.git juactl
+cd juactl
 
-# 2) asus에서 JuActl 받기 (이미 있으면 git pull만)
+# 2) 설치 (PATH 등록)
+./scripts/install.sh   # Git Bash/WSL: ~/.local/bin/actl 생성
+
+# 3) asus SSH 키 확인 (이미 ssh asus가 되면 생략)
+ssh asus "echo OK"
+
+# 4) 원격 보드 실행 — MainPC 터미널에서 asus pane 전부 조종
+actl tui --ssh asus
+```
+
+원격 단일 명령도 가능:
+
+```powershell
+actl copy grok --print --ssh asus
+actl discover --ssh asus
+actl map grok --ssh asus
+```
+
+## 1b. 구방식: ssh-into-asus 후 실행 (대안)
+
+```powershell
+ssh asus
 cd ~/Desktop/Projects/Core
 git clone https://github.com/ju0o/JuActl.git juactl-mainpc 2>/dev/null || (cd juactl-mainpc && git pull)
 cd juactl-mainpc 2>/dev/null || cd actl-v0.1.1-managed
-
-# 3) 설치 (PATH 등록 + 기본 config 생성)
 ./scripts/install.sh
-
-# 4) 설치 확인
 actl help
 ```
 
@@ -108,10 +130,74 @@ actl help                  # 전체 명령 요약
 
 ## 9. 업데이트 절차
 
-```bash
-ssh asus
-cd ~/Desktop/Projects/Core/actl-v0.1.1-managed  # 또는 juactl-mainpc
+```powershell
+# MainPC 로컬 설치 기준
+cd ~/juactl
 git pull
 ./scripts/install.sh
 actl help
 ```
+
+## 10. asus → MainPC 파일 전송
+
+### 10a. `actl push` (권장: MainPC 설정 변경 제로)
+
+현 SSH 세션 경유 base64 전송. MainPC sshd·키 등록 불필요.
+
+```bash
+# asus에서
+actl push board-wireframe.html
+```
+
+```text
+ACTL_PUSH_BEGIN board-wireframe.html 7187 a1b2c3d4e5f6
+<base64 76자씩 N줄>
+ACTL_PUSH_END a1b2c3d4e5f6
+```
+
+MainPC PowerShell 수신기 (BEGIN~END 블록을 `push.txt`로 저장 후):
+
+```powershell
+$lines = Get-Content push.txt | Where-Object { $_ -notmatch '^ACTL_PUSH_(BEGIN|END)' -and $_.Trim() -ne '' }
+$name = ((Get-Content push.txt | Select-Object -First 1) -split ' ')[1]
+[IO.File]::WriteAllBytes($name, [Convert]::FromBase64String(($lines -join '')))
+```
+
+`actl push FILE --print`는 원본 바이트 그대로 stdout (수동 복사/리다이렉트용).
+
+### 10b. 진짜 역방향 scp (영구 설정, 1회 작업)
+
+asus → MainPC 직접 `scp`. 전제: MainPC OpenSSH Server 실행 중
+(확인됨: `OpenSSH_for_Windows_9.5`, 포트 22 OPEN) + asus 공개키 등록.
+
+```powershell
+# 1) MainPC PowerShell (관리자)에서 OpenSSH Server 확인/시작
+Get-Service sshd
+Start-Service sshd
+Set-Service -Name sshd -StartupType Automatic
+
+# 2) asus 공개키를 MainPC authorized_keys에 등록 (아래 키 중 택1)
+# asus에서 공개키 출력:
+#   cat ~/.ssh/id_ed25519_mainpc.pub
+# MainPC에서 등록:
+$key = "ssh-ed25519 AAAA… asus-to-mainpc-shutdown"  # asus 출력 그대로
+$auth = "$env:USERPROFILE\.ssh\authorized_keys"
+New-Item -ItemType Directory -Force (Split-Path $auth) | Out-Null
+Add-Content $auth $key
+icacls (Split-Path $auth) /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+icacls $auth /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
+Restart-Service sshd
+
+# 3) asus에서 테스트
+scp -i ~/.ssh/id_ed25519_mainpc board-wireframe.html <MainPC-user>@<MainPC-ip>:~/
+```
+
+현재 상태: 3개 asus 키 모두 MainPC에서 거부됨 → 위 2)번 미등록이 원인.
+등록 후 `actl push` 없이 `scp` 직접 전송 가능.
+
+### 10c. 왜 "Claude Pro는 되고 다른 Agent는 안 된다"처럼 보였나
+
+pane env 전수 비교 결과 Agent별 차이 없음 (전 pane `SSH_CLIENT`·
+`SSH_TTY=/dev/pts/0`·`TMUX` 동일). OSC52 클립보드는 **현 SSH 터미널**로
+가므로 pane 종류와 무관 — "될 때"는 터미널이 OSC52를 받았고 "안 될 때"는
+막힌 것. pane이 아니라 **터미널/시점** 문제. 막히면 `p` 출력 후 수동 복사.
