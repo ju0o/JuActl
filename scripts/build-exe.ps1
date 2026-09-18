@@ -5,12 +5,19 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $py = Get-Command python -ErrorAction SilentlyContinue
 if (-not $py) { throw "python not found in PATH (need 3.10+)" }
-python -m pip show pyinstaller *> $null
-if ($LASTEXITCODE -ne 0) {
-  python -m pip install pyinstaller
+$buildRoot = Join-Path $env:TEMP "juactl-pyinstaller"
+$buildPython = Join-Path $buildRoot "Scripts\python.exe"
+if (-not (Test-Path $buildPython)) {
+  & $py.Source -m venv $buildRoot
+  if ($LASTEXITCODE -ne 0) { throw "could not create isolated PyInstaller environment" }
 }
-python -m PyInstaller --clean --noconfirm --onefile --noconsole --icon packaging\juactl.ico --name JuActlBoard --paths src src/juactl-board.py
-python -m PyInstaller --clean --noconfirm --onefile --console --icon packaging\juactl.ico --name JuActl --paths src src/actl-run.py
+$env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
+& $buildPython -m pip install --quiet --upgrade "pyinstaller>=6,<7"
+if ($LASTEXITCODE -ne 0) { throw "could not install PyInstaller in isolated environment" }
+& $buildPython -m PyInstaller --clean --noconfirm --onefile --noconsole --icon packaging\juactl.ico --name JuActlBoard --paths src src/juactl-board.py
+if ($LASTEXITCODE -ne 0) { throw "JuActlBoard packaging failed" }
+& $buildPython -m PyInstaller --clean --noconfirm --onefile --console --icon packaging\juactl.ico --name JuActl --paths src src/actl-run.py
+if ($LASTEXITCODE -ne 0) { throw "JuActl CLI packaging failed" }
 $artifacts = @("JuActlBoard.exe", "JuActl.exe") | ForEach-Object { Join-Path $root ("dist\" + $_) }
 foreach ($artifact in $artifacts) {
   if (-not (Test-Path $artifact)) { throw "PyInstaller completed without producing $artifact" }

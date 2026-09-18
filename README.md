@@ -17,7 +17,8 @@ cd juactl
 .\scripts\build-installer.ps1
 ```
 
-`dist\JuActl-Setup.exe`를 실행하면 Python이나 Git 없이 설치된다.
+`dist\JuActl-Setup.exe`를 실행하면 Python이나 Git 없이 설치된다. 패키징은
+전용 임시 PyInstaller 환경에서 수행되어 전역 Python 패키지 경고에 영향을 받지 않는다.
 바탕화면/시작 메뉴 바로가기와 제거 프로그램이 함께 등록된다.
 개발/검증용으로 `dist\JuActlBoard.exe` 포터블 GUI와 `dist\JuActl.exe` CLI도 생성된다.
 빌드 스크립트는 PyInstaller와 Inno Setup을 사용하며, `dist\SHA256SUMS.txt`에 모든 산출물의 SHA-256을 기록한다.

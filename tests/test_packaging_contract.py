@@ -12,6 +12,8 @@ def test_windows_build_contract_checks_artifact_and_checksum():
     assert "SHA256SUMS.txt" in script
     assert "JuActl.exe" in script
     assert "packaging\\juactl.ico" in script
+    assert "-m venv" in script
+    assert "pyinstaller>=6,<7" in script
 
 
 def test_windows_installer_contract():
@@ -35,3 +37,12 @@ def test_ci_contract_separates_linux_tests_and_windows_package():
     assert "JuActlBoard.exe" in workflow
     assert "JuActl-Setup.exe" in workflow
     assert "SHA256SUMS.txt" in workflow
+    assert "discover_hook_directories" in workflow
+    assert "polluted environment" in workflow
+
+
+def test_windows_qa_uses_the_same_isolated_package_builder():
+    script = (ROOT / "scripts" / "qa.ps1").read_text(encoding="utf-8")
+    assert "build-exe.ps1" in script
+    assert "dist\\JuActl.exe" in script
+    assert "doctor --json" in script

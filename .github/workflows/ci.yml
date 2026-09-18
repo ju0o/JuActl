@@ -45,7 +45,13 @@ jobs:
         run: choco install innosetup --no-progress --yes
       - name: Build Windows installer
         shell: pwsh
-        run: .\scripts\build-installer.ps1
+        run: |
+          $log = Join-Path $env:TEMP "juactl-build.log"
+          & .\scripts\build-installer.ps1 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
+          if (Select-String -Path $log -Pattern "rapidfuzz|discover_hook_directories") {
+            throw "PyInstaller used a polluted environment or emitted the known hook warning"
+          }
       - name: Verify executable
         shell: pwsh
         run: |
