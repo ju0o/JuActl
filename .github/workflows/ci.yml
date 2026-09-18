@@ -58,6 +58,23 @@ jobs:
           foreach ($name in @("JuActlBoard.exe", "JuActl.exe", "JuActl-Setup.exe")) {
             if (-not (Test-Path "dist/$name")) { throw "$name was not produced" }
           }
+          $doctor = & .\dist\JuActl.exe doctor --json | ConvertFrom-Json
+          if ($null -eq $doctor.ok) { throw "packaged CLI doctor contract failed" }
+      - name: Install and uninstall smoke
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:TEMP "juactl-install-smoke"
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          & .\dist\JuActl-Setup.exe /VERYSILENT /NORESTART /SUPPRESSMSGBOXES "/DIR=$installDir"
+          if ($LASTEXITCODE -ne 0) { throw "installer smoke failed" }
+          foreach ($name in @("JuActlBoard.exe", "JuActl.exe", "SHA256SUMS.txt")) {
+            if (-not (Test-Path (Join-Path $installDir $name))) { throw "installed file missing: $name" }
+          }
+          $installedDoctor = & (Join-Path $installDir "JuActl.exe") doctor --json | ConvertFrom-Json
+          if ($null -eq $installedDoctor.ok) { throw "installed CLI doctor contract failed" }
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          & $uninstaller /VERYSILENT /NORESTART
+          if (Test-Path $installDir) { throw "uninstaller smoke did not remove install directory" }
       - uses: actions/upload-artifact@v4
         with:
           name: JuActlBoard-windows
