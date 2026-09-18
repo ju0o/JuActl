@@ -5,8 +5,13 @@ from dataclasses import dataclass
 import os
 import select
 import sys
-import termios
-import tty
+
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None  # type: ignore[assignment]
+    tty = None  # type: ignore[assignment]
 
 PASTE_START = b"\x1b[200~"
 PASTE_END = b"\x1b[201~"
@@ -61,6 +66,8 @@ class BracketedPasteParser:
 
 def read_event(prompt: str) -> InputEvent:
     """Read a normal line or one bracketed paste. SSH preserves these escapes."""
+    if termios is None or tty is None:
+        return InputEvent(input(prompt))
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         return InputEvent(input(prompt))
     fd = sys.stdin.fileno()
