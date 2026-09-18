@@ -209,6 +209,10 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
 
 def _send_to_selected(config: dict, agent: str, prompt: str) -> str:
     """Resolve on every send; never retain a target across /switch."""
+    from actl.core.remote import is_remote, remote_send
+
+    if is_remote():
+        return remote_send(agent, prompt)
     target = _resolve_live_target(config, agent)
     try:
         send_prompt(target, prompt)
@@ -1270,6 +1274,21 @@ def main() -> None:
             if not agent:
                 raise SystemExit(f"Unknown agent: {args.command_agent}")
             raise SystemExit(_extract(load_config(), agent, args.command_extra or args.session))
+        if args.command == "send" and args.command_agent:
+            agent = _resolve_selection(args.command_agent)
+            if not agent:
+                raise SystemExit(f"Unknown agent: {args.command_agent}")
+            prompt = sys.stdin.read()
+            if not prompt.strip():
+                print("empty prompt", file=sys.stderr)
+                raise SystemExit(1)
+            try:
+                target = _send_to_selected(load_config(), agent, prompt)
+            except Exception as exc:
+                print(str(exc), file=sys.stderr)
+                raise SystemExit(1)
+            print(f"sent to {target}")
+            return
         if args.command == "tui" and not args.command_agent:
             from actl.tui import run_tui
 

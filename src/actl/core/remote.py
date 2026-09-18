@@ -50,3 +50,29 @@ def remote_extract(agent: str, target: str, timeout: float = 30.0) -> CopyResult
     detail = (proc.stderr or "").strip().splitlines()
     tail = detail[-1] if detail else f"remote exit {proc.returncode}"
     return CopyResult(None, f"{agent}-remote-unresolved", "none", tail[:300])
+
+
+def remote_send(agent: str, prompt: str, timeout: float = 30.0) -> str:
+    """Send a prompt via remote actl (stdin pipe, no temp files on MainPC)."""
+    from actl.core.tmux import REMOTE_SSH_TARGET, _no_window
+
+    if not REMOTE_SSH_TARGET:
+        raise RuntimeError("not in remote mode")
+    try:
+        proc = subprocess.run(
+            ["ssh", REMOTE_SSH_TARGET, "~/.local/bin/actl", "send", agent],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            **_no_window(),
+        )
+    except Exception as exc:
+        raise RuntimeError(f"ssh failed: {exc}") from exc
+    if proc.returncode:
+        err = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip().splitlines()
+        raise RuntimeError(err[-1][:300] if err else f"exit {proc.returncode}")
+    return (proc.stdout or "").strip().splitlines()[-1] if proc.stdout.strip() else agent
