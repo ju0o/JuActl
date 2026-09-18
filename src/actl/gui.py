@@ -55,7 +55,7 @@ class Board:
             pass
         self.root = tk.Tk()
         self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
-        self.root.geometry("1200x700")
+        self.root.geometry("1500x900")
         self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
@@ -94,8 +94,9 @@ class Board:
         main = ttk.Frame(self.root, padding=6)
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=2)
+        main.columnconfigure(1, weight=4)
         main.columnconfigure(2, weight=1)
+        main.rowconfigure(0, weight=1)
 
         left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         left.grid(row=0, column=0, sticky="nsew", padx=4)
@@ -108,21 +109,23 @@ class Board:
 
         center = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         center.grid(row=0, column=1, sticky="nsew", padx=4)
-        tk.Label(center, text="live pane 미리보기", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6, pady=4)
-        self.preview = tk.Text(center, height=16, wrap="word", font=FONT, bg="#000000", fg=TXT,
+        center.rowconfigure(1, weight=3)
+        center.rowconfigure(4, weight=2)
+        tk.Label(center, text="live pane 미리보기", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.preview = tk.Text(center, wrap="none", font=("Consolas", 11), bg="#000000", fg=TXT,
                                insertbackground=TXT, highlightthickness=0, borderwidth=0)
-        self.preview.pack(fill="both", expand=True, padx=6)
+        self.preview.grid(row=1, column=0, sticky="nsew", padx=6)
         btns = tk.Frame(center, bg=PANEL)
-        btns.pack(fill="x", pady=4, padx=6)
+        btns.grid(row=2, column=0, sticky="ew", pady=4, padx=6)
         for label in ["복사", "출력", "재매핑", "pane보드", "새로고침"]:
             fn = {"복사": self.on_copy, "출력": self.on_print, "재매핑": self.on_remap,
                   "pane보드": self.on_board, "새로고침": self.refresh}[label]
             tk.Button(btns, text=label, command=fn, bg="#21262d", fg=TXT,
                       activebackground=ACC, relief="flat", padx=10, pady=4).pack(side="left", padx=2)
-        tk.Label(center, text="마지막 응답", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6)
-        self.resp = tk.Text(center, height=8, wrap="word", font=FONT, bg="#000000", fg=TXT,
+        tk.Label(center, text="마지막 응답", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).grid(row=3, column=0, sticky="w", padx=6)
+        self.resp = tk.Text(center, wrap="word", font=FONT, bg="#000000", fg=TXT,
                             highlightthickness=0, borderwidth=0)
-        self.resp.pack(fill="both", expand=True, padx=6, pady=4)
+        self.resp.grid(row=4, column=0, sticky="nsew", padx=6, pady=4)
 
         right = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         right.grid(row=0, column=2, sticky="nsew", padx=4)
@@ -134,10 +137,21 @@ class Board:
         self.msg.pack(fill="x", padx=6)
         tk.Button(right, text="➤ 전송", command=self.on_send, bg=ACC, fg="white",
                   activebackground=ACC, relief="flat", padx=10, pady=4).pack(pady=4)
-        tk.Label(right, text="이벤트 로그", bg=PANEL, fg=DIM, font=("Consolas", 9, "bold")).pack(anchor="w", padx=6)
+        self.log_visible = False
+        self.log_toggle = tk.Button(right, text="▸ 이벤트 로그 보기", command=self.toggle_log,
+                                    bg=PANEL, fg=DIM, relief="flat", anchor="w")
+        self.log_toggle.pack(anchor="w", padx=6)
         self.logw = scrolledtext.ScrolledText(right, height=12, state="disabled", font=("Consolas", 9),
                                               bg="#000000", fg=DIM, highlightthickness=0, borderwidth=0)
-        self.logw.pack(fill="both", expand=True, padx=6, pady=4)
+
+    def toggle_log(self) -> None:
+        if self.log_visible:
+            self.logw.pack_forget()
+            self.log_toggle.configure(text="▸ 이벤트 로그 보기")
+        else:
+            self.logw.pack(fill="both", expand=True, padx=6, pady=4)
+            self.log_toggle.configure(text="▾ 이벤트 로그 숨기기")
+        self.log_visible = not self.log_visible
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
