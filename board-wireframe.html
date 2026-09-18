@@ -72,16 +72,61 @@
 <footer>복사 = 클립보드, 실패 시 응답 자동 출력 (수동 복사) · 출력 = SSH 안전 수동 복사 · 재매핑 = 번호 또는 %ID · v = 전체 pane 보드 · 목록에서 고르기 (터미널 제약상 드래그 대신 선택 방식)</footer>
 <script>
 const STATE_KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
-const AGENTS = [
-  {n:"Claude Team", t:"%0",  s:"UP",       pv:"Phase-I triage complete. No merge…"},
-  {n:"Claude Pro",  t:"%55", s:"UP",       pv:"Windows Red Triage 완료…"},
-  {n:"OpenCode",    t:"%9",  s:"UP",       pv:"Slice2 triage complete. No merge…"},
-  {n:"Codex",       t:"%56", s:"UP",       pv:"Build ✓ typecheck ✓ slice2 163/163…"},
-  {n:"Cursor",      t:"-",   s:"UNMAPPED", pv:""},
-  {n:"CommandCode", t:"-",   s:"UNMAPPED", pv:""},
-  {n:"Cline",       t:"-",   s:"UNMAPPED", pv:""},
-  {n:"Grok",        t:"%57", s:"UP",       pv:"I'll check the tmux panes…"},
-];
+const AGENTS = [{"n": "Claude Team", "t": "%0", "s": "UP", "pv": "최종 페르소나 실행을 시작했습니다. 기준선 재확인 완료:", "ver": "매핑: 정상 · 복사: 가능 (635자, claude-session:/home/skkse12/.claude-team/projects/-home-skkse12-Desktop-Projects-Core-JuControler-Private/acfaf939-8473-467e-80a3-6984750ccb26.jsonl)", "prev": "────────────────────────────────────────────────────────────────────────────
+─────────────── Jucontroller day resume and C-06 readiness ─
+❯
+────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← 2 agents · ↓ to manage
+  ● main
+  ◯ general-purpose  Calling checkpoint endpoint via curl
+                                                    14m 48s · ↓ 174.2k 
+tokens"}, {"n": "Claude Pro", "t": "%55", "s": "UP", "pv": "No selected-profile Claude session is bound to the pane process", "ver": "매핑: 정상 · 복사: 불가 (No selected-profile Claude session is bound to the pane process)", "prev": "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1  function greet() {
+  2 -  console.log(\"Hello, World!\");
+  2 +  console.log(\"Hello, Claude!\");
+  3  }
+ ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Syntax theme: Monokai Extended (ctrl+t to disable)"}, {"n": "OpenCode", "t": "%9", "s": "UP", "pv": "`init`은 spawnSync만 사용 확인 — Windows 실측용 진단 스크립트 작성.", "ver": "매핑: 정상 · 복사: 가능 (50자, opencode-session:ses_f4d36903fffezNEz2gaAdHr8bO)", "prev": "  ┃
+  ┃
+  ┃                                                                         
+                    ~/Desktop/Projects/Core/Agent-Relay:
+  ┃  Build auto · Muse Spark 1.3 Free OpenCode Zen
+                                              ar/v1-pm
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ■■■■■■⬝⬝  esc interrupt                                     543.9K (52%)
+  ctrl+p commands    • OpenCode 1.18.27"}, {"n": "Codex", "t": "%56", "s": "UP", "pv": "No completed assistant AgentMessage in matched Codex rollout", "ver": "매핑: 정상 · 복사: 불가 (No completed assistant AgentMessage in matched Codex rollout)", "prev": "⚠ Heads up, you have less than 25% of your 5h limit left. Run /status for a 
+breakdown.
+⚠ Heads up, you have less than 10% of your 5h limit left. Run /status for a 
+breakdown.
+⚠ Heads up, you have less than 5% of your 5h limit left. Run /status for a 
+breakdown.
+• Reconnecting... waiting for network (8h 16m 50s • esc to interrupt)
+  └ Connection failed: error sending request
+› Ask Codex to do anything
+  gpt-5.6-luna medium · ~/Desktop/Projects/Core/JuAgent"}, {"n": "Cursor", "t": "-", "s": "UNMAPPED", "pv": "", "ver": "", "prev": ""}, {"n": "CommandCode", "t": "-", "s": "UNMAPPED", "pv": "", "ver": "", "prev": ""}, {"n": "Cline", "t": "%69", "s": "UP", "pv": "Could not uniquely correlate the live Cline process with one completed interactive session", "ver": "매핑: 정상 · 복사: 불가 (Could not uniquely correlate the live Cline process with one completed interactive session)", "prev": "────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────
+❯ Ask anything...
+────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────
+ ClinePass: GLM-5.3-Flash (medium) ██████ (202,037)
+                                                                  ○ Plan ● 
+Act (Tab)
+ JuCommerce-Private (main)
+ ⏵⏵ Auto-approve all enabled (Shift+Tab)"}, {"n": "Grok", "t": "%57", "s": "UP", "pv": "I'll check the tmux panes and run a corrected version of that command so we can see which process is", "ver": "매핑: 정상 · 복사: 가능 (1088자, grok-session:/home/skkse12/.grok/sessions/%2Fhome%2Fskkse12%2FDesktop%2FProjects%2FCore%2FJuAgent/01a0b1bd-c025-7832-94b0-4258d7f818ed/chat_history.jsonl)", "prev": " ╭──────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────
+──────────────────────────────────────────────────────────────────╮
+ │ ❯                                                                        
+                                                                            
+                                                                  │
+ ╰──────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────
+───── Weekly limit left: 0% · Grok 4.5 (medium) · always-approve ─╯
+ Shift+Tab:mode  │  Ctrl+x:shortcuts"}];
 let sel = 2;
 function render() {
   const box = document.getElementById('agents');
@@ -99,9 +144,8 @@ function preview() {
   const a = AGENTS[sel];
   document.getElementById('preview').textContent =
 `--- ${a.n} ${a.t} live pane ---
-$ grok --session ses_01a0…
-> working on JuCommerce S1 audit…
-…(tmux capture-pane 최근 빈줄 제외 12줄)…`;
+${a.ver||''}
+${a.prev||'(미리보기 없음)'}`;
   log(`선택: ${a.n} (${a.t})`);
 }
 function act(k) {
@@ -109,7 +153,7 @@ function act(k) {
   if (k==='c') { document.getElementById('resp').textContent = `[OSC52로 복사됨 — ${a.n} 마지막 응답…]`; log(`${a.n} 복사됨`); }
   if (k==='p') { document.getElementById('resp').textContent = `${a.pv}\n…(전체 텍스트, SSH 안전)…`; log(`${a.n} 출력됨`); }
   if (k==='m') { document.getElementById('free').innerHTML = `[1] %69 JuCommerce-Private — pid 812913: grok<br>[2] %70 JuControler — pid 922637: claude<br>번호 또는 %ID 선택…`; log(`${a.n} 재매핑 목록`); }
-  if (k==='v') { document.getElementById('free').innerHTML = `[53] %53 bash — 미매핑<br>[55] %55 claude claude-pro MATCH<br>[57] %57 grok MATCH<br>[9] %9 opencode MATCH<br>…전체 15 pane · 번호키=미리보기+즉시매핑`; log("pane 보드 표시"); }
+  if (k==='v') { document.getElementById('free').innerHTML = `--- 전체 live pane (번호키=미리보기+즉시매핑) ---<br>  [53] %53   bash         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [55] %55   claude       claude-pro   유휴     결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [54] %54   claude       claude-team  유휴     결과○ OTHER    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [56] %56   codex        codex        유휴     결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [57] %57   grok         grok         실행중    결과● MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [0] %0    claude       claude-team  유휴     결과● MATCH    /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [2] %2    bash         -            실행중    결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [5] %5    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [4] %4    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [3] %3    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [68] %68   bash         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [69] %69   node         cline        실행중    결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuCommerce-Private<br>  [9] %9    opencode     opencode     실행중    결과● MATCH    /home/skkse12/Desktop/Projects/Core/Agent-Relay<br>  [59] %59   �            -            실행중    결과- -        /home/skkse12/Desktop/Projects/Core/actl-v0.1.1-managed<br>  [70] %70   claude       claude-pro   유휴     결과● OTHER    /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 세션 자동바인딩)<br>●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 유휴/실행중=CPU 기준`; log("pane 보드 표시 (실측 스냅샷)"); }
   if (k==='r') { log("새로고침 완료 (자동 재매핑)"); }
   if (k==='h') { alert("1-8 선택 · c 복사(실패시 자동출력) · p 출력 · m 재매핑 · v pane보드 · s 전송 · r 새로고침 · q 종료"); }
 }
