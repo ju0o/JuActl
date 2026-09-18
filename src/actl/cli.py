@@ -68,20 +68,26 @@ def _doctor() -> int:
         print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
 
     line("python", _sys.version_info >= (3, 10), _sys.version.split()[0])
-    line("tmux", shutil.which("tmux") is not None)
-    line("ssh", shutil.which("ssh") is not None)
-    try:
-        from actl.core.tmux import list_panes
+    remote = "--ssh" in _sys.argv
+    if _sys.platform == "win32" and not remote:
+        line("tmux", True, "원격 모드 (MainPC는 tmux 불필요, --ssh asus 사용)")
+        line("ssh", shutil.which("ssh") is not None)
+        line("tmux 서버", True, "asus 원격 (--ssh asus로 확인)")
+    else:
+        line("tmux", shutil.which("tmux") is not None)
+        line("ssh", shutil.which("ssh") is not None)
+        try:
+            from actl.core.tmux import list_panes
 
-        panes = list_panes()
-        line("tmux 서버", True, f"{len(panes)} panes")
-    except Exception as exc:
-        line("tmux 서버", False, str(exc)[:100])
+            panes = list_panes()
+            line("tmux 서버", True, f"{len(panes)} panes")
+        except Exception as exc:
+            line("tmux 서버", False, str(exc)[:100])
     try:
         from actl.utils.clipboard import copy_text as _ct
 
-        _ct("actl-doctor", preferred="local")
-        line("로컬 클립보드", True)
+        backend = _ct("actl-doctor", preferred="local")
+        line("로컬 클립보드", True, backend)
     except Exception:
         line("로컬 클립보드", False, "OSC52/수동 복사 사용 (SSH면 정상)")
     try:

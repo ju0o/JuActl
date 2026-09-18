@@ -136,18 +136,50 @@ def _write_osc52(seq: str) -> None:
         pass
 
 
+def _win_clipboard_set(data: bytes) -> bool:
+    """Windows native clipboard via PowerShell Set-Clipboard (no modules)."""
+    import sys as _sys
+
+    if _sys.platform != "win32":
+        return False
+    if not shutil.which("powershell"):
+        return False
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    import subprocess as _sp
+
+    try:
+        _sp.run(
+            ["powershell", "-NoProfile", "-Command", "Set-Clipboard"],
+            input=text,
+            check=True,
+            timeout=5,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def copy_text(text: str, *, preferred: str = "auto") -> str:
     """Copy text to clipboard, returning backend name.
 
     ``preferred`` selects the transport:
-      "auto"  — SSH → OSC52; otherwise local wl-copy/xclip/xsel first.
+      "auto"  — SSH → OSC52; Windows → Set-Clipboard; otherwise local
+      wl-copy/xclip/xsel first.
       "osc52" — always emit the OSC52 terminal escape.
-      "local" — always require a genuine local Wayland/X11 clipboard.
-    Priority (auto): 1. If not an SSH session and a local Wayland/X11
-    clipboard is genuinely usable, use wl-copy / xclip / xsel (verifiable,
-    writes to host clipboard). 2. Otherwise use OSC 52 terminal escape
-    (best-effort; outer terminal support cannot be verified from the host).
-    On OSC 52, the caller must not claim guaranteed clipboard success.
+      "local" — always require a genuine local clipboard (Windows native,
+      Wayland/X11).
+    Priority (auto): 1. Windows native Set-Clipboard. 2. If not an SSH
+    session and a local Wayland/X11 clipboard is genuinely usable, use
+    wl-copy / xclip / xsel (verifiable, writes to host clipboard).
+    3. Otherwise use OSC 52 terminal escape (best-effort; outer terminal
+    support cannot be verified from the host). On OSC 52, the caller must
+    not claim guaranteed clipboard success.
     """
     if preferred not in {"auto", "osc52", "local"}:
         raise ClipboardError(f"Unknown clipboard backend: {preferred}")
@@ -158,6 +190,10 @@ def copy_text(text: str, *, preferred: str = "auto") -> str:
         seq, _flavor = _osc52_sequence(text)
         _write_osc52(seq)
         return "osc52"
+
+    # -- Windows native clipboard (PowerShell, no extra modules) --
+    if _win_clipboard_set(data):
+        return "win-clipboard"
 
     # -- Local clipboard only when NOT ssh (Windows SSH client wants OSC52) --
     if not (is_ssh and preferred != "local"):
