@@ -1193,8 +1193,8 @@ def main() -> None:
         "--ssh",
         help="Route tmux through 'ssh TARGET' (MainPC remote board, e.g. --ssh asus)",
     )
-    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, help, doctor, or opencode-session")
-    parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, or runtime operation")
+    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, gui, serve, help, doctor, or opencode-session")
+    parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, port for serve, or runtime operation")
     parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
     args = parser.parse_args()
 
@@ -1297,6 +1297,11 @@ def main() -> None:
             from actl.gui import run_gui
 
             raise SystemExit(run_gui(ssh_target=args.ssh))
+        if args.command == "serve":
+            from actl.serve import run_serve
+
+            port = args.command_agent or args.command_extra or 8765
+            raise SystemExit(run_serve(port=int(port)))
         if args.command == "help" and not args.command_agent:
             _print_cli_help()
             return
