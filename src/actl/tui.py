@@ -85,6 +85,9 @@ actl 에이전트 보드 — 도움말
           (예: %69). OpenCode 세션은 재매핑 시 자동 바인딩.
   s       전송: 여러 줄 입력 후 '::send' 줄로 종료 (::cancel은 취소)
   r       새로고침: 오래된 매핑 제거 + 자동 매핑 + 전체 재탐색
+  v       전체 live pane 보드 (모든 tmux pane + 감지 에이전트 + 매핑 상태)
+  V       v + 전 에이전트 복사 자동검증
+  pane키   v 목록의 [번호] 키: 미리보기 + 그 pane로 즉시 매핑
   h / ?   이 도움말
   q       종료
 
@@ -111,7 +114,7 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
     sys.stdout.write(CLEAR)
     sys.stdout.write(
         f"{BOLD}actl — 에이전트 보드{DIM}  (숫자=선택+미리보기, c=복사, p=출력, "
-        f"m=재매핑, s=전송, h=도움말, r=새로고침, q=종료){RESET}\n\n"
+        f"m=재매핑, s=전송, v=pane보드, h=도움말, r=새로고침, q=종료){RESET}\n\n"
     )
     for i, row in enumerate(rows):
         marker = ">" if i == selected else " "
@@ -205,6 +208,50 @@ def _unmapped_panes(config: dict, agent: str) -> list:
     return free
 
 
+def _all_panes() -> list:
+    """Every live tmux pane with agent detection (mapped or not)."""
+    from actl.core.discovery import detect_pane
+    from actl.core.tmux import list_panes
+
+    try:
+        panes = list_panes()
+    except Exception:
+        return []
+    return [(pane, detect_pane(pane)) for pane in panes]
+
+
+def _pane_board(config: dict) -> str:
+    """Visual board: every live pane, its detected agent, mapping state."""
+    from actl.core.discovery import mapping_state
+
+    lines = ["--- 전체 live pane (문자키=해당 pane 미리보기, 같은 키 다시=매핑) ---"]
+    board: list[tuple[str, object, object]] = []
+    for pane, det in _all_panes():
+        agent = det.agent or "-"
+        try:
+            state = mapping_state(config, det)
+        except Exception:
+            state = "-"
+        key = pane.pane_id.lstrip("%")
+        lines.append(
+            f"  [{key}] {pane.pane_id:<5} {pane.current_command:<12} {agent:<12} {state:<8} {pane.current_path}"
+        )
+        board.append((key, pane, det))
+    lines.append("문자키 두 번: 미리보기 → 그 pane로 매핑 (OpenCode 세션 자동바인딩)")
+    _pane_board_cache(config, board)
+    return "\n".join(lines)
+
+
+_BOARD: list = []
+
+
+def _pane_board_cache(config: dict, board: list | None = None) -> list:
+    global _BOARD
+    if board is not None:
+        _BOARD = board
+    return _BOARD
+
+
 def run_tui() -> int:
     import termios
     import tty
@@ -241,6 +288,32 @@ def run_tui() -> int:
                     tty.setcbreak(fd)
                 _render(rows, selected, message)
                 continue
+            board = _pane_board_cache(config)
+            hit = next((entry for entry in board if entry[0] == ch), None)
+            if hit is not None:
+                _, pane, det = hit
+                if det.agent:
+                    try:
+                        updated = manual_map(config, det.agent, det)
+                    except ValueError as exc:
+                        message = f"✗ {pane.pane_id} 매핑 실패: {exc}\n{_pane_preview(pane.pane_id)}"
+                    else:
+                        backup = backup_config()
+                        save_config(updated)
+                        config = updated
+                        rows = _rows(config)
+                        message = (
+                            f"✓ {pane.pane_id} → {det.agent} 매핑됨\n"
+                            f"{_verify_row(det.agent, pane.pane_id, config)}\n"
+                            f"{_pane_preview(pane.pane_id)}"
+                        )
+                else:
+                    message = (
+                        f"--- {pane.pane_id} ({pane.current_command}) 미리보기 — "
+                        f"에이전트 미감지 ---\n{_pane_preview(pane.pane_id)}"
+                    )
+                _render(rows, selected, message)
+                continue
             if ch.isdigit():
                 idx = int(ch) - 1
                 if 0 <= idx < len(rows):
@@ -271,6 +344,28 @@ def run_tui() -> int:
                     pass
                 rows = _rows(config)
                 message = "새로고침 완료"
+                _render(rows, selected, message)
+                continue
+            if ch == "v":
+                message = _pane_board(config)
+                _render(rows, selected, message)
+                continue
+            if ch == "V":
+                message = _pane_board(config) + "\n복사 자동검증:"
+                for row in rows:
+                    tgt = row["target"]
+                    if tgt == "-" or tgt.endswith("?"):
+                        message += f"\n  {row['display']}: 미매핑"
+                        continue
+                    try:
+                        result = extract_last_response(row["agent"], tgt, config)
+                    except Exception as exc:
+                        message += f"\n  {row['display']}: 추출 실패 {exc}"
+                        continue
+                    if result.text:
+                        message += f"\n  {row['display']}: 복사 가능 ({len(result.text)}자)"
+                    else:
+                        message += f"\n  {row['display']}: 복사 불가 ({result.detail or '응답 없음'})"
                 _render(rows, selected, message)
                 continue
             if ch == "m":
