@@ -52,6 +52,7 @@
       <button onclick="act('p')">⎙ 출력 <span class="kbd">p</span></button>
       <button onclick="act('m')">⇄ 재매핑 <span class="kbd">m</span></button>
       <button onclick="act('v')">▦ pane보드 <span class="kbd">v</span></button>
+      <button onclick="act('V')">✔ 복사검증 <span class="kbd">V</span></button>
       <button onclick="act('r')">↻ 새로고침 <span class="kbd">r</span></button>
       <button onclick="act('h')">? 도움말 <span class="kbd">h</span></button>
     </div>
@@ -155,7 +156,8 @@ function act(k) {
   if (k==='m') { document.getElementById('free').innerHTML = `[1] %69 JuCommerce-Private — pid 812913: grok<br>[2] %70 JuControler — pid 922637: claude<br>번호 또는 %ID 선택…`; log(`${a.n} 재매핑 목록`); }
   if (k==='v') { document.getElementById('free').innerHTML = `--- 전체 live pane (번호키=미리보기+즉시매핑) ---<br>  [53] %53   bash         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [55] %55   claude       claude-pro   유휴     결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [54] %54   claude       claude-team  유휴     결과○ OTHER    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [56] %56   codex        codex        유휴     결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [57] %57   grok         grok         실행중    결과● MATCH    /home/skkse12/Desktop/Projects/Core/JuAgent<br>  [0] %0    claude       claude-team  유휴     결과● MATCH    /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [2] %2    bash         -            실행중    결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [5] %5    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [4] %4    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [3] %3    node         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [68] %68   bash         -            유휴     결과- -        /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>  [69] %69   node         cline        실행중    결과○ MATCH    /home/skkse12/Desktop/Projects/Core/JuCommerce-Private<br>  [9] %9    opencode     opencode     실행중    결과● MATCH    /home/skkse12/Desktop/Projects/Core/Agent-Relay<br>  [59] %59   �            -            실행중    결과- -        /home/skkse12/Desktop/Projects/Core/actl-v0.1.1-managed<br>  [70] %70   claude       claude-pro   유휴     결과● OTHER    /home/skkse12/Desktop/Projects/Core/JuControler-Private<br>번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 세션 자동바인딩)<br>●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 유휴/실행중=CPU 기준`; log("pane 보드 표시 (실측 스냅샷)"); }
   if (k==='r') { log("새로고침 완료 (자동 재매핑)"); }
-  if (k==='h') { alert("1-8 선택 · c 복사(실패시 자동출력) · p 출력 · m 재매핑 · v pane보드 · s 전송 · r 새로고침 · q 종료"); }
+  if (k==='V') { act('v'); log("복사 자동검증: 전 에이전트 결과●/○ 확인 (TUI V키 동일)"); }
+  if (k==='h') { alert("1-8 선택 · c 복사(실패시 자동출력) · p 출력 · m 재매핑 · v pane보드 · V 복사검증 · s 전송 · r 새로고침 · q 종료"); }
 }
 function send() {
   const a = AGENTS[sel];
@@ -171,7 +173,7 @@ function log(m) {
 document.addEventListener('keydown', e=>{
   if (document.activeElement.tagName === 'TEXTAREA') return;
   if (e.key >= '1' && e.key <= '8') { sel = +e.key - 1; render(); preview(); }
-  else if ('cpmrh'.includes(e.key)) act(e.key);
+  else if ('cpmrhvV'.includes(e.key)) act(e.key);
   else if (e.key === 's') document.getElementById('msg').focus();
   else if (e.key === 'q') log("종료 (프로토타입 — 실제 보드는 TUI 종료)");
 });
