@@ -20,7 +20,7 @@ from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import STRONG_CONFIDENCE, discover, manual_map, mapping_state
 from actl.core.registry import AGENTS
-from actl.core.tmux import capture_pane
+from actl.core.tmux import capture_pane, pane_field
 from actl.core.validation import validate_target
 from actl.utils.clipboard import copy_text
 
@@ -139,33 +139,39 @@ def _term_size() -> tuple[int, int]:
         return 100, 30
 
 
-def _pane_preview(target: str, lines: int = 0) -> str:
-    """Full-terminal pane preview: wrap to width, fill available height.
-
-    lines=0 (default) auto-sizes to the terminal minus board chrome so the
-    preview reads like the real pane, not a 12-line snippet.
-    """
-    cols, rows = _term_size()
-    if lines <= 0:
-        lines = max(10, rows - 16)
-    width = max(40, cols - 4)
+def _pane_geometry(target: str) -> tuple[int, int]:
+    """실제 pane 크기 (없으면 터미널 크기)."""
     try:
-        text = capture_pane(target, history=max(200, lines * 3))
+        raw = pane_field(target, "#{pane_width}x#{pane_height}")
+        w, _, h = raw.partition("x")
+        return max(40, int(w)), max(10, int(h))
+    except Exception:
+        return _term_size()
+
+
+def _pane_preview(target: str, lines: int = 0) -> str:
+    """실제 pane 화면 그대로: pane 크기 기준 가시 영역, 빈줄·래핑 유지.
+
+    기존 textwrap 재포장은 TUI 레이아웃을 깨뜨려 제거. tmux가 이미 pane
+    너비에 맞춰 줄바꿈한 화면을 그대로 보여줌 (tail = 현재 화면).
+    """
+    from actl.core.tmux import capture_pane as _cap
+
+    try:
+        width, height = _pane_geometry(target)
+    except Exception:
+        width, height = 100, 30
+    if lines <= 0:
+        lines = height
+    try:
+        text = _cap(target, history=lines)
     except Exception as exc:
         return f"(미리보기 불가: {exc})"
-    import textwrap
-
-    out: list[str] = []
-    for raw in text.splitlines():
-        line = raw.rstrip()
-        if not line.strip():
-            continue
-        if len(line) <= width:
-            out.append(line)
-        else:
-            out.extend(textwrap.wrap(line, width=width, replace_whitespace=False, drop_whitespace=False))
-    kept = out[-lines:] if out else ["(빈 pane)"]
-    return "\n".join(kept)
+    rows = text.splitlines()[-lines:]
+    rows = [r.rstrip() for r in rows]
+    while rows and not rows[0].strip():
+        rows.pop(0)
+    return "\n".join(rows) or "(빈 pane)"
 
 
 def _verify_row(agent: str, target: str, config: dict) -> str:
