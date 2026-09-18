@@ -18,17 +18,24 @@ MainPC에 actl 한 번 깔고, 이후 `actl tui --ssh asus` 한 방으로
 asus tmux를 조종. asus 쪽에 추가 설치 없음 (tmux만 있으면 됨).
 
 ```powershell
-# 1) MainPC(Windows, Git Bash 또는 WSL)에서 JuActl 받기
-cd ~
+# 1) MainPC PowerShell 5.1에서 JuActl 받기 (한 줄씩 실행)
 git clone https://github.com/ju0o/JuActl.git juactl
+```
+```powershell
 cd juactl
-
-# 2) 설치 (PATH 등록)
-./scripts/install.sh   # Git Bash/WSL: ~/.local/bin/actl 생성
-
-# 3) asus SSH 키 확인 (이미 ssh asus가 되면 생략)
+```
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+```
+```powershell
+# 2) 자가진단 (python/tmux/ssh/클립보드/매핑 한 번에)
+actl doctor
+```
+```powershell
+# 3) asus SSH 확인 (이미 ssh asus가 되면 생략)
 ssh asus "echo OK"
-
+```
+```powershell
 # 4) 원격 보드 실행 — MainPC 터미널에서 asus pane 전부 조종
 actl tui --ssh asus
 ```

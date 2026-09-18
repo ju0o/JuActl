@@ -53,6 +53,53 @@ def _print_status(config: dict, agent: str | None = None) -> None:
             print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
 
 
+def _doctor() -> int:
+    """상용화 자가진단: python/tmux/ssh/클립보드/매핑 상태를 한 번에 출력."""
+    import shutil
+    import sys as _sys
+
+    ok = True
+
+    def line(name: str, good: bool, detail: str = "") -> None:
+        nonlocal ok
+        if not good:
+            ok = False
+        mark = "✓" if good else "✗"
+        print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
+
+    line("python", _sys.version_info >= (3, 10), _sys.version.split()[0])
+    line("tmux", shutil.which("tmux") is not None)
+    line("ssh", shutil.which("ssh") is not None)
+    try:
+        from actl.core.tmux import list_panes
+
+        panes = list_panes()
+        line("tmux 서버", True, f"{len(panes)} panes")
+    except Exception as exc:
+        line("tmux 서버", False, str(exc)[:100])
+    try:
+        from actl.utils.clipboard import copy_text as _ct
+
+        _ct("actl-doctor", preferred="local")
+        line("로컬 클립보드", True)
+    except Exception:
+        line("로컬 클립보드", False, "OSC52/수동 복사 사용 (SSH면 정상)")
+    try:
+        config = load_config()
+        from actl.core.validation import validate_target
+
+        live = sum(
+            1
+            for a, e in config.get("agents", {}).items()
+            if isinstance(e, dict) and e.get("target") and validate_target(a, e["target"]).valid
+        )
+        line("live 매핑", True, f"{live}/{len(AGENTS)} agents")
+    except Exception as exc:
+        line("live 매핑", False, str(exc)[:100])
+    print("OK" if ok else "일부 항목 확인 필요 (위 ✗ 참조)")
+    return 0 if ok else 1
+
+
 def _push_file(path: str, *, print_only: bool = False) -> int:
     """Push a local file to the MainPC side over the current SSH session.
 
@@ -888,6 +935,7 @@ def _print_cli_help() -> None:
         "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
         "  actl copy AGENT [--print]   Copy (or print) last response\n"
         "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
+        "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
         "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
         "  actl discover [--apply]     List (or apply) live pane detections\n"
         "  actl status [AGENT] Probe-free mapping + liveness table\n"
@@ -1193,10 +1241,12 @@ def main() -> None:
             return
         if args.command == "push" and args.command_agent:
             raise SystemExit(_push_file(args.command_agent, print_only=args.print))
+        if args.command == "doctor" and not args.command_agent:
+            raise SystemExit(_doctor())
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
             "actl bind opencode | actl copy AGENT [--print] | actl push FILE [--print] | "
-            "actl tui | actl help | actl opencode-session ... | "
+            "actl tui | actl help | actl doctor | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
     if args.discover:

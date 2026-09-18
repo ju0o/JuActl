@@ -287,9 +287,71 @@ def _pane_board_cache(config: dict, board: list | None = None) -> list:
     return _BOARD
 
 
+class _Cbreak:
+    """cbreak 래퍼: POSIX는 termios, Windows는 msvcrt 폴백."""
+
+    def __init__(self, fd: int) -> None:
+        import sys as _sys
+
+        self.fd = fd
+        self.old = None
+        self.windows = _sys.platform == "win32"
+
+    def __enter__(self) -> "_Cbreak":
+        if not self.windows:
+            import termios
+            import tty
+
+            self.old = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if not self.windows and self.old is not None:
+            import termios
+
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+
+    def restore(self) -> None:
+        if not self.windows and self.old is not None:
+            import termios
+
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+
+    def raw(self) -> None:
+        if not self.windows and self.old is not None:
+            import tty
+
+            tty.setcbreak(self.fd)
+
+    def read_key(self) -> str:
+        import os
+        import sys as _sys
+
+        if self.windows:
+            import msvcrt
+
+            while True:
+                ch = msvcrt.getwch()
+                if ch in {"\x00", "\xe0"}:
+                    msvcrt.getwch()
+                    continue
+                return "\r" if ch == "\r" else ch
+        raw = os.read(self.fd, 1).decode("utf-8", "replace")
+        if raw == "\r":
+            return "\r"
+        return raw
+
+    def read_line_cooked(self) -> str:
+        self.restore()
+        try:
+            return sys.stdin.readline()
+        finally:
+            self.raw()
+
+
 def run_tui() -> int:
-    import termios
-    import tty
+    import sys as _sys
 
     config = load_config()
     try:
@@ -302,25 +364,20 @@ def run_tui() -> int:
     selected = 0
     message = ""
     _render(rows, selected)
+    if not _sys.stdin.isatty():
+        print("TUI는 터미널에서 실행하세요: actl tui")
+        return 2
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
+    with _Cbreak(fd) as cb:
         while True:
-            import os
-
-            ch = os.read(fd, 1).decode("utf-8", "replace")
+            ch = cb.read_key()
             if ch in {"q", "\x03"}:
                 sys.stdout.write("\n")
                 return 0
             if ch in {"h", "?"}:
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
-                try:
-                    sys.stdout.write(CLEAR + HELP_TEXT)
-                    sys.stdout.flush()
-                    sys.stdin.readline()
-                finally:
-                    tty.setcbreak(fd)
+                sys.stdout.write(CLEAR + HELP_TEXT)
+                sys.stdout.flush()
+                cb.read_line_cooked()
                 _render(rows, selected, message)
                 continue
             board = _pane_board_cache(config)
@@ -405,7 +462,7 @@ def run_tui() -> int:
                 continue
             if ch == "m":
                 row = rows[selected]
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                cb.restore()
                 try:
                     sys.stdout.write(f"\n{row['display']} live pane 목록 (0 = 취소):\n")
                     candidates = _unmapped_panes(config, row["agent"])
@@ -447,7 +504,7 @@ def run_tui() -> int:
                                         f"(백업 {backup.name})"
                                     )
                 finally:
-                    tty.setcbreak(fd)
+                    cb.raw()
                 _render(rows, selected, message)
                 continue
             if ch == "s":
@@ -457,7 +514,7 @@ def run_tui() -> int:
                     message = f"✗ {row['display']} live pane 없음 (먼저 m 눌러 매핑)"
                     _render(rows, selected, message)
                     continue
-                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                cb.restore()
                 send_message = ""
                 try:
                     sys.stdout.write(f"\n{row['display']} ({tgt})에 보낼 메시지, '::send' 줄로 종료:\n")
@@ -491,7 +548,7 @@ def run_tui() -> int:
                             except Exception as exc:
                                 send_message = f"✗ {exc}"
                 finally:
-                    tty.setcbreak(fd)
+                    cb.raw()
                 message = send_message
                 _render(rows, selected, message)
                 continue
@@ -525,5 +582,3 @@ def run_tui() -> int:
                         f"--- {row['display']} 마지막 응답 (수동 복사) ---\n{result.text[:2000]}"
                     )
                 _render(rows, selected, message)
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)

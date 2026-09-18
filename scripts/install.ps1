@@ -1,0 +1,13 @@
+# JuActl MainPC installer (Windows PowerShell 5.1+, single-line paste safe)
+# Usage: git clone https://github.com/ju0o/JuActl.git juactl; cd juactl; powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $PSScriptRoot
+$bin = "$env:USERPROFILE\.local\bin"
+New-Item -ItemType Directory -Force $bin | Out-Null
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) { throw "python not found in PATH (need 3.10+)" }
+$ shim = "@echo off`r`npython `"$root\src\actl-run.py`" %*`r`n"
+Set-Content -Path "$bin\actl.cmd" -Value $shim -Encoding Ascii
+& python "$root\src\actl-run.py" --init
+Write-Host "Installed: $bin\actl.cmd"
+Write-Host "Add to PATH once: setx PATH `"$env:PATH;$bin`""
