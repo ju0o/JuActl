@@ -31,8 +31,13 @@ RESET = "\x1b[0m"
 
 
 def _rows(config: dict) -> list[dict]:
-    """One row per agent: live target, status, and last response preview."""
-    detections = {d.agent: d for d in discover() if d.agent}
+    """One row per agent: live target, status, busy/result, preview, candidates."""
+    from actl.core.discovery import discover as _disc
+
+    all_dets = [d for d in _disc() if d.agent and d.confidence in STRONG_CONFIDENCE]
+    by_agent: dict[str, list] = {}
+    for d in all_dets:
+        by_agent.setdefault(d.agent, []).append(d)
     rows: list[dict] = []
     for idx, name in enumerate(AGENTS, 1):
         spec = AGENTS[name]
@@ -42,22 +47,32 @@ def _rows(config: dict) -> list[dict]:
             target = get_target(config, name).target
             state = validate_target(name, target).state
         except ValueError:
-            det = detections.get(name)
-            if det and det.confidence in STRONG_CONFIDENCE:
+            det = by_agent.get(name, [None])[0]
+            if det:
                 target = f"{det.pane.pane_id}?"
                 state = "DETECTED"
         preview = ""
         detail = ""
+        busy = "-"
+        result_flag = "-"
         if target != "-" and not target.endswith("?"):
+            try:
+                busy = _pane_busy(target)
+            except Exception:
+                busy = "?"
             try:
                 result = extract_last_response(name, target, config)
                 if result.text:
                     first = result.text.strip().splitlines()[0] if result.text.strip() else ""
                     preview = first[:100]
+                    result_flag = f"●{len(result.text)}자"
                 else:
                     detail = result.detail or "no text"
+                    result_flag = "○대기"
             except Exception as exc:
                 detail = str(exc)[:80]
+                result_flag = "?오류"
+        cands = [d for d in by_agent.get(name, []) if d.pane.pane_id != target]
         rows.append(
             {
                 "key": str(idx),
@@ -67,6 +82,10 @@ def _rows(config: dict) -> list[dict]:
                 "state": state,
                 "preview": preview,
                 "detail": detail,
+                "busy": busy,
+                "result_flag": result_flag,
+                "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
+                                "evidence": d.evidence} for d in cands],
             }
         )
     return rows
@@ -114,7 +133,7 @@ actl 에이전트 보드 — 도움말
 def _render(rows: list[dict], selected: int, message: str = "") -> None:
     sys.stdout.write(CLEAR)
     sys.stdout.write(
-        f"{BOLD}actl — 에이전트 보드{DIM}  (숫자=선택+미리보기, c=복사, p=출력, "
+        f"{BOLD}actl — 에이전트 보드{DIM}  (자동갱신 5초, 숫자=선택+미리보기, c=복사, p=출력, "
         f"m=재매핑, s=전송, v=pane보드, h=도움말, r=새로고침, q=종료){RESET}\n\n"
     )
     for i, row in enumerate(rows):
@@ -122,7 +141,9 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
         state_color = "" if row["state"] == "UP" else DIM
         state_ko = STATE_KO.get(row["state"], row["state"])
         sys.stdout.write(
-            f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} {state_ko:<9}{RESET} {row['preview'] or row['detail']}\n"
+            f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} "
+            f"{state_ko:<9}{RESET} {row['busy']:<4} {row['result_flag']:<6} "
+            f"{row['preview'] or row['detail']}\n"
         )
     if message:
         sys.stdout.write(f"\n{message}\n")
@@ -228,24 +249,14 @@ def _all_panes() -> list:
 
 
 def _pane_busy(pane_id: str) -> str:
-    """유휴/실행중: pane 프로세스 그룹 CPU 합으로 판정. --ssh 원격도 지원."""
+    """보수적 활동 상태: CPU와 pane tail이 모두 불충분하면 미확인."""
     try:
-        import subprocess
+        from actl.core.activity import observe_activity
 
-        from actl.core.tmux import _remote_args, pane_field
-
-        pane_pid = int(pane_field(pane_id, "#{pane_pid}"))
-        from actl.core.tmux import _no_window
-
-        proc = subprocess.run(
-            _remote_args(["ps", "-o", "%cpu=", "-g", str(pane_pid)]),
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=5, **_no_window(),
-        )
-        total = sum(float(x) for x in proc.stdout.split() if x.strip())
-        return "실행중" if total > 5.0 else "유휴"
+        state, _ = observe_activity(pane_id)
+        return {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[state]
     except Exception:
-        return "?"
+        return "미확인"
 
 
 def _pane_result_flag(agent: str | None, target: str, config: dict) -> str:
@@ -265,7 +276,7 @@ def _pane_board(config: dict) -> str:
 
     lines = ["--- 전체 live pane (번호키=미리보기+즉시매핑) ---"]
     board: list[tuple[str, object, object]] = []
-    for pane, det in _all_panes():
+    for index, (pane, det) in enumerate(_all_panes(), 1):
         agent = det.agent or "-"
         try:
             state = mapping_state(config, det)
@@ -274,14 +285,14 @@ def _pane_board(config: dict) -> str:
         busy = _pane_busy(pane.pane_id)
         flag = _pane_result_flag(det.agent, pane.pane_id, config)
         state_ko = STATE_KO.get(state, state)
-        key = pane.pane_id.lstrip("%")
+        key = str(index)
         lines.append(
             f"  [{key}] {pane.pane_id:<5} {pane.current_command:<12} {agent:<12} "
             f"{busy:<6} 결과{flag} {state_ko:<8} {pane.current_path}"
         )
         board.append((key, pane, det))
     lines.append("번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 세션 자동바인딩)")
-    lines.append("●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 유휴/실행중=CPU 기준")
+    lines.append("●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 활동=CPU+pane tail, 미확인=증거 부족")
     _pane_board_cache(config, board)
     return "\n".join(lines)
 
@@ -333,19 +344,21 @@ class _Cbreak:
 
             tty.setcbreak(self.fd)
 
-    def read_key(self) -> str:
+    def read_key(self, timeout: float | None = None) -> str | None:
         import os
+        import time
         import sys as _sys
 
         if self.windows:
             import msvcrt
 
             sys.stdout.flush()
+            deadline = None if timeout is None else time.monotonic() + timeout
             while True:
                 if not msvcrt.kbhit():
-                    import time as _time
-
-                    _time.sleep(0.05)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        return None
+                    time.sleep(0.05)
                     continue
                 try:
                     ch = msvcrt.getwch()
@@ -361,6 +374,12 @@ class _Cbreak:
                         pass
                     continue
                 return "\r" if ch == "\r" else ch
+        if timeout is not None:
+            import select
+
+            ready, _, _ = select.select([self.fd], [], [], timeout)
+            if not ready:
+                return None
         raw = os.read(self.fd, 1).decode("utf-8", "replace")
         if raw == "\r":
             return "\r"
@@ -397,8 +416,18 @@ def run_tui() -> int:
         print("TUI는 터미널에서 실행하세요: actl tui")
         return 2
     with _Cbreak(fd) as cb:
+        import time
+
+        next_refresh = time.monotonic() + 5.0
         while True:
-            ch = cb.read_key()
+            ch = cb.read_key(timeout=0.5)
+            if ch is None:
+                if time.monotonic() >= next_refresh:
+                    config = load_config()
+                    rows = _rows(config)
+                    next_refresh = time.monotonic() + 5.0
+                    _render(rows, selected, "자동 새로고침 완료")
+                continue
             if ch in {"q", "\x03"}:
                 sys.stdout.write("\n")
                 return 0

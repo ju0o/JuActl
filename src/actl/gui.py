@@ -62,11 +62,12 @@ class Board:
         self.root = tk.Tk()
         self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
         self.root.geometry("1600x950")
+        self.root.minsize(1100, 700)
         self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
         self.jobs: queue.Queue = queue.Queue()
-        self.auto_refresh = False
+        self.auto_refresh = True
         self.log_visible = False
         self._build()
         self.refresh()
@@ -106,11 +107,14 @@ class Board:
         top = tk.Frame(self.root, bg="#05050c", highlightbackground=NEON, highlightthickness=1)
         top.pack(fill="x", padx=6, pady=(6, 0))
         conn = f"◈ ssh {self.ssh_target}" if self.ssh_target else "◈ 로컬"
-        tk.Label(top, text=f"▓ JuActl 보드 ░ {conn}", bg="#05050c", fg=NEON,
+        tk.Label(top, text=f"▓▒░ JUACTL // SIGNAL BOARD ░▒▓  {conn}", bg="#05050c", fg=NEON,
                  font=("Consolas", 12, "bold")).pack(side="left", padx=10, pady=6)
-        self.auto_var = tk.StringVar(value="◌ 자동새로고침 OFF")
+        self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (5s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
                   bg="#05050c", fg=DIM, relief="flat", cursor="hand2").pack(side="left", padx=12)
+        self.summary_var = tk.StringVar(value="정상 0 · 문제 0 · 미확인 0")
+        tk.Label(top, textvariable=self.summary_var, bg="#05050c", fg=DIM,
+                 font=FONT_HDR).pack(side="left", padx=8)
         self.status_var = tk.StringVar(value="준비")
         tk.Label(top, textvariable=self.status_var, bg="#05050c", fg=MAGENTA,
                  font=FONT_HDR).pack(side="right", padx=10)
@@ -127,6 +131,9 @@ class Board:
         left.rowconfigure(5, weight=3)
         self.pane_title = tk.StringVar(value="▚ live pane — 에이전트 클릭")
         tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.detail_var = tk.StringVar(value="대상을 선택하면 상태와 작업 가능 여부가 표시됩니다")
+        tk.Label(left, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=("Consolas", 9),
+                 anchor="w").grid(row=0, column=0, sticky="e", padx=6, pady=4)
         self.preview = tk.Text(left, wrap="none", font=("Consolas", 13), bg="#05050c", fg="#d8ffd8",
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.preview.grid(row=2, column=0, sticky="nsew", padx=6)
@@ -144,33 +151,55 @@ class Board:
 
         right = tk.Frame(main, bg=BG, highlightthickness=0)
         right.grid(row=0, column=1, sticky="nsew", padx=4)
-        right.rowconfigure(1, weight=1)
-        right.rowconfigure(4, weight=1)
+        right.rowconfigure(2, weight=1)
+        right.rowconfigure(6, weight=1)
         tk.Label(right, text="▚ 에이전트", bg=BG, fg=DIM, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+        tools = tk.Frame(right, bg=BG)
+        tools.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        self.filter_var = tk.StringVar()
+        search = tk.Entry(tools, textvariable=self.filter_var, bg=PANEL, fg=TXT,
+                          insertbackground=NEON, relief="flat", highlightthickness=1,
+                          highlightbackground=LINE, highlightcolor=NEON)
+        search.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        search.insert(0, "검색…")
+        search.bind("<FocusIn>", lambda _e: search.delete(0, "end") if search.get() == "검색…" else None)
+        search.bind("<KeyRelease>", lambda _e: self._render_cards(self.selected))
+        self.filter_mode = tk.StringVar(value="전체")
+        mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "정상", "문제", "미확인",
+                                  command=lambda _v: self._render_cards(self.selected))
+        mode_menu.configure(bg=PANEL2, fg=TXT, activebackground=NEON, activeforeground="#05050c",
+                            relief="flat", highlightthickness=0)
+        mode_menu["menu"].configure(bg=PANEL2, fg=TXT, activebackground=NEON, activeforeground="#05050c")
+        mode_menu.pack(side="right")
         self.cards: dict[str, tk.Frame] = {}
         self.agent_cards = tk.Frame(right, bg=BG)
-        self.agent_cards.grid(row=1, column=0, sticky="nsew")
-        tk.Label(right, text="▚ 메시지 전송", bg=BG, fg=DIM, font=FONT_HDR).grid(row=2, column=0, sticky="w", padx=2, pady=2)
+        self.agent_cards.grid(row=2, column=0, sticky="nsew")
+        tk.Label(right, text="▚ 메시지 전송", bg=BG, fg=DIM, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=2)
         from tkinter import scrolledtext
 
         self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL, fg=TXT,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.msg.grid(row=3, column=0, sticky="ew", pady=2)
+        self.msg.grid(row=4, column=0, sticky="ew", pady=2)
         sendrow = tk.Frame(right, bg=BG)
-        sendrow.grid(row=4, column=0, sticky="nsew", pady=2)
-        self._btn(sendrow, "➤ 전송", self.on_send, primary=True).pack(side="left")
+        sendrow.grid(row=5, column=0, sticky="nsew", pady=2)
+        self.send_btn = self._btn(sendrow, "➤ 전송", self.on_send, primary=True)
+        self.send_btn.pack(side="left")
         self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
                                     bg=BG, fg=DIM, relief="flat", cursor="hand2")
         self.log_toggle.pack(side="left", padx=6)
         self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Consolas", 9),
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
+        self.root.bind("<F5>", lambda _e: self.refresh())
+        self.root.bind("<Control-l>", lambda _e: search.focus_set())
+        self.root.bind("<Control-Return>", lambda _e: self.on_send())
+        self.root.bind("<Escape>", lambda _e: self.root.focus_set())
 
     def toggle_log(self) -> None:
         if self.log_visible:
             self.logw.grid_forget()
             self.log_toggle.configure(text="▸ 로그")
         else:
-            self.logw.grid(row=5, column=0, sticky="nsew", pady=2)
+            self.logw.grid(row=6, column=0, sticky="nsew", pady=2)
             self.log_toggle.configure(text="▾ 로그")
         self.log_visible = not self.log_visible
 
@@ -233,15 +262,48 @@ class Board:
             return
         prev_sel = self.selected
         self.rows = result
+        self._render_cards(prev_sel)
+        counts = {
+            "정상": sum(r["state"] == "UP" for r in self.rows),
+            "문제": sum(r["state"] in {"DOWN", "MISMATCH"} for r in self.rows),
+            "미확인": sum(r["state"] not in {"UP", "DOWN", "MISMATCH"} for r in self.rows),
+        }
+        self.summary_var.set(" · ".join(f"{key} {value}" for key, value in counts.items()))
+        live = counts["정상"]
+        self.set_status(f"정상 {live}/{len(self.rows)}")
+        if not quiet:
+            self.log(f"새로고침 완료 ({len(self.rows)} agents, 정상 {live})")
+        if self.rows:
+            keep = prev_sel if any(r["agent"] == prev_sel for r in self.rows) else self.rows[0]["agent"]
+            self.selected = keep
+            self._highlight(keep)
+            self._update_action_state()
+
+    def _render_cards(self, selected: str | None = None) -> None:
+        import tkinter as tk
+
         for child in self.agent_cards.winfo_children():
             child.destroy()
         self.cards = {}
-        for i, r in enumerate(self.rows, 1):
+        query = self.filter_var.get().strip().lower()
+        if query == "검색…":
+            query = ""
+        mode = self.filter_mode.get()
+        visible = []
+        for r in self.rows:
+            haystack = f"{r['display']} {r['agent']} {r['target']}".lower()
+            matches_mode = (mode == "전체" or
+                            (mode == "정상" and r["state"] == "UP") or
+                            (mode == "문제" and r["state"] in {"DOWN", "MISMATCH"}) or
+                            (mode == "미확인" and r["state"] not in {"UP", "DOWN", "MISMATCH"}))
+            if matches_mode and (not query or query in haystack):
+                visible.append(r)
+        for r in visible:
             state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
             color = STATUS_COLOR.get(r["state"], TXT)
             card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=color,
-                            highlightthickness=1 if r["agent"] == prev_sel else 0,
+                            highlightthickness=1 if r["agent"] == selected else 0,
                             cursor="hand2")
             card.pack(fill="x", pady=2)
             top = tk.Frame(card, bg=PANEL)
@@ -250,7 +312,8 @@ class Board:
                      font=("Consolas", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
             sub = (r["preview"] or r["detail"] or "—")[:60]
-            tk.Label(card, text=f"{state} · {sub}", bg=PANEL, fg=DIM, font=("Consolas", 9),
+            activity = f"{r.get('busy', '-')} · {r.get('result_flag', '-')}"
+            tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Consolas", 9),
                      anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
             card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
             for child in (card, top):
@@ -258,14 +321,9 @@ class Board:
             for w in top.winfo_children():
                 w.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
             self.cards[r["agent"]] = card
-        live = sum(1 for r in self.rows if r["state"] == "UP")
-        self.set_status(f"live {live}/{len(self.rows)}")
-        if not quiet:
-            self.log(f"새로고침 완료 ({len(self.rows)} agents, live {live})")
-        if self.rows:
-            keep = prev_sel if any(r["agent"] == prev_sel for r in self.rows) else self.rows[0]["agent"]
-            self.selected = keep
-            self._highlight(keep)
+        if not visible:
+            tk.Label(self.agent_cards, text="조건에 맞는 에이전트 없음", bg=BG, fg=DIM,
+                     font=FONT).pack(anchor="w", padx=8, pady=8)
 
     def _highlight(self, agent: str) -> None:
         import tkinter as tk
@@ -276,9 +334,15 @@ class Board:
             card.configure(highlightbackground=color,
                            highlightthickness=2 if name == agent else 0)
 
+    def _update_action_state(self) -> None:
+        row = self.current()
+        enabled = bool(row and row["target"] not in {"-", ""} and not row["target"].endswith("?"))
+        self.send_btn.configure(state="normal" if enabled else "disabled")
+
     def select_agent(self, agent: str) -> None:
         self.selected = agent
         self._highlight(agent)
+        self._update_action_state()
         self.on_select()
 
     def current(self) -> dict | None:
@@ -294,9 +358,11 @@ class Board:
             return
         self.selected = row["agent"]
         tgt = row["target"]
+        self.detail_var.set(f"상태 {STATE_KO.get(row['state'], row['state'])} · {row.get('busy', '활동 미확인')} · 결과 {row.get('result_flag', '-')} · 대상 {tgt}")
         if tgt == "-" or tgt.endswith("?"):
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")
+            self.pane_title.set(f"▚ {row['display']} — 연결할 live pane 없음")
             return
         self.set_status(f"{row['display']} 로딩…")
         self.log(f"{row['display']} 미리보기 로딩…")
@@ -323,13 +389,24 @@ class Board:
         self.set_status("복사 중…")
 
         def work():
+            from actl.core.audit import record
+
             result = extract_last_response(row["agent"], tgt, self.config)
             if not result.text:
+                record("copy", agent=row["agent"], target=tgt, ok=False,
+                       source=result.source, confidence=result.confidence)
                 return ("empty", result.detail)
             try:
                 backend = copy_text(result.text, preferred=self.config.get("clipboard_backend", "auto"))
+                import hashlib
+
+                record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
+                       source=result.source, confidence=result.confidence, chars=len(result.text),
+                       result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
                 return ("ok", backend, len(result.text))
             except Exception as exc:
+                record("copy", agent=row["agent"], target=tgt, ok=False,
+                       source=result.source, confidence=result.confidence, error=type(exc).__name__)
                 return ("clip-fail", str(exc), result.text[:2000])
 
         def done(result) -> None:
@@ -397,6 +474,9 @@ class Board:
             return
         backup = backup_config()
         save_config(updated)
+        from actl.core.audit import record
+
+        record("map", agent=row["agent"], target=det.pane.pane_id, ok=True)
         self.config = updated
         self.log(f"{row['display']} → {det.pane.pane_id} 매핑됨 (백업 {backup.name})")
         self.refresh()
@@ -415,12 +495,16 @@ class Board:
         self._bg(work, done)
 
     def on_send(self) -> None:
+        from tkinter import messagebox
+
         row = self.current()
         if not row:
             return
         text = self.msg.get("1.0", "end").strip()
         if not text:
             self.log("빈 메시지 — 전송 안 함")
+            return
+        if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
         self.set_status("전송 중…")
 

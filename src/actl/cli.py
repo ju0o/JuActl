@@ -43,36 +43,52 @@ def _resolve_selection(value: str) -> str | None:
     return resolve_agent(value)
 
 
-def _print_status(config: dict, agent: str | None = None) -> None:
+def _print_status(config: dict, agent: str | None = None, *, json_output: bool = False) -> None:
     names = [agent] if agent else list(AGENTS)
+    rows: list[dict] = []
     for name in names:
         try:
             s = agent_status(config, name)
-            print(f"{s['agent']:<12} {s['pane']:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
+            rows.append({"id": name, **s})
+            if not json_output:
+                print(f"{s['agent']:<12} {s['pane']:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
         except Exception as exc:
-            print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
+            row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
+            rows.append(row)
+            if not json_output:
+                print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
+    if json_output:
+        print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
 
 
-def _doctor() -> int:
+def _doctor(*, json_output: bool = False) -> int:
     """상용화 자가진단: python/tmux/ssh/클립보드/매핑 상태를 한 번에 출력."""
     import shutil
     import sys as _sys
 
     ok = True
+    checks: list[dict[str, object]] = []
 
     def line(name: str, good: bool, detail: str = "") -> None:
         nonlocal ok
         if not good:
             ok = False
+        checks.append({"name": name, "ok": good, "detail": detail})
+        if json_output:
+            return
         mark = "✓" if good else "✗"
         print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
 
     line("python", _sys.version_info >= (3, 10), _sys.version.split()[0])
+    from actl.core.registry import registry_issues
+
+    registry_errors = registry_issues()
+    line("adapter registry", not registry_errors, ", ".join(registry_errors) or f"{len(AGENTS)} agents")
     remote = "--ssh" in _sys.argv
-    if _sys.platform == "win32" and not remote:
-        line("tmux", True, "원격 모드 (MainPC는 tmux 불필요, --ssh asus 사용)")
+    if _sys.platform == "win32":
+        line("tmux", True, "MainPC에서는 로컬 tmux 불필요")
         line("ssh", shutil.which("ssh") is not None)
-        line("tmux 서버", True, "asus 원격 (--ssh asus로 확인)")
+        line("tmux 서버", True, "asus 원격 (--ssh asus 사용)" if remote else "원격 확인은 --ssh asus 사용")
     else:
         line("tmux", shutil.which("tmux") is not None)
         line("ssh", shutil.which("ssh") is not None)
@@ -83,13 +99,11 @@ def _doctor() -> int:
             line("tmux 서버", True, f"{len(panes)} panes")
         except Exception as exc:
             line("tmux 서버", False, str(exc)[:100])
-    try:
-        from actl.utils.clipboard import copy_text as _ct
-
-        backend = _ct("actl-doctor", preferred="local")
-        line("로컬 클립보드", True, backend)
-    except Exception:
-        line("로컬 클립보드", False, "OSC52/수동 복사 사용 (SSH면 정상)")
+    local_backend = next(
+        (name for name in ("wl-copy", "xclip", "xsel") if shutil.which(name)),
+        None,
+    )
+    line("로컬 클립보드", local_backend is not None, local_backend or "OSC52/수동 복사 사용")
     try:
         config = load_config()
         from actl.core.validation import validate_target
@@ -102,8 +116,33 @@ def _doctor() -> int:
         line("live 매핑", True, f"{live}/{len(AGENTS)} agents")
     except Exception as exc:
         line("live 매핑", False, str(exc)[:100])
-    print("OK" if ok else "일부 항목 확인 필요 (위 ✗ 참조)")
+    if json_output:
+        print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False, separators=(",", ":")))
+    else:
+        print("OK" if ok else "일부 항목 확인 필요 (위 ✗ 참조)")
     return 0 if ok else 1
+
+
+def _audit(limit: int = 50) -> int:
+    from actl.core.audit import read
+
+    for row in read(limit):
+        print(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+def _history(agent: str | None = None, limit: int = 50) -> int:
+    from actl.core.audit import read
+
+    if limit < 1:
+        return 0
+    rows = [row for row in read(max(100, limit * 4))
+            if row.get("event") == "copy" and row.get("ok") is True and row.get("result_hash")]
+    if agent:
+        rows = [row for row in rows if row.get("agent") == agent]
+    for row in rows[-limit:]:
+        print(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+    return 0
 
 
 def _push_file(path: str, *, print_only: bool = False) -> int:
@@ -170,6 +209,9 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         return 1
     result = extract_last_response(agent, target, config)
     if not result.text:
+        from actl.core.audit import record
+
+        record("copy", agent=agent, target=target, ok=False, source=result.source, confidence=result.confidence)
         if result.source == "claude-unresolved":
             print("✗ Could not confidently identify the active Claude conversation. Nothing copied.")
         elif result.source.endswith("-blocked"):
@@ -183,11 +225,20 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         # Safe manual-copy fallback — prints exact extracted Result verbatim.
         # Deliberately no backend prefix so selection is clean.
         print(result.text)
+        from actl.core.audit import record
+
+        record("copy", agent=agent, target=target, ok=True, mode="print", source=result.source,
+               confidence=result.confidence, chars=len(result.text),
+               result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
         return 0
     preferred = config.get("clipboard_backend", "auto")
     try:
         backend = copy_text(result.text, preferred=preferred)
     except Exception as exc:
+        from actl.core.audit import record
+
+        record("copy", agent=agent, target=target, ok=False, mode=preferred,
+               source=result.source, confidence=result.confidence, error=type(exc).__name__)
         # Clipboard transport failed — offer manual fallback.
         print(f"✗ Clipboard delivery failed: {exc}")
         print("  Use /copy --print or /result for manual copy.")
@@ -204,6 +255,11 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
             print("  If clipboard unchanged, your terminal may block OSC52 — use /copy --print or /result")
     else:
         print(f"✓ Last response copied via {backend}{note}")
+    from actl.core.audit import record
+
+    record("copy", agent=agent, target=target, ok=True, mode=backend,
+           source=result.source, confidence=result.confidence, chars=len(result.text),
+           result_hash=hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16])
     return 0
 
 
@@ -212,12 +268,33 @@ def _send_to_selected(config: dict, agent: str, prompt: str) -> str:
     from actl.core.remote import is_remote, remote_send
 
     if is_remote():
-        return remote_send(agent, prompt)
+        try:
+            target = remote_send(agent, prompt)
+        except Exception as exc:
+            from actl.core.audit import record
+
+            record("send", agent=agent, remote=True, ok=False, chars=len(prompt), error=type(exc).__name__)
+            raise
+        from actl.core.audit import record
+
+        record("send", agent=agent, target=target, remote=True, ok=True, chars=len(prompt))
+        return target
     target = _resolve_live_target(config, agent)
     try:
         send_prompt(target, prompt)
     except WriterDenied as denied:
+        from actl.core.audit import record
+
+        record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=denied.code)
         raise RuntimeError(f"{denied.code}: {denied.detail}") from denied
+    except Exception as exc:
+        from actl.core.audit import record
+
+        record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=type(exc).__name__)
+        raise
+    from actl.core.audit import record
+
+    record("send", agent=agent, target=target, ok=True, chars=len(prompt))
     return target
 
 
@@ -538,6 +615,9 @@ def _map(config: dict, agent: str, session_id: str | None = None) -> dict:
         return config
     backup = backup_config()
     save_config(updated)
+    from actl.core.audit import record
+
+    record("map", agent=agent, target=detection.pane.pane_id, ok=True)
     print(f"Backup: {backup}")
     print(f"✓ {AGENTS[agent].display_name} mapped to {detection.pane.pane_id}")
     return updated
@@ -823,6 +903,9 @@ def _unmap(config: dict, agent: str) -> dict:
     updated["agents"].pop(agent, None)
     backup = backup_config()
     save_config(updated)
+    from actl.core.audit import record
+
+    record("unmap", agent=agent, target=config["agents"].get(agent, {}).get("target"), ok=True)
     print(f"Backup: {backup}")
     print(f"✓ {AGENTS[agent].display_name} unmapped")
     return updated
@@ -969,9 +1052,12 @@ def _print_cli_help() -> None:
         "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
         "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
         "  actl gui [--ssh T]  Windows GUI board (buttons, no terminal keys)\n"
+        "  actl serve [port] [--host HOST] [--token TOKEN]  Web board\n"
         "  actl copy AGENT [--print]   Copy (or print) last response\n"
         "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
         "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
+        "  actl audit [N]            본문 없는 로컬 감사 로그\n"
+        "  actl history [AGENT] [N]  결과 hash/source 이력 (본문 없음)\n"
         "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
         "  actl discover [--apply]     List (or apply) live pane detections\n"
         "  actl status [AGENT] Probe-free mapping + liveness table\n"
@@ -1184,6 +1270,7 @@ def main() -> None:
     parser.add_argument("--bind", action="store_true", help="Bind an OpenCode session id (opencode-session)")
     parser.add_argument("--opencode-session", nargs="?", const="status", help="Session-aware OpenCode setup: --new | --bind --session ID | --status")
     parser.add_argument("--print", action="store_true", help="With copy: print the result instead of copying")
+    parser.add_argument("--json", action="store_true", help="With doctor: emit one machine-readable JSON object")
     parser.add_argument(
         "--request-stdin",
         action="store_true",
@@ -1193,6 +1280,12 @@ def main() -> None:
         "--ssh",
         help="Route tmux through 'ssh TARGET' (MainPC remote board, e.g. --ssh asus)",
     )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="With serve: bind address (public binding requires explicit --host)",
+    )
+    parser.add_argument("--token", help="With serve: bearer token for non-loopback web access")
     parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, gui, serve, help, doctor, or opencode-session")
     parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, port for serve, or runtime operation")
     parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
@@ -1229,6 +1322,12 @@ def main() -> None:
             raise SystemExit(_opencode_session_status(load_config()))
         raise SystemExit("Usage: actl opencode-session [--new [--dir DIR] | --bind --session ID | --status]")
     if args.command:
+        if args.command == "status":
+            agent = _resolve_selection(args.command_agent) if args.command_agent else None
+            if args.command_agent and not agent:
+                raise SystemExit(f"Unknown agent: {args.command_agent}")
+            _print_status(load_config(), agent, json_output=args.json)
+            return
         if args.command == "discover" and not args.command_agent:
             config = load_config()
             detections = _discover(config)
@@ -1301,18 +1400,33 @@ def main() -> None:
             from actl.serve import run_serve
 
             port = args.command_agent or args.command_extra or 8765
-            raise SystemExit(run_serve(port=int(port)))
+            raise SystemExit(run_serve(host=args.host, port=int(port), token=args.token))
         if args.command == "help" and not args.command_agent:
             _print_cli_help()
             return
         if args.command == "push" and args.command_agent:
             raise SystemExit(_push_file(args.command_agent, print_only=args.print))
         if args.command == "doctor" and not args.command_agent:
-            raise SystemExit(_doctor())
+            raise SystemExit(_doctor(json_output=args.json))
+        if args.command == "audit":
+            try:
+                limit = int(args.command_agent or 50)
+            except ValueError:
+                raise SystemExit("audit limit must be an integer")
+            raise SystemExit(_audit(limit))
+        if args.command == "history":
+            agent = _resolve_selection(args.command_agent) if args.command_agent else None
+            if args.command_agent and not agent:
+                raise SystemExit(f"Unknown agent: {args.command_agent}")
+            try:
+                limit = int(args.command_extra or 50)
+            except ValueError:
+                raise SystemExit("history limit must be an integer")
+            raise SystemExit(_history(agent, limit))
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
             "actl bind opencode | actl copy AGENT [--print] | actl extract AGENT [PANE] | actl push FILE [--print] | "
-            "actl tui | actl help | actl doctor | actl opencode-session ... | "
+            "actl tui | actl help | actl doctor | actl audit [N] | actl history [AGENT] [N] | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
     if args.discover:
@@ -1326,7 +1440,7 @@ def main() -> None:
         agent = None if args.status == "all" else _resolve_selection(args.status)
         if args.status != "all" and not agent:
             raise SystemExit(f"Unknown agent: {args.status}")
-        _print_status(cfg, agent)
+        _print_status(cfg, agent, json_output=args.json)
         return
     if args.probe:
         agent = _resolve_selection(args.probe)

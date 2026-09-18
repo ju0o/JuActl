@@ -1,0 +1,47 @@
+import io
+
+from actl import tui
+from actl.core.activity import classify_activity
+from actl.core import discovery
+
+
+def test_activity_classification_fails_closed_on_missing_or_unknown_tail():
+    assert classify_activity(None, "prompt ❯") == "UNKNOWN"
+    assert classify_activity(0.0, "ordinary output") == "UNKNOWN"
+    assert classify_activity(0.0, "agent ❯") == "IDLE"
+    assert classify_activity(0.0, "working...") == "RUNNING"
+    assert classify_activity(6.0, "ordinary output") == "RUNNING"
+
+
+def test_render_shows_live_and_result_state(monkeypatch):
+    out = io.StringIO()
+    monkeypatch.setattr(tui.sys, "stdout", out)
+    tui._render(
+        [{
+            "key": "1", "display": "CommandCode", "target": "%12",
+            "state": "UP", "busy": "유휴", "result_flag": "●4자",
+            "preview": "DONE", "detail": "",
+        }],
+        0,
+    )
+    text = out.getvalue()
+    assert "유휴" in text
+    assert "●4자" in text
+    assert "DONE" in text
+
+
+def test_pane_board_uses_selectable_row_keys_for_large_pane_ids(monkeypatch):
+    pane = type("Pane", (), {
+        "pane_id": "%12", "current_command": "cmd",
+        "current_path": "/tmp",
+    })()
+    detection = type("Detection", (), {"agent": "commandcode"})()
+    monkeypatch.setattr(tui, "_all_panes", lambda: [(pane, detection)])
+    monkeypatch.setattr(tui, "_pane_busy", lambda _: "유휴")
+    monkeypatch.setattr(tui, "_pane_result_flag", lambda *_: "●")
+    monkeypatch.setattr(discovery, "mapping_state", lambda *_: "UP")
+
+    text = tui._pane_board({})
+
+    assert "[1] %12" in text
+    assert tui._pane_board_cache({})[0][0] == "1"

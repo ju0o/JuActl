@@ -31,6 +31,10 @@ powershell -ExecutionPolicy Bypass -File scripts/install.ps1
 # 2) 자가진단 (python/tmux/ssh/클립보드/매핑 한 번에)
 actl doctor
 ```
+
+`doctor`는 클립보드에 테스트 문자열을 쓰지 않는 read-only 자가진단이다.
+TUI는 5초마다 pane 상태와 결과 준비 여부를 자동 갱신한다. 동작 이력은
+`actl audit 50`으로 확인할 수 있다.
 ```powershell
 # 3) asus SSH 확인 (이미 ssh asus가 되면 생략)
 ssh asus "echo OK"

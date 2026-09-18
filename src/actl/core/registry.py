@@ -50,3 +50,18 @@ if len(ALIASES) != sum(len(spec.aliases) for spec in AGENTS.values()):
 
 def resolve_agent(value: str) -> str | None:
     return ALIASES.get(value.strip().lower())
+
+
+def registry_issues() -> list[str]:
+    """Return structural adapter-registry errors without touching runtimes."""
+    issues: list[str] = []
+    for name, spec in AGENTS.items():
+        if spec.name != name:
+            issues.append(f"{name}: spec.name mismatch")
+        if not spec.display_name or not spec.aliases:
+            issues.append(f"{name}: missing display name or aliases")
+        if not spec.binary_candidates:
+            issues.append(f"{name}: missing binary candidates")
+        if not spec.data_dirs:
+            issues.append(f"{name}: missing storage roots")
+    return issues
