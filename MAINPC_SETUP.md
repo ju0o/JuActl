@@ -25,8 +25,12 @@ git clone https://github.com/ju0o/JuActl.git juactl
 cd juactl
 ```
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/install.ps1
+powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1
 ```
+
+생성된 `dist\JuActl-Setup.exe`를 실행하면 Python 없이 설치된다.
+설치 후 바탕화면의 `JuActl Board`를 실행한다. 소스/개발용 `install.ps1`은
+레거시 폴백으로만 유지한다.
 ```powershell
 # 2) 자가진단 (python/tmux/ssh/클립보드/매핑 한 번에)
 actl doctor

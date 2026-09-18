@@ -10,12 +10,14 @@ python -m py_compile $files.FullName
 
 Write-Host "[2/4] package build"
 python -m PyInstaller --clean --noconfirm --onefile --noconsole --name JuActlBoard --paths src src/juactl-board.py
-$artifact = Join-Path $root "dist\JuActlBoard.exe"
-if (-not (Test-Path $artifact)) { throw "missing $artifact" }
+$artifacts = @("JuActlBoard.exe", "JuActl.exe") | ForEach-Object { Join-Path $root ("dist\" + $_) }
+foreach ($artifact in $artifacts) { if (-not (Test-Path $artifact)) { throw "missing $artifact" } }
 
 Write-Host "[3/4] checksum"
-$hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
-"$hash  JuActlBoard.exe" | Set-Content (Join-Path $root "dist\SHA256SUMS.txt") -Encoding ascii
+$hashLines = foreach ($artifact in $artifacts) {
+  "$((Get-FileHash $artifact -Algorithm SHA256).Hash)  $([IO.Path]::GetFileName($artifact))"
+}
+$hashLines | Set-Content (Join-Path $root "dist\SHA256SUMS.txt") -Encoding ascii
 
 Write-Host "[4/5] local doctor JSON smoke"
 $doctor = python src/actl-run.py doctor --json | ConvertFrom-Json

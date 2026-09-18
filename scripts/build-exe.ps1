@@ -1,5 +1,5 @@
 # JuActl Board exe builder (MainPC PowerShell 5.1+, run line by line)
-# Output: dist/JuActlBoard.exe (single file, no console, Python bundled)
+# Output: dist/JuActlBoard.exe + dist/JuActl.exe (single files, Python bundled)
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -10,10 +10,17 @@ if ($LASTEXITCODE -ne 0) {
   python -m pip install pyinstaller
 }
 python -m PyInstaller --clean --noconfirm --onefile --noconsole --name JuActlBoard --paths src src/juactl-board.py
-$artifact = Join-Path $root "dist\JuActlBoard.exe"
-if (-not (Test-Path $artifact)) { throw "PyInstaller completed without producing $artifact" }
-$hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
-"$hash  JuActlBoard.exe" | Set-Content (Join-Path $root "dist\SHA256SUMS.txt") -Encoding ascii
-Write-Host "Built: $artifact"
-Write-Host "SHA256: $hash"
-Write-Host "Run: .\\dist\\JuActlBoard.exe (ssh asus baked in; override with JUACTL_SSH env)"
+python -m PyInstaller --clean --noconfirm --onefile --console --name JuActl --paths src src/actl-run.py
+$artifacts = @("JuActlBoard.exe", "JuActl.exe") | ForEach-Object { Join-Path $root ("dist\" + $_) }
+foreach ($artifact in $artifacts) {
+  if (-not (Test-Path $artifact)) { throw "PyInstaller completed without producing $artifact" }
+}
+$hashLines = foreach ($artifact in $artifacts) {
+  $hash = (Get-FileHash $artifact -Algorithm SHA256).Hash
+  "$hash  $([IO.Path]::GetFileName($artifact))"
+  Write-Host "Built: $artifact"
+  Write-Host "SHA256: $hash"
+}
+$hashLines | Set-Content (Join-Path $root "dist\SHA256SUMS.txt") -Encoding ascii
+Write-Host "Run: .\\dist\\JuActlBoard.exe (GUI; ssh asus baked in)"
+Write-Host "Run: .\\dist\\JuActl.exe doctor (CLI)"

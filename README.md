@@ -14,15 +14,13 @@ git clone https://github.com/ju0o/JuActl.git juactl
 cd juactl
 ```
 ```powershell
-.\scripts\install.ps1
-```
-```powershell
-.\scripts\build-exe.ps1
+.\scripts\build-installer.ps1
 ```
 
-`dist\JuActlBoard.exe` 더블클릭. 바탕화면 바로가기도 자동 생성.
-빌드 스크립트는 현재 Python 환경의 PyInstaller만 사용하며 전역 패키지를 무조건 업그레이드하지 않는다.
-빌드 후 `dist\SHA256SUMS.txt`에 exe의 SHA-256이 기록된다. GitHub Actions는 Linux 테스트와 Windows exe 빌드를 별도로 검증한다.
+`dist\JuActl-Setup.exe`를 실행하면 Python이나 Git 없이 설치된다.
+바탕화면/시작 메뉴 바로가기와 제거 프로그램이 함께 등록된다.
+개발/검증용으로 `dist\JuActlBoard.exe` 포터블 GUI와 `dist\JuActl.exe` CLI도 생성된다.
+빌드 스크립트는 PyInstaller와 Inno Setup을 사용하며, `dist\SHA256SUMS.txt`에 모든 산출물의 SHA-256을 기록한다.
 
 릴리즈 전 QA:
 
@@ -30,8 +28,8 @@ cd juactl
 ./scripts/qa.sh
 ```
 
-Windows에서는 `powershell -ExecutionPolicy Bypass -File scripts\qa.ps1`를 실행한다.
-빌드 전에는 바로가기가 pythonw 폴백으로 동작.
+Windows에서는 `powershell -ExecutionPolicy Bypass -File scripts\qa.ps1` 후
+`powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1`를 실행한다.
 
 ## MainPC에서 실행 (웹 보드)
 
