@@ -221,11 +221,40 @@ def _all_panes() -> list:
     return [(pane, detect_pane(pane)) for pane in panes]
 
 
+def _pane_busy(pane_id: str) -> str:
+    """유휴/실행중: pane 프로세스 그룹 CPU 합으로 판정. --ssh 원격도 지원."""
+    try:
+        import subprocess
+
+        from actl.core.tmux import _remote_args, pane_field
+
+        pane_pid = int(pane_field(pane_id, "#{pane_pid}"))
+        proc = subprocess.run(
+            _remote_args(["ps", "-o", "%cpu=", "-g", str(pane_pid)]),
+            capture_output=True, text=True, timeout=5,
+        )
+        total = sum(float(x) for x in proc.stdout.split() if x.strip())
+        return "실행중" if total > 5.0 else "유휴"
+    except Exception:
+        return "?"
+
+
+def _pane_result_flag(agent: str | None, target: str, config: dict) -> str:
+    """결과도착: 추출 가능하면 ●, 없으면 ○, 미매핑은 -."""
+    if not agent:
+        return "-"
+    try:
+        result = extract_last_response(agent, target, config)
+    except Exception:
+        return "?"
+    return "●" if result.text else "○"
+
+
 def _pane_board(config: dict) -> str:
-    """Visual board: every live pane, its detected agent, mapping state."""
+    """실시간 상태 보드: 모든 pane + 유휴/실행중 + 결과도착 + 매핑 상태."""
     from actl.core.discovery import mapping_state
 
-    lines = ["--- 전체 live pane (문자키=해당 pane 미리보기, 같은 키 다시=매핑) ---"]
+    lines = ["--- 전체 live pane (번호키=미리보기+즉시매핑) ---"]
     board: list[tuple[str, object, object]] = []
     for pane, det in _all_panes():
         agent = det.agent or "-"
@@ -233,12 +262,17 @@ def _pane_board(config: dict) -> str:
             state = mapping_state(config, det)
         except Exception:
             state = "-"
+        busy = _pane_busy(pane.pane_id)
+        flag = _pane_result_flag(det.agent, pane.pane_id, config)
+        state_ko = STATE_KO.get(state, state)
         key = pane.pane_id.lstrip("%")
         lines.append(
-            f"  [{key}] {pane.pane_id:<5} {pane.current_command:<12} {agent:<12} {state:<8} {pane.current_path}"
+            f"  [{key}] {pane.pane_id:<5} {pane.current_command:<12} {agent:<12} "
+            f"{busy:<6} 결과{flag} {state_ko:<8} {pane.current_path}"
         )
         board.append((key, pane, det))
-    lines.append("문자키 두 번: 미리보기 → 그 pane로 매핑 (OpenCode 세션 자동바인딩)")
+    lines.append("번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 세션 자동바인딩)")
+    lines.append("●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 유휴/실행중=CPU 기준")
     _pane_board_cache(config, board)
     return "\n".join(lines)
 
