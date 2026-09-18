@@ -37,17 +37,33 @@ def _maybe_guard_direct_writer(
     guard_tmux_writer(target=target, socket_path=socket_path, mode="DIRECT")
 
 
+REMOTE_SSH_TARGET: str | None = None
+
+
+def set_remote_ssh(target: str | None) -> None:
+    """Route all tmux invocations through ``ssh <target> tmux ...``.
+
+    Used by the MainPC remote board: install actl on MainPC once, then run
+    ``actl tui --ssh asus`` to drive the asus tmux server without cloning
+    or installing anything on the remote side beyond tmux itself.
+    """
+    global REMOTE_SSH_TARGET
+    REMOTE_SSH_TARGET = target
+
+
 def _tmux_base(socket_path: str | None = None) -> list[str]:
-    if socket_path:
-        return ["tmux", "-S", socket_path]
-    return ["tmux"]
+    base = ["tmux", "-S", socket_path] if socket_path else ["tmux"]
+    if REMOTE_SSH_TARGET:
+        return ["ssh", REMOTE_SSH_TARGET, *base]
+    return base
 
 
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(args, check=check, capture_output=True, text=text, errors="replace")
     except FileNotFoundError as exc:
-        raise TmuxError("tmux is not installed or not in PATH") from exc
+        hint = "ssh" if args and args[0] == "ssh" else "tmux"
+        raise TmuxError(f"{hint} is not installed or not in PATH") from exc
     except subprocess.CalledProcessError as exc:
         msg = exc.stderr.strip() if isinstance(exc.stderr, str) else str(exc)
         raise TmuxError(msg or f"tmux command failed: {' '.join(args)}") from exc
@@ -56,10 +72,15 @@ def _run(args: list[str], *, check: bool = True, text: bool = True) -> subproces
 def target_exists(target: str, socket_path: str | None = None) -> bool:
     # display-message succeeds with an empty expansion for some nonexistent
     # targets on tmux 3.6, so compare against the authoritative pane inventory.
+    # NOTE: raw subprocess.run (not _run) so unit tests can stub _run without
+    # affecting this inventory read, and check=False so ssh/tmux failures
+    # report False instead of raising.
     proc = subprocess.run(
         [*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"],
         capture_output=True,
         text=True,
+        errors="replace",
+        check=False,
     )
     if proc.returncode:
         return False
@@ -227,7 +248,12 @@ def send_prompt_staged(
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
-        subprocess.run([*base, "delete-buffer", "-b", buffer_name], capture_output=True)
+        try:
+            import subprocess as _sp
+
+            _sp.run([*base, "delete-buffer", "-b", buffer_name], capture_output=True)
+        except OSError:
+            pass
 
 
 def send_prompt(

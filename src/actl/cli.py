@@ -861,6 +861,7 @@ def _print_cli_help() -> None:
         "  actl discover [--apply]     List (or apply) live pane detections\n"
         "  actl status [AGENT] Probe-free mapping + liveness table\n"
         "  actl bind opencode  One-command OpenCode session bind\n"
+        "  --ssh TARGET        Route tmux via ssh (MainPC board: actl tui --ssh asus)\n"
     )
 
 
@@ -1073,9 +1074,18 @@ def main() -> None:
         action="store_true",
         help="With runtime: read one JSON request from stdin and emit one JSON envelope to stdout",
     )
-    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, runtime, or opencode-session")
+    parser.add_argument(
+        "--ssh",
+        help="Route tmux through 'ssh TARGET' (MainPC remote board, e.g. --ssh asus)",
+    )
+    parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, runtime, tui, help, or opencode-session")
     parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy, or runtime operation")
     args = parser.parse_args()
+
+    if args.ssh:
+        from actl.core.tmux import set_remote_ssh
+
+        set_remote_ssh(args.ssh)
 
     # Managed contract path must not touch config, reconcile, clipboard, or REPL.
     if args.command == "runtime":
