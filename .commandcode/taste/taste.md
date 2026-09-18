@@ -7,3 +7,4 @@
 - Expects explicit scope boundaries declared up front (e.g., "slice2-NTFS / slice8-EFTYPE stay explicitly out of scope") with a formal status code (e.g., "PHASE_I_WINDOWS_RED_CLEARED_READY_FOR_PM_REVIEW") at the end. Confidence: 0.8
 - Operates the multi-agent tmux harness via SSH from a MainPC rather than locally; detection logic must account for remote SSH sessions where agent processes may live in separate tmux sessions than expected. Confidence: 0.85
 - Prefers `--print` flag for verifying copy/extraction operations over OSC52 terminal clipboard, especially over SSH where OSC52 sequences may be blocked or not propagated by the terminal/SSH client. Confidence: 0.7
+- When presented with a numbered list of tmux panes for selection, naturally enters the pane ID (`%XX`) shown in tmux listings rather than the 1-based numeric index the tool assigned; expects CLI prompts to accept direct pane ID input. Confidence: 0.85

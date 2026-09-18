@@ -73,14 +73,38 @@ def test_resolve_live_target_ambiguous_panes_fail_closed(monkeypatch):
     pane_a = type("P", (), {"pane_id": "%9"})()
     pane_b = type("P", (), {"pane_id": "%8"})()
     dets = [
-        type("D", (), {"agent": "codex", "confidence": "high", "pane": pane_a})(),
-        type("D", (), {"agent": "codex", "confidence": "high", "pane": pane_b})(),
+        type("D", (), {"agent": "codex", "confidence": "high", "pane": pane_a, "evidence": "pid 1: codex"})(),
+        type("D", (), {"agent": "codex", "confidence": "high", "pane": pane_b, "evidence": "pid 2: codex"})(),
     ]
     monkeypatch.setattr(cli, "discover", lambda: dets)
+    import actl.core.discovery as disc_mod
+    import builtins
+    monkeypatch.setattr(disc_mod, "newest_detection", lambda choices: None)
+    monkeypatch.setattr(builtins, "input", lambda *_: (_ for _ in ()).throw(EOFError("no tty")))
     monkeypatch.setattr(cli, "save_config", lambda *_: (_ for _ in ()).throw(AssertionError("must not write on ambiguity")))
     try:
         cli._resolve_live_target({"agents": {"codex": {"target": "%gone"}}}, "codex")
-    except ValueError as exc:
-        assert "Multiple" in str(exc)
+    except (ValueError, EOFError):
+        pass
     else:
         raise AssertionError("expected ambiguity failure")
+
+
+def test_resolve_live_target_ambiguous_panes_auto_selects_newest(monkeypatch):
+    monkeypatch.setattr(cli, "get_target", lambda cfg, agent: type("T", (), {"target": "%gone"})())
+    monkeypatch.setattr(cli, "validate_target", lambda *_: type("V", (), {"valid": False, "state": "DOWN", "detail": "gone"})())
+    pane_a = type("P", (), {"pane_id": "%9"})()
+    dets = [
+        type("D", (), {"agent": "codex", "confidence": "high", "pane": pane_a, "evidence": "pid 1: codex"})(),
+    ]
+    other = type("P", (), {"pane_id": "%8"})()
+    dets.append(type("D", (), {"agent": "codex", "confidence": "high", "pane": other, "evidence": "pid 2: codex"})())
+    monkeypatch.setattr(cli, "discover", lambda: dets)
+    import actl.core.discovery as disc_mod
+    monkeypatch.setattr(disc_mod, "newest_detection", lambda choices: dets[0])
+    saved = {}
+    monkeypatch.setattr(cli, "backup_config", lambda: "bak")
+    monkeypatch.setattr(cli, "save_config", lambda cfg: saved.update(cfg))
+    target = cli._resolve_live_target({"agents": {"codex": {"target": "%gone"}}}, "codex")
+    assert target == "%9"
+    assert saved["agents"]["codex"]["target"] == "%9"

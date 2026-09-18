@@ -108,8 +108,55 @@ def mapping_state(config: dict, detection: Detection) -> str:
     return "STALE" if validate_target(detection.agent, target).state in {"DOWN", "MISMATCH"} else "OTHER"
 
 
+def newest_detection(choices: list[Detection]) -> Detection | None:
+    """Pick the pane whose agent process started most recently.
+
+    Each candidate pane has exactly one live agent PID (parsed from the
+    evidence string); compare wall-clock process start times via /proc and
+    return the youngest. Ties or unreadable start times return None so the
+    caller keeps fail-closed behavior.
+    """
+    import os
+    import re
+    import time
+
+    def _start_ms(pid: int) -> int | None:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+            tail = stat.rsplit(") ", 1)[1].split()
+            starttime_ticks = int(tail[19])
+            clk_tck = os.sysconf("SC_CLK_TCK")
+            uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+            return int((time.time() - uptime + starttime_ticks / clk_tck) * 1000)
+        except Exception:
+            return None
+
+    scored: list[tuple[int, Detection]] = []
+    for choice in choices:
+        match = re.search(r"pid (\d+)", choice.evidence or "")
+        if not match:
+            return None
+        started = _start_ms(int(match.group(1)))
+        if started is None:
+            return None
+        scored.append((started, choice))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0])
+    if len(scored) >= 2 and scored[-1][0] == scored[-2][0]:
+        return None
+    return scored[-1][1]
+
+
 def reconcile(config: dict, detections: list[Detection]) -> tuple[dict, list[str]]:
-    """Return a fail-closed, pane-id based mapping update without writing it."""
+    """Return a pane-id based mapping update without writing it.
+
+    Stale mappings are removed fail-closed. Unmapped agents with exactly one
+    strong detection are mapped; when several strong panes exist, an existing
+    still-live mapping is kept, otherwise the most recently started agent
+    process wins (newest pane auto-selected). Ties and unreadable start times
+    stay fail-closed.
+    """
     updated = deepcopy(config)
     agents = updated.setdefault("agents", {})
     changes: list[str] = []
@@ -125,9 +172,24 @@ def reconcile(config: dict, detections: list[Detection]) -> tuple[dict, list[str
     strong = [d for d in detections if d.agent and d.confidence in STRONG_CONFIDENCE]
     for agent in AGENTS:
         choices = [d for d in strong if d.agent == agent]
-        if len(choices) != 1:
+        if not choices:
             continue
-        chosen = choices[0]
+        chosen: Detection | None = None
+        if len(choices) == 1:
+            chosen = choices[0]
+        else:
+            try:
+                current = get_target(updated, agent).target
+            except ValueError:
+                current = None
+            if current and validate_target(agent, current).valid:
+                continue
+            newest = newest_detection(choices)
+            if newest is None:
+                continue
+            chosen = newest
+        if chosen is None:
+            continue
         occupied = False
         for other in AGENTS:
             if other == agent:
@@ -143,12 +205,16 @@ def reconcile(config: dict, detections: list[Detection]) -> tuple[dict, list[str
             continue
         old = agents.get(agent, {}).get("target")
         if old != chosen.pane.pane_id:
-            # A pane change drops the stored opencode session_id: the new TUI
-            # must prove its own --session before /copy works again (fail
-            # closed). An unchanged pane keeps its entry untouched, and liveness
-            # is revalidated from the process cmdline on every /copy.
-            agents[agent] = {"target": chosen.pane.pane_id}
-            changes.append(f"{agent}: {chosen.pane.pane_id}")
+            entry: dict = {"target": chosen.pane.pane_id}
+            if agent == "opencode":
+                sid = auto_bind_opencode_session(
+                    chosen.pane.pane_id, AGENTS[agent].data_dirs[0]
+                )
+                if sid:
+                    entry["session_id"] = sid
+            agents[agent] = entry
+            suffix = " +session" if entry.get("session_id") else ""
+            changes.append(f"{agent}: {chosen.pane.pane_id}{suffix}")
     return updated, changes
 
 

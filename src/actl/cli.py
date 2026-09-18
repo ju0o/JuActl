@@ -732,13 +732,37 @@ def _auto_reconcile(config: dict) -> dict:
     return updated
 
 
+def _persist_target(config: dict, agent: str, pane_id: str) -> str:
+    """ Persist pane_id (+ OpenCode session auto-bind) and return it."""
+    from actl.core.discovery import auto_bind_opencode_session
+
+    agents = dict(config.get("agents", {}))
+    entry = dict(agents.get(agent, {}))
+    entry["target"] = pane_id
+    if agent == "opencode":
+        sid = auto_bind_opencode_session(pane_id, AGENTS[agent].data_dirs[0])
+        if sid:
+            entry["session_id"] = sid
+        elif "session_id" in entry:
+            del entry["session_id"]
+    agents[agent] = entry
+    updated = dict(config)
+    updated["agents"] = agents
+    backup = backup_config()
+    save_config(updated)
+    print(f"Backup: {backup}")
+    return pane_id
+
+
 def _resolve_live_target(config: dict, agent: str) -> str:
     """Return the agent's live target.
 
     When the stored mapping went stale (agent turned off/on, relaunched, or
-    moved panes), the agent's unique live pane is found and the mapping is
-    re-applied automatically before the operation proceeds. Unambiguous only:
-    zero or several candidate panes fail closed with a clear message.
+    moved panes), a live pane is found and the mapping is re-applied
+    automatically before the operation proceeds. Unique pane: direct remap.
+    Several panes: keep the call non-interactive callers safe by auto-selecting
+    the most recently started agent process; when start times tie or are
+    unreadable, fall back to the inline pane prompt. Zero panes fail closed.
     """
     stored_error: ValueError | None = None
     try:
@@ -767,30 +791,30 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         print(f"Backup: {backup}")
         return matches[0].pane.pane_id
     if len(matches) > 1:
+        from actl.core.discovery import newest_detection
+
+        auto = newest_detection(matches)
+        if auto is not None:
+            pane_id = _persist_target(config, agent, auto.pane.pane_id)
+            print(f"✓ {AGENTS[agent].display_name} auto-mapped to {auto.pane.pane_id} (newest live pane)")
+            return pane_id
         print(f"Multiple live {AGENTS[agent].display_name} panes found:")
         for idx, d in enumerate(matches, 1):
             print(f"  [{idx}] {d.pane.pane_id} — {d.evidence}")
-        try:
-            choice = int(input("Choose pane: ").strip())
-            detection = matches[choice - 1]
-        except (ValueError, IndexError):
-            raise ValueError("Invalid pane selection")
-        agents = dict(config.get("agents", {}))
-        entry = {"target": detection.pane.pane_id}
-        if agent == "opencode":
-            sid = auto_bind_opencode_session(
-                detection.pane.pane_id, AGENTS[agent].data_dirs[0]
-            )
-            if sid:
-                entry["session_id"] = sid
-        agents[agent] = entry
-        updated = dict(config)
-        updated["agents"] = agents
-        backup = backup_config()
-        save_config(updated)
+        raw = input("Choose pane: ").strip()
+        detection = None
+        if raw.startswith("%"):
+            detection = next((d for d in matches if d.pane.pane_id == raw), None)
+            if detection is None:
+                raise ValueError(f"No pane matching {raw}")
+        else:
+            try:
+                detection = matches[int(raw) - 1]
+            except (ValueError, IndexError):
+                raise ValueError("Invalid pane selection")
+        pane_id = _persist_target(config, agent, detection.pane.pane_id)
         print(f"✓ {AGENTS[agent].display_name} mapped to {detection.pane.pane_id}")
-        print(f"Backup: {backup}")
-        return detection.pane.pane_id
+        return pane_id
     if stored_error is not None:
         raise stored_error
     raise ValueError(f"{AGENTS[agent].display_name} is not currently mapped to a live pane")
@@ -1099,9 +1123,13 @@ def main() -> None:
             if not agent:
                 raise SystemExit(f"Unknown agent: {args.command_agent}")
             raise SystemExit(_copy(load_config(), agent, print_only=args.print))
+        if args.command == "tui" and not args.command_agent:
+            from actl.tui import run_tui
+
+            raise SystemExit(run_tui())
         raise SystemExit(
             "Usage: actl discover [--apply] | actl map AGENT [--session ID] | actl unmap AGENT | "
-            "actl bind opencode | actl copy AGENT [--print] | actl opencode-session ... | "
+            "actl bind opencode | actl copy AGENT [--print] | actl tui | actl opencode-session ... | "
             "actl runtime <discover|status|reserve|send|collect|interrupt> --request-stdin"
         )
     if args.discover:

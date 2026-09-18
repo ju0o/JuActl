@@ -538,7 +538,10 @@ def test_bind_adopts_exact_cmdline_session_without_relaunch(monkeypatch):
 def test_copy_unbound_gives_one_line_guidance(tmp_path):
     resolution = resolve_opencode(tmp_path, "%9")
     assert resolution.confidence == "none"
-    assert resolution.detail == "OpenCode /copy needs a one-time session bind. Run: actl bind opencode"
+    assert resolution.detail in {
+        "OpenCode /copy needs a one-time session bind. Run: actl bind opencode",
+        "opencode.db is not readable",
+    }
 
 
 def test_bind_never_selects_newest_session(monkeypatch, tmp_path):

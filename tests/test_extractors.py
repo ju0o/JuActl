@@ -32,6 +32,10 @@ def test_opencode_fails_closed_without_live_session_binding(monkeypatch, tmp_pat
     from actl.agents import extract as extract_mod
 
     p = tmp_path / "opencode.db"
+    from dataclasses import replace as _replace
+    _fake_agents = dict(extract_mod.AGENTS)
+    _fake_agents["opencode"] = _replace(extract_mod.AGENTS["opencode"], data_dirs=(tmp_path,))
+    monkeypatch.setattr(extract_mod, "AGENTS", _fake_agents)
     con = sqlite3.connect(p)
     con.executescript(
         """
@@ -46,7 +50,9 @@ def test_opencode_fails_closed_without_live_session_binding(monkeypatch, tmp_pat
     con.commit()
     con.close()
     assert extract_opencode(tmp_path) is None
-    assert resolve_opencode(tmp_path, "%9").confidence == "none"
+    resolution = resolve_opencode(tmp_path, "%9")
+    assert resolution.confidence == "none"
+    assert resolution.session_id is None
     monkeypatch.setattr(
         extract_mod,
         "validate_target",
