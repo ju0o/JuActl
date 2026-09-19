@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -72,6 +73,12 @@ def _remote_args(args: list[str]) -> list[str]:
     if not REMOTE_SSH_TARGET:
         return args
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
+    if os.name == "nt":
+        remote_command = " ".join(shlex.quote(part) for part in args)
+        values = command[1:] + [remote_command]
+        ps = "$a=@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + "); $p=Start-Process -FilePath ssh.exe -ArgumentList $a -NoNewWindow -Wait -PassThru; exit $p.ExitCode"
+        encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+        return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
     return command + [" ".join(shlex.quote(part) for part in args)]
 
 

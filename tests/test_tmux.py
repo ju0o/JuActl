@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 from actl.core import tmux
@@ -44,12 +45,14 @@ def test_tmux_output_replaces_invalid_title_bytes(monkeypatch):
     assert captured["errors"] == "replace"
 
 
-def test_remote_format_is_quoted_for_remote_shell(monkeypatch):
+def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     monkeypatch.setattr(tmux.os, "name", "nt")
     monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
     args = tmux._remote_args(["tmux", "list-panes", "-F", "#{pane_id}	#{session_name}"])
-    assert args[0] == "ssh"
-    assert args[-1].endswith("-F '#{pane_id}\t#{session_name}'")
+    script = base64.b64decode(args[-1]).decode("utf-16le")
+    assert "Start-Process -FilePath ssh.exe" in script
+    assert "'#{pane_id}\t#{session_name}'" in script
+    assert "$a=@('ssh'" not in script
 
 
 def test_socket_path_passed_as_dash_s(monkeypatch):
