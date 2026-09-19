@@ -33,7 +33,8 @@ def remote_extract(agent: str, target: str, timeout: float = 30.0) -> CopyResult
         from actl.core.tmux import _no_window
 
         proc = subprocess.run(
-            ["ssh", REMOTE_SSH_TARGET, "~/.local/bin/actl", "extract", agent, target],
+            ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET,
+             "~/.local/bin/actl", "extract", agent, target],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -60,7 +61,8 @@ def remote_send(agent: str, prompt: str, timeout: float = 30.0) -> str:
         raise RuntimeError("not in remote mode")
     try:
         proc = subprocess.run(
-            ["ssh", REMOTE_SSH_TARGET, "~/.local/bin/actl", "send", agent],
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET,
+             "~/.local/bin/actl", "send", agent],
             input=prompt,
             capture_output=True,
             text=True,

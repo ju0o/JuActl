@@ -69,7 +69,10 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     import shlex
 
-    return ["ssh", REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args)]
+    return [
+        "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+        REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args),
+    ]
 
 
 def _no_window() -> dict:
@@ -91,7 +94,7 @@ def _run(args: list[str], *, check: bool = True, text: bool = True) -> subproces
     try:
         return subprocess.run(
             args, check=check, capture_output=True, text=text,
-            encoding="utf-8", errors="replace", **_no_window(),
+            encoding="utf-8", errors="replace", timeout=10, **_no_window(),
         )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
@@ -114,6 +117,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=10,
         **_no_window(),
     )
     if proc.returncode:
