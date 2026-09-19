@@ -77,6 +77,29 @@ def test_socket_path_passed_as_dash_s(monkeypatch):
     assert tmux._tmux_base("/tmp/x.sock") == ["tmux", "-S", "/tmp/x.sock"]
 
 
+def test_tmux_names_are_renamed_with_the_expected_target(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux, "_run", lambda args: calls.append(args))
+    tmux.rename_session("main", "Main PC")
+    tmux.rename_window("main:1", "Agent Desk")
+    tmux.rename_pane("%7", "Codex")
+    assert calls == [
+        ["tmux", "rename-session", "-t", "main", "Main PC"],
+        ["tmux", "rename-window", "-t", "main:1", "Agent Desk"],
+        ["tmux", "select-pane", "-t", "%7", "-T", "Codex"],
+    ]
+
+
+def test_tmux_names_reject_empty_or_multiline_values():
+    for rename in (tmux.rename_session, tmux.rename_window, tmux.rename_pane):
+        try:
+            rename("target", "bad\nname")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected tmux name validation")
+
+
 def test_send_prompt_staged_records_load_paste_enter(monkeypatch):
     calls = []
 

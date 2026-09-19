@@ -394,3 +394,22 @@ def list_panes(socket_path: str | None = None) -> list[PaneInfo]:
         if len(parts) == 5:
             rows.append(PaneInfo(*parts))
     return rows
+
+
+def _valid_tmux_name(name: str) -> str:
+    name = name.strip()
+    if not name or any(char in name for char in "\r\n\x00"):
+        raise ValueError("tmux name must be non-empty and single-line")
+    return name
+
+
+def rename_session(target: str, name: str, socket_path: str | None = None) -> None:
+    _run([*_tmux_base(socket_path), "rename-session", "-t", target, _valid_tmux_name(name)])
+
+
+def rename_window(target: str, name: str, socket_path: str | None = None) -> None:
+    _run([*_tmux_base(socket_path), "rename-window", "-t", target, _valid_tmux_name(name)])
+
+
+def rename_pane(target: str, name: str, socket_path: str | None = None) -> None:
+    _run([*_tmux_base(socket_path), "select-pane", "-t", target, "-T", _valid_tmux_name(name)])

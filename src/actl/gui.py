@@ -543,21 +543,39 @@ class Board:
 
     def on_board(self) -> None:
         import tkinter as tk
+        from tkinter import messagebox, simpledialog, ttk
+        from actl.core import tmux
 
         self.set_status("pane 보드 로딩…")
         top = tk.Toplevel(self.root)
         top.title("JuActl — 전체 tmux pane 선택")
         top.configure(bg=BG)
-        top.geometry("820x620")
+        top.geometry("1080x680")
         tk.Label(
             top,
-            text="AGENT별 live pane · 선택하면 해당 Agent에 매핑",
-            bg=BG, fg=NEON, font=FONT_HDR,
+            text="tmux topology · session → window → pane",
+            bg=BG, fg=TXT, font=FONT_BIG,
         ).pack(anchor="w", padx=12, pady=10)
+        status = tk.Label(top, text="전체 pane 검색 중…", bg=BG, fg=DIM, anchor="w")
+        status.pack(fill="x", padx=12)
         body = tk.Frame(top, bg=BG)
-        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        status = tk.Label(body, text="전체 pane 검색 중…", bg=BG, fg=DIM, anchor="w")
-        status.pack(fill="x")
+        body.pack(fill="both", expand=True, padx=12, pady=8)
+        tree = ttk.Treeview(body, columns=("kind", "runtime", "path", "agent"), show="tree headings")
+        tree.heading("#0", text="tmux 이름 / pane")
+        tree.heading("kind", text="유형")
+        tree.heading("runtime", text="실행 프로세스")
+        tree.heading("path", text="작업 경로")
+        tree.heading("agent", text="감지 Agent")
+        tree.column("#0", width=270, anchor="w")
+        tree.column("kind", width=90, anchor="w")
+        tree.column("runtime", width=150, anchor="w")
+        tree.column("path", width=390, anchor="w")
+        tree.column("agent", width=150, anchor="w")
+        scroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        pane_by_item: dict[str, tuple[object, Detection]] = {}
 
         def work():
             return _all_panes()
@@ -567,39 +585,85 @@ class Board:
                 status.configure(text=f"검색 실패: {result}")
                 self.set_status("pane 보드 실패")
                 return
-            for child in body.winfo_children():
-                if child is not status:
-                    child.destroy()
-            groups: dict[str, list] = {}
+            for item in tree.get_children():
+                tree.delete(item)
+            pane_by_item.clear()
+            groups: dict[str, dict[str, list]] = {}
             for pane, det in result:
-                # Manual-first: show the tmux topology, not only detected agents.
-                # target is session:window.pane, so grouping preserves the user's
-                # mental model when several agents share one tmux server.
                 window = pane.target.rsplit(".", 1)[0]
-                groups.setdefault(window, []).append((pane, det))
+                session = window.split(":", 1)[0]
+                groups.setdefault(session, {}).setdefault(window, []).append((pane, det))
             if not groups:
                 status.configure(text="live pane 없음")
                 self.set_status("준비")
                 return
-            status.configure(text=f"{len(result)}개 pane · Agent 그룹을 선택하세요")
-            for window, entries in groups.items():
-                tk.Label(body, text=f"tmux {window}  ({len(entries)} panes)", bg=PANEL, fg=TXT,
-                         anchor="w", font=FONT_HDR).pack(fill="x", pady=(8, 2))
-                for pane, det in entries:
-                    target = pane.pane_id
-                    confidence = det.confidence
-                    detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
-                    text = f"{target}  {pane.target}  · {detected}  · {pane.current_command}  · {pane.current_path}  [{confidence}]"
-                    row = tk.Frame(body, bg=PANEL)
-                    row.pack(fill="x", pady=1)
-                    tk.Label(row, text=text, bg=PANEL, fg=TXT, anchor="w",
-                             font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True, padx=6, pady=4)
-                    tk.Button(
-                        row, text="Agent 지정", bg=ACC, fg="white", relief="flat",
-                        command=lambda p=pane, d=det: self._choose_manual_agent(p, d, top),
-                    ).pack(side="right", padx=5)
+            status.configure(text=f"{len(result)}개 pane · session/window/pane을 선택하세요")
+            for session, windows in groups.items():
+                sid = tree.insert("", "end", text=session, values=("session", "", "", ""), open=True)
+                for window, entries in windows.items():
+                    wid = tree.insert(sid, "end", text=window.split(":", 1)[1],
+                                      values=("window", "", "", ""), open=True)
+                    for pane, det in entries:
+                        detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
+                        pid = tree.insert(
+                            wid, "end", text=f"{pane.pane_id}  {pane.title or '(untitled)'}",
+                            values=("pane", pane.current_command, pane.current_path, detected),
+                        )
+                        pane_by_item[pid] = (pane, det)
             self.set_status("준비")
 
+        def selected_target() -> tuple[str, str] | None:
+            selection = tree.selection()
+            if not selection:
+                messagebox.showinfo("선택 필요", "이름을 바꾸거나 매핑할 tmux 노드를 선택하세요", parent=top)
+                return None
+            item = selection[0]
+            return item, tree.set(item, "kind")
+
+        def map_selected() -> None:
+            picked = selected_target()
+            if not picked:
+                return
+            item, kind = picked
+            if kind != "pane" or item not in pane_by_item:
+                messagebox.showinfo("pane 선택 필요", "Agent를 지정할 pane을 선택하세요", parent=top)
+                return
+            pane, det = pane_by_item[item]
+            self._choose_manual_agent(pane, det, top)
+
+        def rename_selected() -> None:
+            picked = selected_target()
+            if not picked:
+                return
+            item, kind = picked
+            if kind == "pane":
+                pane, _ = pane_by_item[item]
+                target, initial, rename = pane.pane_id, pane.title, tmux.rename_pane
+                prompt = f"{pane.pane_id} pane 이름"
+            elif kind == "window":
+                parent = tree.parent(item)
+                target = f"{tree.item(parent, 'text')}:{tree.item(item, 'text')}"
+                initial, rename, prompt = tree.item(item, "text"), tmux.rename_window, "window 이름"
+            else:
+                target = tree.item(item, "text")
+                initial, rename, prompt = target, tmux.rename_session, "session 이름"
+            name = simpledialog.askstring("tmux 이름 변경", prompt, initialvalue=initial, parent=top)
+            if name is None:
+                return
+            try:
+                rename(target, name)
+            except Exception as exc:
+                messagebox.showerror("이름 변경 실패", str(exc), parent=top)
+                return
+            top.destroy()
+            self.on_board()
+
+        actions = tk.Frame(top, bg=BG)
+        actions.pack(fill="x", padx=12, pady=(0, 12))
+        self._btn(actions, "Agent 지정", map_selected, primary=True).pack(side="left")
+        self._btn(actions, "이름 변경", rename_selected).pack(side="left", padx=8)
+        self._btn(actions, "새로고침", lambda: (top.destroy(), self.on_board())).pack(side="left")
+        tree.bind("<Double-1>", lambda _e: map_selected() if tree.selection() and tree.set(tree.selection()[0], "kind") == "pane" else rename_selected())
         self._bg(work, done)
 
     def _choose_manual_agent(self, pane, detected: Detection, board) -> None:
