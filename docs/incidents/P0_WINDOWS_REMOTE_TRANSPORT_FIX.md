@@ -39,6 +39,11 @@ Properties:
 - reconnect backoff is bounded and only the JuActl-owned process is closed;
 - orderly `exit` on close, with kill fallback for an owned stuck process;
 - remote prompt buffers use `set-buffer` in control mode, not a local temp path.
+- control mode attaches to an existing `session_id` discovered read-only via
+  `list-sessions`; it never starts a default/new tmux session. If no session
+  exists, connection fails closed instead of creating an anonymous shell;
+- topology notifications are drained by the GUI/TUI and trigger a debounced
+  refresh; a 60-second health refresh is the fallback for missed events.
 
 OpenSSH ControlMaster/ControlPersist was rejected because it is not supported
 by the Win32-OpenSSH environment. A remote daemon was rejected as unnecessary
@@ -64,6 +69,21 @@ After implementation self-test:
 - 14 live remote panes were returned in that smoke;
 - live Windows process/handshake counts are intentionally pending independent
   QA and are not inferred from the Linux smoke.
+
+The first implementation accidentally started bare `tmux -C`, which can create
+an empty default session per transport startup. That was corrected by probing
+an existing session and starting `tmux -C attach-session -t <session_id>`.
+The real ASUS regression smoke went from one session to one session after a
+full connect/list/close cycle.
+
+Claude Team mapping now compares the provider directory basename when the
+profile path comes from a remote host. MainPC's `C:\Users\...` path and ASUS's
+`/home/...` path therefore remain isolated while `.claude-team` still maps to
+Claude Team.
+
+The GUI now exposes “확실한 매핑”. It applies only the existing
+`reconcile()` strong-confidence rules, backs up the config, and leaves
+ambiguous or unsupported panes untouched.
 
 ## Changed files
 

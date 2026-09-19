@@ -16,7 +16,7 @@ import threading
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
-from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map
+from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map, reconcile
 from actl.core.registry import AGENTS
 from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
@@ -64,12 +64,18 @@ class Board:
         self.auto_refresh = True
         self.refreshing = False
         self.refresh_interval_ms = 12000
+        self.event_refresh_scheduled = False
         self.previous_rows: dict[str, dict] = {}
         self.log_visible = False
         self._build()
         self.refresh()
         self.root.after(100, self._drain)
-        self.root.after(self.refresh_interval_ms, self._auto_tick)
+        if self.ssh_target:
+            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
+            self.root.after(250, self._event_tick)
+            self.root.after(60000, self._health_tick)
+        else:
+            self.root.after(self.refresh_interval_ms, self._auto_tick)
 
     def _style(self) -> None:
         from tkinter import ttk
@@ -140,9 +146,10 @@ class Board:
         self.preview.grid(row=2, column=0, sticky="nsew", padx=18)
         cmdbar = tk.Frame(left, bg=PANEL)
         cmdbar.grid(row=1, column=0, sticky="ew", pady=12, padx=18)
-        for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("⇄ 재매핑", False),
+        for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("✓ 확실한 매핑", False), ("⇄ 재매핑", False),
                                ("▦ pane보드", False), ("↻ 새로고침", False)]:
-            fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "⇄ 재매핑": self.on_remap,
+            fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "✓ 확실한 매핑": self.on_auto_map,
+                  "⇄ 재매핑": self.on_remap,
                   "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
             self._btn(cmdbar, label, fn, primary=primary).pack(side="left", padx=3)
         tk.Label(left, text="마지막 응답", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=18, pady=(10, 0))
@@ -257,13 +264,37 @@ class Board:
 
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
-        self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
-        self.log(f"자동새로고침 {'켬' if self.auto_refresh else '끔'}")
+        if self.ssh_target:
+            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+        else:
+            self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
+        self.log(f"{'이벤트 감시' if self.ssh_target else '자동새로고침'} {'켬' if self.auto_refresh else '끔'}")
 
     def _auto_tick(self) -> None:
         if self.auto_refresh:
             self.refresh(quiet=True)
         self.root.after(self.refresh_interval_ms, self._auto_tick)
+
+    def _event_tick(self) -> None:
+        from actl.core.tmux import remote_events
+
+        events = remote_events()
+        if self.auto_refresh and events and not self.event_refresh_scheduled:
+            self.event_refresh_scheduled = True
+            self.root.after(250, self._event_refresh)
+        if self.ssh_target:
+            self.root.after(250, self._event_tick)
+
+    def _event_refresh(self) -> None:
+        self.event_refresh_scheduled = False
+        if self.auto_refresh:
+            self.refresh(quiet=True)
+
+    def _health_tick(self) -> None:
+        if self.auto_refresh:
+            self.refresh(quiet=True)
+        if self.ssh_target:
+            self.root.after(60000, self._health_tick)
 
     def rows_now(self) -> list[dict]:
         from actl.tui import _rows
@@ -297,7 +328,10 @@ class Board:
                 self.log(f"◆ {event['agent']} · {event['detail']}")
         self.previous_rows = {r["agent"]: r for r in self.rows}
         self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
-        self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
+        if self.ssh_target:
+            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+        else:
+            self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
         counts = {
             "정상": sum(r["state"] == "UP" for r in self.rows),
@@ -524,6 +558,31 @@ class Board:
                 text=f"[{i}] {det.pane.pane_id} {det.pane.current_path} — {det.evidence}",
                 command=lambda d=det: (self._do_remap(row, d), top.destroy()),
             ).pack(fill="x", padx=8, pady=2)
+
+    def on_auto_map(self) -> None:
+        """Apply only unambiguous, high-confidence live detections."""
+        self.set_status("확실한 매핑 확인 중…")
+        self.log("확실한 매핑 확인 중… (불확실한 pane은 유지)")
+
+        def work():
+            return reconcile(self.config, discover())
+
+        def done(result) -> None:
+            if isinstance(result, Exception):
+                self.set_status("자동 매핑 실패")
+                self.log(f"자동 매핑 실패: {result}")
+                return
+            updated, changes = result
+            if changes:
+                backup = backup_config()
+                save_config(updated)
+                self.config = updated
+                self.log(f"자동 매핑 적용: {', '.join(changes)} (백업 {backup.name})")
+            else:
+                self.log("자동 매핑 변경 없음 (확실한 후보만 적용)")
+            self.refresh()
+
+        self._bg(work, done)
 
     def _do_remap(self, row: dict, det) -> bool:
         try:

@@ -432,10 +432,16 @@ def run_tui() -> int:
         import time
 
         next_refresh = time.monotonic() + 12.0
+        next_health = time.monotonic() + 60.0
         while True:
             ch = cb.read_key(timeout=0.5)
             if ch is None:
-                if time.monotonic() >= next_refresh:
+                from actl.core.tmux import REMOTE_SSH_TARGET, remote_events
+
+                event_mode = bool(REMOTE_SSH_TARGET)
+                event_ready = bool(remote_events()) if event_mode else False
+                due = time.monotonic() >= (next_health if event_mode else next_refresh)
+                if event_ready or due:
                     config = load_config()
                     try:
                         from actl.cli import _auto_reconcile
@@ -446,6 +452,7 @@ def run_tui() -> int:
                     rows = _rows(config)
                     interval = 3.0 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12.0
                     next_refresh = time.monotonic() + interval
+                    next_health = time.monotonic() + 60.0
                     _render(rows, selected, "자동 새로고침 완료")
                 continue
             if ch in {"q", "\x03"}:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import queue
 import re
 import subprocess
 import shlex
@@ -67,6 +68,9 @@ class RemoteTransport:
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._retry_at = 0.0
+        self._events: queue.Queue[str] = queue.Queue()
+        self._responses: queue.Queue[object] | None = None
+        self._reader: threading.Thread | None = None
 
     def connect(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -77,9 +81,31 @@ class RemoteTransport:
             self.state = "DEGRADED"
             raise TmuxError(f"remote transport reconnect backoff active for {self.target}")
         self.state = "CONNECTING"
+        session_probe = _remote_args(["tmux", "list-sessions", "-F", "#{session_id}"])
+        try:
+            sessions = subprocess.run(
+                session_probe,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=10,
+                shell=False,
+                **_no_window(),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.state = "DEGRADED"
+            self._retry_at = now + 1.0
+            raise TmuxError(f"cannot inspect remote tmux sessions: {exc}") from exc
+        session_id = next((line.strip() for line in sessions.stdout.splitlines() if line.strip()), None)
+        if sessions.returncode or session_id is None:
+            self.state = "DEGRADED"
+            self._retry_at = now + 1.0
+            raise TmuxError("remote tmux has no existing session; refusing to create one")
         command = [
             "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            self.target, "tmux", "-C",
+            self.target, "tmux", "-C", "attach-session", "-t", shlex.quote(session_id),
         ]
         try:
             self._process = subprocess.Popen(
@@ -104,6 +130,8 @@ class RemoteTransport:
                     raise TmuxError("remote tmux control session closed during startup")
                 if startup_row.startswith("%end "):
                     break
+            self._reader = threading.Thread(target=self._read_loop, name="actl-tmux-events", daemon=True)
+            self._reader.start()
             self.state = "READY"
             self._retry_at = 0.0
         except (OSError, subprocess.SubprocessError, TmuxError) as exc:
@@ -126,6 +154,41 @@ class RemoteTransport:
         self.close()
         self.connect()
 
+    def _read_loop(self) -> None:
+        process = self._process
+        if process is None or process.stdout is None:
+            return
+        frame: list[str] | None = None
+        failed = False
+        for raw in iter(process.stdout.readline, ""):
+            row = raw.rstrip("\r\n")
+            if row.startswith("%begin "):
+                frame = []
+                failed = False
+                continue
+            if frame is not None and row.startswith("%error "):
+                failed = True
+                continue
+            if frame is not None and row.startswith("%end "):
+                output = "\n".join(frame) + ("\n" if frame else "")
+                response = TmuxError(output.strip() or "remote tmux command failed") if failed else subprocess.CompletedProcess(
+                    ["ssh", self.target, "tmux", "-C"], 0, output, ""
+                )
+                pending = self._responses
+                if pending is not None:
+                    pending.put(response)
+                frame = None
+                continue
+            if frame is not None:
+                frame.append(row)
+                continue
+            if frame is None and row.startswith("%"):
+                self._events.put(row)
+        self.state = "DEGRADED"
+        pending = self._responses
+        if pending is not None:
+            pending.put(TmuxError("remote transport closed unexpectedly"))
+
     def executeTmux(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         if not self._lock.acquire(timeout=10):
             raise TmuxError("remote transport busy: maximum in-flight operations is 1")
@@ -134,42 +197,29 @@ class RemoteTransport:
             assert self._process is not None and self._process.stdin is not None
             command = argv[1:] if argv and argv[0] == "tmux" else argv
             line = " ".join(_tmux_control_quote(part) for part in command)
+            response_queue: queue.Queue[object] = queue.Queue(maxsize=1)
+            self._responses = response_queue
             self._process.stdin.write(line + "\n")
             self._process.stdin.flush()
-            stdout: list[str] = []
-            in_frame = False
-            failed = False
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline:
-                assert self._process.stdout is not None
-                row = self._process.stdout.readline()
-                if not row:
-                    self.state = "DEGRADED"
-                    raise TmuxError("remote transport closed unexpectedly")
-                row = row.rstrip("\r\n")
-                if row.startswith("%begin "):
-                    in_frame = True
-                    stdout = []
-                    failed = False
-                    continue
-                if in_frame and row.startswith("%error "):
-                    failed = True
-                    continue
-                if in_frame and row.startswith("%end "):
-                    output = "\n".join(stdout)
-                    if stdout:
-                        output += "\n"
-                    if failed:
-                        raise TmuxError(output.strip() or "remote tmux command failed")
-                    return subprocess.CompletedProcess(
-                        ["ssh", self.target, "tmux", "-C"], 0, output, ""
-                    )
-                if in_frame:
-                    stdout.append(row)
-            self.state = "DEGRADED"
-            raise TmuxError("remote tmux command timed out after 10s")
+            try:
+                response = response_queue.get(timeout=10)
+            except queue.Empty as exc:
+                self.state = "DEGRADED"
+                raise TmuxError("remote tmux command timed out after 10s") from exc
+            if isinstance(response, TmuxError):
+                raise response
+            return response  # type: ignore[return-value]
         finally:
+            self._responses = None
             self._lock.release()
+
+    def drain_events(self) -> list[str]:
+        events: list[str] = []
+        while True:
+            try:
+                events.append(self._events.get_nowait())
+            except queue.Empty:
+                return events
 
     def close(self) -> None:
         process, self._process = self._process, None
@@ -184,7 +234,17 @@ class RemoteTransport:
         except (OSError, subprocess.TimeoutExpired):
             process.kill()
             process.wait()
+        reader = self._reader
+        self._reader = None
+        if reader is not None and reader is not threading.current_thread():
+            reader.join(timeout=1)
         self.state = "DISCONNECTED"
+
+
+def remote_events() -> list[str]:
+    if not REMOTE_SSH_TARGET or _REMOTE_TRANSPORT is None:
+        return []
+    return _REMOTE_TRANSPORT.drain_events()
 
 
 def set_remote_ssh(target: str | None) -> None:

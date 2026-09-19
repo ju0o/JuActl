@@ -223,9 +223,10 @@ def claude_profile(process: ProcessInfo, *, env_reader=None) -> Path | None:
     if not configured:
         return None
     resolved = Path(configured).expanduser().resolve(strict=False)
+    from actl.core.tmux import REMOTE_SSH_TARGET
     for agent in ("claude-team", "claude-pro"):
         expected = AGENTS[agent].data_dirs[0].expanduser().resolve(strict=False)
-        if resolved == expected:
+        if resolved == expected or (REMOTE_SSH_TARGET and resolved.name == expected.name):
             return resolved
     return None
 

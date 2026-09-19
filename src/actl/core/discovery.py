@@ -31,9 +31,14 @@ def _candidate(pane_pid: int, processes: list[ProcessInfo]) -> tuple[str | None,
         executable = _executable(process)
         profile = claude_profile(process, env_reader=process_environment)
         if profile:
+            from actl.core.tmux import REMOTE_SSH_TARGET
+
             for agent in ("claude-team", "claude-pro"):
                 expected = AGENTS[agent].data_dirs[0].expanduser().resolve(strict=False)
-                if profile == expected:
+                # MainPC paths and ASUS paths have different roots. The
+                # profile basename remains the provider-specific identity.
+                remote_profile_match = REMOTE_SSH_TARGET and Path(profile).name == expected.name
+                if profile == expected or remote_profile_match:
                     found.append((agent, "exact", f"pid {process.pid}: claude profile {expected}", process.pid))
                     break
         elif _command_has_claude(process.args):

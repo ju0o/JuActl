@@ -21,6 +21,12 @@ def test_claude_team_detection(monkeypatch):
     assert (result.agent, result.confidence) == ("claude-team", "exact")
 
 
+def test_remote_claude_team_profile_matches_by_provider_directory(monkeypatch):
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+    result = _detect(monkeypatch, [ProcessInfo(11, 10, "/x/claude")], {"CLAUDE_CONFIG_DIR": "/home/remote/.claude-team"})
+    assert (result.agent, result.confidence) == ("claude-team", "exact")
+
+
 def test_wrapped_claude_team_detection(monkeypatch):
     result = _detect(monkeypatch, [ProcessInfo(11, 10, "node /opt/claude.cmd --tui")], {"CLAUDE_CONFIG_DIR": str(AGENTS["claude-team"].data_dirs[0])})
     assert (result.agent, result.confidence) == ("claude-team", "exact")

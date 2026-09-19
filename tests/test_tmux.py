@@ -56,30 +56,39 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
 
 def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     class Pipe:
-        def __init__(self, rows=None):
-            self.rows = iter(rows or [])
+        def __init__(self, rows=None, on_write=None):
+            self.rows = list(rows or [])
+            self.on_write = on_write
             self.writes = []
 
         def write(self, value):
             self.writes.append(value)
+            if self.on_write:
+                self.on_write(value)
 
         def flush(self):
             pass
 
         def readline(self):
-            return next(self.rows, "")
+            while not self.rows:
+                import time
+                time.sleep(0.001)
+            return self.rows.pop(0)
 
         def close(self):
             pass
 
     class Process:
         def __init__(self):
-            self.stdin = Pipe()
             self.stdout = Pipe([
                 "%begin 1 0 0\n", "%end 1 0 0\n",
-                "%begin 1 1 1\n", "%p1\n", "%end 1 1 1\n",
-                "%begin 1 2 1\n", "%p2\n", "%end 1 2 1\n",
             ])
+            def respond(_value):
+                number = 1 if len(self.stdin.writes) == 1 else 2
+                self.stdout.rows.extend([
+                    f"%begin 1 {number} 1\n", f"%p{number}\n", f"%end 1 {number} 1\n",
+                ])
+            self.stdin = Pipe(on_write=respond)
             self.returncode = None
 
         def poll(self):
@@ -96,21 +105,50 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
 
     def fake_popen(*args, **kwargs):
         process = Process()
+        process.command = args[0]
         processes.append(process)
         return process
 
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$1\n"})(),
+    )
     monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
     tmux.set_remote_ssh("asus")
     try:
         assert tmux._run(["tmux", "list-panes", "-F", "#{pane_id}"]).stdout == "%p1\n"
         assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
         assert len(processes) == 1
+        assert "attach-session" in processes[0].command
+        assert "new-session" not in processes[0].command
         assert processes[0].stdin.writes == [
             '"list-panes" "-F" "#{pane_id}"\n',
             '"display-message" "-p" "#{pane_title}"\n',
         ]
     finally:
         tmux.set_remote_ssh(None)
+
+
+def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
+    spawned = []
+    monkeypatch.setattr(
+        tmux.subprocess,
+        "run",
+        lambda *args, **kwargs: type("Result", (), {"returncode": 1, "stdout": ""})(),
+    )
+    monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
+    transport = tmux.RemoteTransport("asus")
+    try:
+        try:
+            transport.executeTmux(["tmux", "list-panes"])
+        except tmux.TmuxError as exc:
+            assert "refusing to create one" in str(exc)
+        else:
+            raise AssertionError("empty remote tmux must fail closed")
+        assert spawned == []
+    finally:
+        transport.close()
 
 
 def test_socket_path_passed_as_dash_s(monkeypatch):

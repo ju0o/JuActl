@@ -17,6 +17,12 @@ The confirmed transport fix is now implemented locally for independent QA.
 The unrelated pre-existing worktree change remains
 `.commandcode/taste/taste.md` and is not part of this change.
 
+The persistent transport now fails closed when no tmux session exists. It
+probes `list-sessions` and attaches to an existing session ID; it does not run
+bare `tmux -C`, `new-session`, or `new-session -A`. This prevents reconnect
+churn from leaving anonymous empty tmux sessions behind. The GUI also offers a
+safe “확실한 매핑” action that applies only strong detections.
+
 The two reported incidents remain separate:
 
 | Track | Classification | Evidence |
