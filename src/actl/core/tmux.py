@@ -413,3 +413,19 @@ def rename_window(target: str, name: str, socket_path: str | None = None) -> Non
 
 def rename_pane(target: str, name: str, socket_path: str | None = None) -> None:
     _run([*_tmux_base(socket_path), "select-pane", "-t", target, "-T", _valid_tmux_name(name)])
+
+
+def create_session(name: str, cwd: str | None = None, socket_path: str | None = None) -> None:
+    args = [*_tmux_base(socket_path), "new-session", "-d", "-s", _valid_tmux_name(name)]
+    if cwd:
+        args.extend(["-c", cwd])
+    _run(args)
+
+
+def create_window(target: str, name: str, socket_path: str | None = None) -> None:
+    _run([*_tmux_base(socket_path), "new-window", "-d", "-t", target, "-n", _valid_tmux_name(name)])
+
+
+def split_pane(target: str, *, horizontal: bool = True, socket_path: str | None = None) -> None:
+    direction = "-h" if horizontal else "-v"
+    _run([*_tmux_base(socket_path), "split-window", "-d", direction, "-t", target])

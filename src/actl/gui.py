@@ -658,10 +658,67 @@ class Board:
             top.destroy()
             self.on_board()
 
+        def create_session() -> None:
+            name = simpledialog.askstring("새 session", "session 이름", parent=top)
+            if not name:
+                return
+            try:
+                tmux.create_session(name)
+            except Exception as exc:
+                messagebox.showerror("session 생성 실패", str(exc), parent=top)
+                return
+            top.destroy()
+            self.on_board()
+
+        def create_window() -> None:
+            picked = selected_target()
+            if not picked:
+                return
+            item, kind = picked
+            if kind == "session":
+                session = tree.item(item, "text")
+            elif kind == "window":
+                session = tree.item(tree.parent(item), "text")
+            elif kind == "pane":
+                pane, _ = pane_by_item[item]
+                session = pane.target.rsplit(".", 1)[0]
+            else:
+                return
+            name = simpledialog.askstring("새 window", f"{session} 안의 window 이름", parent=top)
+            if not name:
+                return
+            try:
+                tmux.create_window(session, name)
+            except Exception as exc:
+                messagebox.showerror("window 생성 실패", str(exc), parent=top)
+                return
+            top.destroy()
+            self.on_board()
+
+        def split_selected() -> None:
+            picked = selected_target()
+            if not picked:
+                return
+            item, kind = picked
+            if kind != "pane" or item not in pane_by_item:
+                messagebox.showinfo("pane 선택 필요", "분할할 pane을 선택하세요", parent=top)
+                return
+            pane, _ = pane_by_item[item]
+            try:
+                tmux.split_pane(pane.pane_id)
+            except Exception as exc:
+                messagebox.showerror("pane 생성 실패", str(exc), parent=top)
+                return
+            top.destroy()
+            self.on_board()
+
         actions = tk.Frame(top, bg=BG)
         actions.pack(fill="x", padx=12, pady=(0, 12))
         self._btn(actions, "Agent 지정", map_selected, primary=True).pack(side="left")
         self._btn(actions, "이름 변경", rename_selected).pack(side="left", padx=8)
+        self._btn(actions, "새 session", create_session).pack(side="left", padx=8)
+        self._btn(actions, "새 window", create_window).pack(side="left")
+        self._btn(actions, "pane 분할", split_selected).pack(side="left", padx=8)
         self._btn(actions, "새로고침", lambda: (top.destroy(), self.on_board())).pack(side="left")
         tree.bind("<Double-1>", lambda _e: map_selected() if tree.selection() and tree.set(tree.selection()[0], "kind") == "pane" else rename_selected())
         self._bg(work, done)

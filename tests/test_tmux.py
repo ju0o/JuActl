@@ -100,6 +100,19 @@ def test_tmux_names_reject_empty_or_multiline_values():
             raise AssertionError("expected tmux name validation")
 
 
+def test_tmux_create_commands_preserve_session_window_pane_hierarchy(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux, "_run", lambda args: calls.append(args))
+    tmux.create_session("desk")
+    tmux.create_window("desk", "agents")
+    tmux.split_pane("desk:agents.0")
+    assert calls == [
+        ["tmux", "new-session", "-d", "-s", "desk"],
+        ["tmux", "new-window", "-d", "-t", "desk", "-n", "agents"],
+        ["tmux", "split-window", "-d", "-h", "-t", "desk:agents.0"],
+    ]
+
+
 def test_send_prompt_staged_records_load_paste_enter(monkeypatch):
     calls = []
 
