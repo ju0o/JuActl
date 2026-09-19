@@ -65,6 +65,7 @@ class Board:
         self.refreshing = False
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
+        self.board_opened = False
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
         self.previous_rows: dict[str, dict] = {}
@@ -77,7 +78,6 @@ class Board:
             self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
             self.root.after(250, self._event_tick)
             self.root.after(60000, self._health_tick)
-            self.root.after(700, self.on_board)
         else:
             self.root.after(self.refresh_interval_ms, self._auto_tick)
 
@@ -138,8 +138,7 @@ class Board:
 
         left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        left.rowconfigure(2, weight=5)
-        left.rowconfigure(5, weight=3)
+        left.rowconfigure(2, weight=1)
         self.pane_title = tk.StringVar(value="Live pane — 에이전트를 선택하세요")
         tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
         self.detail_var = tk.StringVar(value="대상을 선택하면 상태와 작업 가능 여부가 표시됩니다")
@@ -148,6 +147,9 @@ class Board:
         self.preview = tk.Text(left, wrap="none", font=("Cascadia Mono", 12), bg=GLOBAL_NAV, fg="#f5f5f7",
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.preview.grid(row=2, column=0, sticky="nsew", padx=18)
+        # One monitor surface: pane stream, result output, and copy fallback
+        # should not compete for separate vertical panels.
+        self.resp = self.preview
         cmdbar = tk.Frame(left, bg=PANEL)
         cmdbar.grid(row=1, column=0, sticky="ew", pady=12, padx=18)
         for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("✓ 확실한 매핑", False), ("⇄ 재매핑", False),
@@ -156,15 +158,10 @@ class Board:
                   "⇄ 재매핑": self.on_remap,
                   "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
             self._btn(cmdbar, label, fn, primary=primary).pack(side="left", padx=3)
-        tk.Label(left, text="마지막 응답", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=18, pady=(10, 0))
-        self.resp = tk.Text(left, wrap="word", font=FONT, bg=PANEL2, fg=TXT,
-                            highlightthickness=0, borderwidth=0)
-        self.resp.grid(row=5, column=0, sticky="nsew", padx=18, pady=(6, 18))
-
         right = tk.Frame(main, bg=BG, highlightthickness=0)
         right.grid(row=0, column=1, sticky="nsew")
         right.rowconfigure(2, weight=1)
-        right.rowconfigure(6, weight=1)
+        right.rowconfigure(6, weight=0)
         tk.Label(right, text="에이전트", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=2, pady=(0, 10))
         tools = tk.Frame(right, bg=BG)
         tools.grid(row=1, column=0, sticky="ew", pady=(0, 4))
@@ -187,14 +184,14 @@ class Board:
         self.cards: dict[str, tk.Frame] = {}
         self.agent_cards = tk.Frame(right, bg=BG)
         self.agent_cards.grid(row=2, column=0, sticky="nsew")
-        tk.Label(right, text="메시지 전송", bg=BG, fg=TXT, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=(14, 4))
+        tk.Label(right, text="메시지 전송 · Ctrl+Enter", bg=BG, fg=TXT, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=(10, 3))
         from tkinter import scrolledtext
 
-        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL, fg=TXT,
+        self.msg = scrolledtext.ScrolledText(right, height=2, font=FONT, bg=PANEL, fg=TXT,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.msg.grid(row=4, column=0, sticky="ew", pady=2)
         sendrow = tk.Frame(right, bg=BG)
-        sendrow.grid(row=5, column=0, sticky="nsew", pady=2)
+        sendrow.grid(row=5, column=0, sticky="ew", pady=2)
         self.send_btn = self._btn(sendrow, "➤ 전송", self.on_send, primary=True)
         self.send_btn.pack(side="left")
         self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
@@ -369,6 +366,9 @@ class Board:
             self.selected = keep
             self._highlight(keep)
             self._update_action_state()
+        if self.ssh_target and not self.board_opened:
+            self.board_opened = True
+            self.root.after(80, self.on_board)
         self.refreshing = False
 
     def _render_cards(self, selected: str | None = None) -> None:

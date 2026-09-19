@@ -47,6 +47,15 @@ def test_persona_running_motion_stops_at_idle_prompt_phase():
     assert "self.root.after(180, self._motion_tick)" in gui
 
 
+def test_persona_monitor_uses_one_surface_and_serializes_initial_board_load():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert "self.resp = self.preview" in gui
+    assert 'self.board_opened = False' in gui
+    assert "if self.ssh_target and not self.board_opened" in gui
+    assert 'self.root.after(80, self.on_board)' in gui
+    assert 'height=2' in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery
