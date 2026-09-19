@@ -36,6 +36,23 @@ def test_doctor_json_is_safe_on_legacy_windows_console(monkeypatch):
     assert json.loads(out.getvalue())["ok"] is True
 
 
+def test_doctor_text_is_safe_on_legacy_windows_console(monkeypatch):
+    class Cp1252Stream(io.StringIO):
+        encoding = "cp1252"
+
+        def write(self, value):
+            value.encode("cp1252")
+            return super().write(value)
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _: "available")
+    monkeypatch.setattr(cli, "load_config", lambda: {"agents": {}})
+    out = Cp1252Stream()
+    with redirect_stdout(out):
+        assert cli._doctor(json_output=False) == 0
+    assert "python" in out.getvalue()
+
+
 def test_status_json_is_one_machine_readable_array(monkeypatch):
     monkeypatch.setattr(cli, "AGENTS", {"commandcode": cli.AGENTS["commandcode"]})
     monkeypatch.setattr(cli, "agent_status", lambda *_: {

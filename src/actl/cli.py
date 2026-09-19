@@ -69,6 +69,14 @@ def _doctor(*, json_output: bool = False) -> int:
     ok = True
     checks: list[dict[str, object]] = []
 
+    def console_safe(value: str) -> str:
+        encoding = getattr(_sys.stdout, "encoding", None) or "ascii"
+        try:
+            value.encode(encoding)
+            return value
+        except (LookupError, UnicodeEncodeError):
+            return value.encode(encoding, errors="replace").decode(encoding, errors="replace")
+
     def line(name: str, good: bool, detail: str = "") -> None:
         nonlocal ok
         if not good:
@@ -77,12 +85,14 @@ def _doctor(*, json_output: bool = False) -> int:
         if json_output:
             return
         mark = "✓" if good else "✗"
-        print(f"{mark} {name}" + (f" — {detail}" if detail else ""))
+        mark = "✓" if good else "✗"
+        line_text = f"{mark} {name}" + (f" — {detail}" if detail else "")
+        print(console_safe(line_text))
 
     def note(name: str, detail: str) -> None:
         checks.append({"name": name, "ok": None, "detail": detail})
         if not json_output:
-            print(f"- {name} — {detail}")
+            print(console_safe(f"- {name} — {detail}"))
 
     line("python", _sys.version_info >= (3, 10), _sys.version.split()[0])
     from actl.core.registry import registry_issues

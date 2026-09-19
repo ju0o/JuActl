@@ -41,8 +41,16 @@ def _default_inventory(runner=None) -> dict:
         [REAL_TMUX, "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}"],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
-    buffers = run([REAL_TMUX, "list-buffers", "-F", "#{buffer_name}"], capture_output=True, text=True)
+    buffers = run(
+        [REAL_TMUX, "list-buffers", "-F", "#{buffer_name}"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
     return {
         "panesExit": panes.returncode,
         "panes": [ln for ln in panes.stdout.splitlines() if ln.strip()],
