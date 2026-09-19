@@ -50,6 +50,7 @@ def test_windows_remote_format_is_quoted_for_remote_shell(monkeypatch):
     monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
     args = tmux._remote_args(["tmux", "list-panes", "-F", "#{pane_id}	#{session_name}"])
     script = base64.b64decode(args[-1]).decode("utf-16le")
+    assert "$a=@('ssh'" not in script
     assert "'#{pane_id}\t#{session_name}'" in script
 
 

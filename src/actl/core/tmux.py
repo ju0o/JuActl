@@ -78,7 +78,7 @@ def _remote_args(args: list[str]) -> list[str]:
         # Windows CRT quote rewriting around tmux formats such as #{pane_id}.
         # ssh joins remote arguments into a shell command; preserve quotes so
         # #{...} is not consumed as a remote-shell comment.
-        values = command + [shlex.quote(part) for part in args]
+        values = command[1:] + [shlex.quote(part) for part in args]
         ps = "$a=@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + "); & ssh.exe @a; exit $LASTEXITCODE"
         encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
         return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
