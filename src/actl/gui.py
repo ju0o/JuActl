@@ -65,11 +65,14 @@ class Board:
         self.refreshing = False
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
+        self.motion_phase = 0
+        self.motion_labels: dict[str, object] = {}
         self.previous_rows: dict[str, dict] = {}
         self.log_visible = False
         self._build()
         self.refresh()
         self.root.after(100, self._drain)
+        self.root.after(180, self._motion_tick)
         if self.ssh_target:
             self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
             self.root.after(250, self._event_tick)
@@ -276,6 +279,23 @@ class Board:
             self.refresh(quiet=True)
         self.root.after(self.refresh_interval_ms, self._auto_tick)
 
+    def _motion_tick(self) -> None:
+        """Animate only visible RUNNING cards; no remote work is performed."""
+        running = any(
+            row.get("activity_state") == "RUNNING"
+            and row.get("target") not in {"-", ""}
+            and not row.get("target", "").endswith("?")
+            for row in self.rows
+        )
+        if running:
+            self.motion_phase = (self.motion_phase + 1) % 4
+            frame = ("◐", "◓", "◑", "◒")[self.motion_phase]
+            for agent, label in list(self.motion_labels.items()):
+                row = next((item for item in self.rows if item["agent"] == agent), None)
+                if row and row.get("activity_state") == "RUNNING":
+                    label.configure(text=f"RUNNING {frame} · 작업중")
+        self.root.after(180, self._motion_tick)
+
     def _event_tick(self) -> None:
         from actl.core.tmux import remote_events
 
@@ -357,6 +377,7 @@ class Board:
         for child in self.agent_cards.winfo_children():
             child.destroy()
         self.cards = {}
+        self.motion_labels = {}
         query = self.filter_var.get().strip().lower()
         if query == "검색…":
             query = ""
@@ -406,8 +427,12 @@ class Board:
             else:
                 phase = "상태 확인 필요"
             activity = phase
-            tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Segoe UI", 9),
-                     anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
+            if r.get("activity_state") == "RUNNING":
+                activity = "RUNNING ◐ · 작업중"
+            phase_label = tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM,
+                                   font=("Segoe UI", 9), anchor="w", justify="left")
+            phase_label.pack(fill="x", padx=8, pady=(0, 6))
+            self.motion_labels[r["agent"]] = phase_label
             card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
             for child in (card, top):
                 child.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))

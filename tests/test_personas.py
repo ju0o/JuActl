@@ -39,6 +39,14 @@ def test_persona_windows_remote_copy_prefers_mainpc_clipboard():
     assert 'preferred = "local"' in gui
 
 
+def test_persona_running_motion_stops_at_idle_prompt_phase():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert "self.motion_phase" in gui
+    assert '"RUNNING ◐ · 작업중"' in gui
+    assert 'phase = "Prompt 대기"' in gui
+    assert "self.root.after(180, self._motion_tick)" in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery
