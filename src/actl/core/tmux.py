@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import base64
 import subprocess
 import tempfile
 import time
@@ -74,7 +75,12 @@ def _remote_args(args: list[str]) -> list[str]:
 
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
-        return command + [shlex.quote(part) for part in args]
+        # PowerShell's argument-array invocation avoids cmd.exe and Python's
+        # Windows CRT quote rewriting around tmux formats such as #{pane_id}.
+        values = command + args
+        ps = "$a=@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + "); & ssh.exe @a; exit $LASTEXITCODE"
+        encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+        return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
     return command + [" ".join(shlex.quote(part) for part in args)]
 
 
@@ -95,12 +101,12 @@ def _no_window() -> dict:
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
     remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
-    command = " ".join(args) if remote_windows else args
+    command = args
     try:
         return subprocess.run(
             command, check=check, capture_output=True, text=text,
             encoding="utf-8", errors="replace", timeout=10,
-            shell=remote_windows, **({} if remote_windows else _no_window()),
+            shell=False, **_no_window(),
         )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
@@ -119,14 +125,14 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
     remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
     command = _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"])
     proc = subprocess.run(
-        " ".join(command) if remote_windows else command,
+        command,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         check=False,
         timeout=10,
-        shell=remote_windows, **({} if remote_windows else _no_window()),
+        shell=False, **_no_window(),
     )
     if proc.returncode:
         return False
