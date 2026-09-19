@@ -255,10 +255,9 @@ def _all_panes() -> list:
     from actl.core.discovery import detect_pane
     from actl.core.tmux import list_panes
 
-    try:
-        panes = list_panes()
-    except Exception:
-        return []
+    # Do not turn SSH/tmux transport failures into an empty board. The GUI
+    # needs the exact error so a broken remote relay is not mistaken for zero panes.
+    panes = list_panes()
     return [(pane, detect_pane(pane)) for pane in panes]
 
 
