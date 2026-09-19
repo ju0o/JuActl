@@ -70,10 +70,11 @@ def _remote_args(args: list[str]) -> list[str]:
     import shlex
 
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
-    # Windows OpenSSH is reliable when command tokens are passed directly;
-    # routing through cmd.exe introduces a second, incompatible quote parser.
+    # Windows needs cmd.exe to reproduce the command-line parsing used by a
+    # normal PowerShell/cmd invocation. Keep the command itself free of
+    # double quotes so subprocess does not inject backslash escapes.
     if os.name == "nt":
-        return command + [shlex.quote(part) for part in args]
+        return ["cmd.exe", "/d", "/c", " ".join(command + [shlex.quote(part) for part in args])]
     return command + [" ".join(shlex.quote(part) for part in args)]
 
 
