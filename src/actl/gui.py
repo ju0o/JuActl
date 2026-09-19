@@ -67,6 +67,8 @@ class Board:
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
         self.last_event_refresh = 0.0
+        self.pending_event_panes: set[str] = set()
+        self.pending_topology_refresh = False
         self.board_opened = False
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
@@ -320,6 +322,10 @@ class Board:
             event.startswith(("%output", "%pane-mode-changed", "%pause", "%continue"))
             for event in events
         )
+        for event in events:
+            parts = event.split(maxsplit=2)
+            if state_candidate and len(parts) > 1 and parts[1].startswith("%"):
+                self.pending_event_panes.add(parts[1])
         now = time.monotonic()
         # tmux emits %output for every streamed character burst. Treat it as
         # a state candidate, not as permission to run a full remote refresh.
@@ -327,15 +333,38 @@ class Board:
         eligible = topology or (state_candidate and now - self.last_event_refresh >= 1.0)
         if self.auto_refresh and eligible and not self.event_refresh_scheduled:
             self.event_refresh_scheduled = True
+            self.pending_topology_refresh = self.pending_topology_refresh or topology
             self.root.after(120 if topology else 450, self._event_refresh)
         if self.ssh_target:
             self.root.after(250, self._event_tick)
 
     def _event_refresh(self) -> None:
         self.event_refresh_scheduled = False
-        if self.auto_refresh:
-            self.last_event_refresh = time.monotonic()
+        if not self.auto_refresh:
+            self.pending_event_panes.clear()
+            self.pending_topology_refresh = False
+            return
+        self.last_event_refresh = time.monotonic()
+        pane_ids = self.pending_event_panes
+        full = self.pending_topology_refresh
+        self.pending_event_panes = set()
+        self.pending_topology_refresh = False
+        if full:
             self.refresh(quiet=True)
+        elif pane_ids:
+            self._refresh_event_panes(pane_ids)
+
+    def _refresh_event_panes(self, pane_ids: set[str]) -> None:
+        """Refresh only the selected pane after a pane-local tmux event."""
+        row = self.current()
+        if not row or row.get("target") not in pane_ids:
+            return
+        target = row["target"]
+        self._bg(lambda: _pane_preview(target), self._event_pane_done)
+
+    def _event_pane_done(self, result) -> None:
+        self.preview.delete("1.0", "end")
+        self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
 
     def _health_tick(self) -> None:
         if self.auto_refresh:

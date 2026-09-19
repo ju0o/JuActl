@@ -63,6 +63,13 @@ def test_persona_event_watch_throttles_output_bursts():
     assert 'self.root.after(120 if topology else 450, self._event_refresh)' in gui
 
 
+def test_persona_pane_event_refresh_is_targeted_not_full_rows_refresh():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert "self.pending_event_panes" in gui
+    assert "self._refresh_event_panes(pane_ids)" in gui
+    assert "self._bg(lambda: _pane_preview(target), self._event_pane_done)" in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery
