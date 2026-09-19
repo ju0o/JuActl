@@ -50,7 +50,7 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     args = tmux._remote_args(["tmux", "list-panes", "-F", "#{pane_id}	#{session_name}"])
     assert args == [
         "ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
-        "tmux", "list-panes", "-F", "#{pane_id}\t#{session_name}",
+        "tmux", "list-panes", "-F", "'#{pane_id}\t#{session_name}'",
     ]
 
 

@@ -73,9 +73,9 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
-        # Keep tmux format arguments intact; PowerShell command-string
-        # marshalling drops `#{...}` before tmux sees `-F`.
-        return command + args
+        # ssh concatenates remote argv into a shell command. Quote each
+        # argument so tmux formats beginning with `#` survive that shell.
+        return command + [shlex.quote(part) for part in args]
     return command + [" ".join(shlex.quote(part) for part in args)]
 
 
