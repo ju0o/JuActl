@@ -175,7 +175,7 @@ class Board:
         search.bind("<FocusIn>", lambda _e: search.delete(0, "end") if search.get() == "검색…" else None)
         search.bind("<KeyRelease>", lambda _e: self._render_cards(self.selected))
         self.filter_mode = tk.StringVar(value="전체")
-        mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "정상", "문제", "미확인",
+        mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "결과 도착", "작업중", "Prompt 대기", "연결됨",
                                   command=lambda _v: self._render_cards(self.selected))
         mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white",
                             relief="flat", highlightthickness=0)
@@ -224,7 +224,8 @@ class Board:
         win.geometry("430x250")
         tk.Label(win, text="COMMAND // 실행할 작업 선택", bg=BG, fg=NEON, font=FONT_HDR).pack(anchor="w", padx=12, pady=10)
         actions = [("새로고침", self.refresh), ("자동새로고침 전환", self.toggle_auto),
-                   ("문제만 보기", lambda: (self.filter_mode.set("문제"), self._render_cards(self.selected))),
+                   ("작업중만 보기", lambda: (self.filter_mode.set("작업중"), self._render_cards(self.selected))),
+                   ("결과 도착만 보기", lambda: (self.filter_mode.set("결과 도착"), self._render_cards(self.selected))),
                    ("전체 보기", lambda: (self.filter_mode.set("전체"), self._render_cards(self.selected))),
                    ("검색창 포커스", lambda: self.search.focus_set())]
         for label, action in actions:
@@ -292,6 +293,18 @@ class Board:
                 if row and row.get("activity_state") == "RUNNING":
                     label.configure(text=f"RUNNING {frame} · 작업중")
         self.root.after(180, self._motion_tick)
+
+    @staticmethod
+    def _phase(row: dict) -> str:
+        if row.get("result_state") == "READY":
+            return "결과 도착"
+        if row.get("activity_state") == "RUNNING":
+            return "작업중"
+        if row.get("activity_state") == "IDLE":
+            return "Prompt 대기"
+        if row.get("state") == "UP":
+            return "연결됨"
+        return "상태 확인 필요"
 
     def _event_tick(self) -> None:
         from actl.core.tmux import remote_events
@@ -389,10 +402,7 @@ class Board:
             if r["target"] in {"-", ""} or r["target"].endswith("?"):
                 continue
             haystack = f"{r['display']} {r['agent']} {r['target']}".lower()
-            matches_mode = (mode == "전체" or
-                            (mode == "정상" and r["state"] == "UP") or
-                            (mode == "문제" and r["state"] in {"DOWN", "MISMATCH"}) or
-                            (mode == "미확인" and r["state"] not in {"UP", "DOWN", "MISMATCH"}))
+            matches_mode = mode == "전체" or self._phase(r) == mode
             if matches_mode and (not query or query in haystack):
                 visible.append(r)
         visible.sort(key=lambda r: (
@@ -416,16 +426,7 @@ class Board:
                      font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
             sub = (r["preview"] or r["detail"] or "—")[:60]
-            if r.get("result_state") == "READY":
-                phase = "결과 도착"
-            elif r.get("activity_state") == "RUNNING":
-                phase = "작업중"
-            elif r.get("activity_state") == "IDLE":
-                phase = "Prompt 대기"
-            elif r.get("state") == "UP":
-                phase = "연결됨"
-            else:
-                phase = "상태 확인 필요"
+            phase = self._phase(r)
             activity = phase
             if r.get("activity_state") == "RUNNING":
                 activity = "RUNNING ◐ · 작업중"

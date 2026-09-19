@@ -27,9 +27,9 @@ def test_persona_operator_refresh_is_event_first_with_health_fallback():
 def test_persona_dashboard_only_shows_actionable_mappings_and_clear_phases():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert 'r["target"] in {"-", ""}' in gui
-    assert 'phase = "결과 도착"' in gui
-    assert 'phase = "작업중"' in gui
-    assert 'phase = "Prompt 대기"' in gui
+    assert 'return "결과 도착"' in gui
+    assert 'return "작업중"' in gui
+    assert 'return "Prompt 대기"' in gui
     assert 'columns=("kind", "runtime", "path", "agent", "mapped")' in gui
 
 
@@ -43,7 +43,7 @@ def test_persona_running_motion_stops_at_idle_prompt_phase():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert "self.motion_phase" in gui
     assert '"RUNNING ◐ · 작업중"' in gui
-    assert 'phase = "Prompt 대기"' in gui
+    assert 'return "Prompt 대기"' in gui
     assert "self.root.after(180, self._motion_tick)" in gui
 
 
