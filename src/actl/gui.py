@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
@@ -65,6 +66,7 @@ class Board:
         self.refreshing = False
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
+        self.last_event_refresh = 0.0
         self.board_opened = False
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
@@ -310,15 +312,29 @@ class Board:
         from actl.core.tmux import remote_events
 
         events = remote_events()
-        if self.auto_refresh and events and not self.event_refresh_scheduled:
+        topology = any(
+            event.startswith(("%sessions-changed", "%window-", "%layout-change", "%session-"))
+            for event in events
+        )
+        state_candidate = any(
+            event.startswith(("%output", "%pane-mode-changed", "%pause", "%continue"))
+            for event in events
+        )
+        now = time.monotonic()
+        # tmux emits %output for every streamed character burst. Treat it as
+        # a state candidate, not as permission to run a full remote refresh.
+        # topology changes remain immediate; output candidates are throttled.
+        eligible = topology or (state_candidate and now - self.last_event_refresh >= 1.0)
+        if self.auto_refresh and eligible and not self.event_refresh_scheduled:
             self.event_refresh_scheduled = True
-            self.root.after(250, self._event_refresh)
+            self.root.after(120 if topology else 450, self._event_refresh)
         if self.ssh_target:
             self.root.after(250, self._event_tick)
 
     def _event_refresh(self) -> None:
         self.event_refresh_scheduled = False
         if self.auto_refresh:
+            self.last_event_refresh = time.monotonic()
             self.refresh(quiet=True)
 
     def _health_tick(self) -> None:

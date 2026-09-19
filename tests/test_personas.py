@@ -56,6 +56,13 @@ def test_persona_monitor_uses_one_surface_and_serializes_initial_board_load():
     assert 'height=2' in gui
 
 
+def test_persona_event_watch_throttles_output_bursts():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert 'event.startswith("%output")' in gui or '"%output", "%pane-mode-changed"' in gui
+    assert 'now - self.last_event_refresh >= 1.0' in gui
+    assert 'self.root.after(120 if topology else 450, self._event_refresh)' in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery
