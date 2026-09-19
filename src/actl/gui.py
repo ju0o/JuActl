@@ -19,7 +19,7 @@ from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import STRONG_CONFIDENCE, discover, manual_map
 from actl.core.registry import AGENTS
 from actl.core.validation import validate_target
-from actl.tui import STATE_KO, _pane_board, _pane_preview, _unmapped_panes, _verify_row
+from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
 BG = "#0a0a12"
@@ -541,14 +541,64 @@ class Board:
         self.refresh()
 
     def on_board(self) -> None:
+        import tkinter as tk
+
         self.set_status("pane 보드 로딩…")
+        top = tk.Toplevel(self.root)
+        top.title("JuActl — 전체 tmux pane 선택")
+        top.configure(bg=BG)
+        top.geometry("820x620")
+        tk.Label(
+            top,
+            text="AGENT별 live pane · 선택하면 해당 Agent에 매핑",
+            bg=BG, fg=NEON, font=FONT_HDR,
+        ).pack(anchor="w", padx=12, pady=10)
+        body = tk.Frame(top, bg=BG)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        status = tk.Label(body, text="전체 pane 검색 중…", bg=BG, fg=DIM, anchor="w")
+        status.pack(fill="x")
 
         def work():
-            return _pane_board(self.config)
+            return _all_panes()
 
         def done(result) -> None:
-            self.preview.delete("1.0", "end")
-            self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+            if isinstance(result, Exception):
+                status.configure(text=f"검색 실패: {result}")
+                self.set_status("pane 보드 실패")
+                return
+            for child in body.winfo_children():
+                if child is not status:
+                    child.destroy()
+            groups: dict[str, list] = {}
+            for pane, det in result:
+                groups.setdefault(det.agent or "unknown", []).append((pane, det))
+            if not groups:
+                status.configure(text="live pane 없음")
+                self.set_status("준비")
+                return
+            status.configure(text=f"{len(result)}개 pane · Agent 그룹을 선택하세요")
+            for agent, entries in groups.items():
+                label = AGENTS[agent].display_name if agent in AGENTS else "미감지 pane"
+                tk.Label(body, text=f"▚ {label}  ({len(entries)})", bg=PANEL, fg=NEON,
+                         anchor="w", font=FONT_HDR).pack(fill="x", pady=(8, 2))
+                for pane, det in entries:
+                    target = pane.pane_id
+                    confidence = det.confidence
+                    text = f"{target}  {pane.target}  · {pane.current_command}  · {pane.current_path}  [{confidence}]"
+                    row = tk.Frame(body, bg=PANEL)
+                    row.pack(fill="x", pady=1)
+                    tk.Label(row, text=text, bg=PANEL, fg=TXT, anchor="w",
+                             font=("Consolas", 9)).pack(side="left", fill="x", expand=True, padx=6, pady=4)
+                    if det.agent:
+                        tk.Button(
+                            row, text="선택/매핑", bg="#003844", fg=NEON, relief="flat",
+                            command=lambda d=det, a=det.agent, w=top: (
+                                self._do_remap({"agent": a, "display": AGENTS[a].display_name}, d),
+                                w.destroy(),
+                            ),
+                        ).pack(side="right", padx=5)
+                    else:
+                        tk.Label(row, text="미감지", bg=PANEL, fg=DIM).pack(side="right", padx=8)
             self.set_status("준비")
 
         self._bg(work, done)
