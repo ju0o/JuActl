@@ -77,9 +77,10 @@ def _remote_args(args: list[str]) -> list[str]:
     # differently from an interactive cmd invocation; let cmd.exe apply the
     # platform's native quoting once at this boundary.
     if os.name == "nt":
-        # Do not use list2cmdline here: its backslash-escaped quotes survive
-        # cmd.exe /c and reach ssh literally as \"...\".
-        return ["cmd.exe", "/d", "/c", " ".join(command[:-1]) + f' "{command[-1]}"']
+        # Do not add double quotes around the remote command: subprocess adds
+        # backslashes for cmd.exe /c and they reach ssh literally. The
+        # command already contains POSIX single-quote escaping for its shell.
+        return ["cmd.exe", "/d", "/c", " ".join(command)]
     return command
 
 
