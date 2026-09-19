@@ -69,19 +69,12 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     import shlex
 
-    command = [
-        "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-        REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args),
-    ]
-    # Windows OpenSSH parses a Python-created single remote-command argument
-    # differently from an interactive cmd invocation; let cmd.exe apply the
-    # platform's native quoting once at this boundary.
+    command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
+    # Windows OpenSSH is reliable when command tokens are passed directly;
+    # routing through cmd.exe introduces a second, incompatible quote parser.
     if os.name == "nt":
-        # Do not add double quotes around the remote command: subprocess adds
-        # backslashes for cmd.exe /c and they reach ssh literally. The
-        # command already contains POSIX single-quote escaping for its shell.
-        return ["cmd.exe", "/d", "/c", " ".join(command)]
-    return command
+        return command + [shlex.quote(part) for part in args]
+    return command + [" ".join(shlex.quote(part) for part in args)]
 
 
 def _no_window() -> dict:
