@@ -44,6 +44,19 @@ def test_tmux_output_replaces_invalid_title_bytes(monkeypatch):
     assert captured["errors"] == "replace"
 
 
+def test_list_panes_keeps_batched_pane_pid(monkeypatch):
+    monkeypatch.setattr(
+        tmux,
+        "_run",
+        lambda *args, **kwargs: type(
+            "Result", (), {"stdout": "%1\ts:0.0\tcodex\t/tmp\ttitle\t123\n"}
+        )(),
+    )
+    panes = tmux.list_panes()
+    assert len(panes) == 1
+    assert panes[0].pane_pid == 123
+
+
 def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     monkeypatch.setattr(tmux.os, "name", "nt")
     monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")

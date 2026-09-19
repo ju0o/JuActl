@@ -82,7 +82,7 @@ def _candidate(pane_pid: int, processes: list[ProcessInfo]) -> tuple[str | None,
 
 def detect_pane(pane: PaneInfo) -> Detection:
     try:
-        pane_pid = int(pane_field(pane.pane_id, "#{pane_pid}"))
+        pane_pid = pane.pane_pid if pane.pane_pid is not None else int(pane_field(pane.pane_id, "#{pane_pid}"))
     except (TmuxError, ValueError):
         return Detection(pane, None, "unknown", "pane PID unavailable")
     agent, confidence, evidence = _candidate(pane_pid, pane_processes(pane_pid))

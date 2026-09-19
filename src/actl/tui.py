@@ -32,11 +32,12 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
-def _rows(config: dict) -> list[dict]:
+def _rows(config: dict, detections=None) -> list[dict]:
     """One row per agent: live target, status, busy/result, preview, candidates."""
     from actl.core.discovery import discover as _disc
 
-    all_dets = [d for d in _disc() if d.agent and d.confidence in STRONG_CONFIDENCE]
+    all_dets = [d for d in (detections if detections is not None else _disc())
+                if d.agent and d.confidence in STRONG_CONFIDENCE]
     by_agent: dict[str, list] = {}
     for d in all_dets:
         by_agent.setdefault(d.agent, []).append(d)

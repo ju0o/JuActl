@@ -608,13 +608,17 @@ def capture_pane(target: str, history: int = 500, socket_path: str | None = None
 
 
 def list_panes(socket_path: str | None = None) -> list[PaneInfo]:
-    fmt = "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}"
+    fmt = "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}\t#{pane_pid}"
     out = _run([*_tmux_base(socket_path), "list-panes", "-a", "-F", fmt]).stdout
     rows: list[PaneInfo] = []
     for line in out.splitlines():
-        parts = line.split("\t", 4)
-        if len(parts) == 5:
-            rows.append(PaneInfo(*parts))
+        parts = line.split("\t", 5)
+        if len(parts) == 6:
+            try:
+                pane_pid = int(parts[5])
+            except ValueError:
+                pane_pid = None
+            rows.append(PaneInfo(*parts[:5], pane_pid=pane_pid))
     return rows
 
 

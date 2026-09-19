@@ -36,6 +36,7 @@ class PaneInfo:
     current_command: str
     current_path: str
     title: str
+    pane_pid: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -44,4 +45,5 @@ class PaneInfo:
             "current_command": self.current_command,
             "current_path": self.current_path,
             "title": self.title,
+            "pane_pid": self.pane_pid,
         }

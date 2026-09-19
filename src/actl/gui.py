@@ -123,6 +123,9 @@ class Board:
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
         tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg="#a1a1a6",
                  font=("Segoe UI", 9)).pack(side="left", pady=12)
+        tk.Button(top, text="업데이트", command=self.on_update,
+                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
+                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
         self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
                   bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
@@ -276,6 +279,52 @@ class Board:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self.log(f"{'이벤트 감시' if self.ssh_target else '자동새로고침'} {'켬' if self.auto_refresh else '끔'}")
 
+    def on_update(self) -> None:
+        from tkinter import messagebox
+
+        self.set_status("업데이트 확인 중…")
+        self._bg(self._check_update, lambda result: self._update_done(result, messagebox))
+
+    @staticmethod
+    def _check_update():
+        from actl.core import updater
+
+        release = updater.check_latest()
+        if updater._version(release["version"]) <= updater._version(updater.CURRENT_VERSION):
+            return None
+        return release
+
+    def _update_done(self, result, messagebox) -> None:
+        if isinstance(result, Exception):
+            self.set_status("업데이트 확인 실패")
+            self.log(f"업데이트 확인 실패: {result}")
+            return
+        if result is None:
+            self.set_status("최신 버전")
+            self.log("현재 최신 버전입니다")
+            return
+        from actl.core import updater
+
+        if not messagebox.askyesno("JuActl 업데이트", f"새 버전 {result['version']}을 설치할까요?", parent=self.root):
+            self.set_status("준비")
+            return
+        self.set_status("업데이트 다운로드 중…")
+
+        def work():
+            installer = updater.download_verified(result)
+            updater.launch_installer(installer)
+            return installer
+
+        def done(downloaded) -> None:
+            if isinstance(downloaded, Exception):
+                self.set_status("업데이트 실패")
+                self.log(f"업데이트 실패: {downloaded}")
+                return
+            self.log("업데이트 설치를 시작했습니다. 프로그램을 종료합니다.")
+            self.root.after(200, self.root.destroy)
+
+        self._bg(work, done)
+
     def _auto_tick(self) -> None:
         if self.auto_refresh:
             self.refresh(quiet=True)
@@ -373,9 +422,16 @@ class Board:
             self.root.after(60000, self._health_tick)
 
     def rows_now(self) -> list[dict]:
+        from actl.core.discovery import discover, reconcile
         from actl.tui import _rows
 
-        return _rows(self.config)
+        detections = discover()
+        updated, changes = reconcile(self.config, detections)
+        if changes:
+            backup_config()
+            save_config(updated)
+            self.config = updated
+        return _rows(self.config, detections)
 
     def refresh(self, quiet: bool = False) -> None:
         if self.refreshing:
@@ -816,13 +872,19 @@ class Board:
             name = simpledialog.askstring("tmux 이름 변경", prompt, initialvalue=initial, parent=top)
             if name is None:
                 return
-            try:
-                rename(target, name)
-            except Exception as exc:
-                messagebox.showerror("이름 변경 실패", str(exc), parent=top)
-                return
-            top.destroy()
-            self.on_board()
+            status.configure(text=f"{target} 이름 변경 중…")
+            self.set_status("이름 변경 중…")
+
+            def done(result) -> None:
+                if isinstance(result, Exception):
+                    messagebox.showerror("이름 변경 실패", str(result), parent=top)
+                    self.set_status("이름 변경 실패")
+                    return
+                top.destroy()
+                self.board_opened = False
+                self.refresh()
+
+            self._bg(lambda: rename(target, name), done)
 
         def create_session() -> None:
             name = simpledialog.askstring("새 session", "session 이름", parent=top)
@@ -915,14 +977,32 @@ class Board:
             ):
                 return
             try:
-                tmux.move_pane(pane.pane_id, destination)
-            except Exception as exc:
-                messagebox.showerror("pane 이동 실패", str(exc), parent=top)
+                status.configure(text=f"{pane.pane_id} → {destination} 이동 중…")
+                self.set_status("pane 이동 중…")
+            except Exception:
                 return
-            self.log(f"{pane.pane_id} → {destination} 이동됨")
-            top.destroy()
-            self.refresh()
-            self.on_board()
+
+            def done(result) -> None:
+                if isinstance(result, Exception):
+                    messagebox.showerror("pane 이동 실패", str(result), parent=top)
+                    self.set_status("pane 이동 실패")
+                    return
+                self.log(f"{pane.pane_id} → {destination} 이동됨")
+                top.destroy()
+                self.board_opened = False
+                self.refresh()
+
+            self._bg(lambda: tmux.move_pane(pane.pane_id, destination), done)
+
+        def drag_motion(event) -> None:
+            source_item = drag_state.get("source")
+            if not source_item:
+                return
+            item = tree.identify_row(event.y)
+            if item:
+                tree.selection_set(item)
+                kind = tree.set(item, "kind")
+                status.configure(text="window에 drop하면 pane 이동 확인창이 표시됩니다" if kind in {"window", "session"} else "pane 이동 대상 window를 선택하세요")
 
         actions = tk.Frame(top, bg=BG)
         actions.pack(fill="x", padx=12, pady=(0, 12))
@@ -933,6 +1013,7 @@ class Board:
         self._btn(actions, "pane 분할", split_selected).pack(side="left", padx=8)
         self._btn(actions, "새로고침", lambda: (top.destroy(), self.on_board())).pack(side="left")
         tree.bind("<ButtonPress-1>", drag_start, add="+")
+        tree.bind("<B1-Motion>", drag_motion, add="+")
         tree.bind("<ButtonRelease-1>", drag_drop, add="+")
         tree.bind("<Double-1>", lambda _e: map_selected() if tree.selection() and tree.set(tree.selection()[0], "kind") == "pane" else rename_selected())
         self._bg(work, done)
