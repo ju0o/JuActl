@@ -74,8 +74,10 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
-        remote_command = " ".join(shlex.quote(part) for part in args)
-        values = command[1:] + [remote_command]
+        # Pass remote tmux arguments as distinct ssh.exe arguments. Keeping
+        # the `#{...}` format as one argument avoids PowerShell/OpenSSH
+        # dropping it before tmux sees `-F`.
+        values = command[1:] + args
         ps = (
             "$a=@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + "); "
             "$o=[IO.Path]::GetTempFileName(); $e=[IO.Path]::GetTempFileName(); "
