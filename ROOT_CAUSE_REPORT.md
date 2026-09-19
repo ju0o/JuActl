@@ -237,3 +237,44 @@ installer/MainPC E2E run remains an independent-QA gate.
 - The DA/escape response leak remains UNKNOWN and was not filtered or altered.
 - Windows process/handshake counts, fault recovery, and GUI visual behavior
   require the independent MainPC QA run.
+
+## Independent QA collision observed during post-fix verification
+
+The Linux-side coexistence harness was stopped after the ASUS tmux server
+changed underneath it. This is not a PASS for the 30-minute gate.
+
+Observed on 2026-09-20 Asia/Seoul:
+
+- Baseline before the run: `$1 jucontrol 5` with two attached clients.
+- The fixed transport, in one process, completed five discoveries with one
+  SSH process and no session inventory change. Five separate CLI invocations
+  also completed with no new tmux session.
+- During the coexistence run, the remote journal recorded 210 accepted and 210
+  disconnected SSH sessions from MainPC `100.86.210.95` between 00:28 and
+  00:47. This is the same reconnect-churn signature as the incident report;
+  the Linux harness originated from `100.82.108.31`.
+- At 00:45:36 a new tmux server was started. The previous `$1 jucontrol 5`
+  inventory was replaced by `$0 0 1`; the remaining `$0` control client was
+  associated with an SSH session from `100.86.210.95`.
+- The PTY capture before interruption contained 6.9 MB and zero occurrences
+  of both reported response patterns: `ESC[?61;4;6...c` and
+  `ESC[>0;10;1c`. This is not sufficient to close the DA gate because the
+  coexistence run was invalidated by the tmux restart.
+
+Classification:
+
+- `OBSERVED`: concurrent MainPC SSH churn remained active during the test.
+- `OBSERVED`: the tmux server/session topology changed during that churn.
+- `UNKNOWN`: whether the MainPC churn directly killed the prior tmux server;
+  no tmux crash/oom record was available in the readable journal slice.
+- `NOT_PROVEN`: 30-minute coexistence gate and MainPC-installed-build result.
+
+Safety change after this observation: `RemoteTransport` now selects only a
+listed session with a non-numeric session name and `session_windows > 0`;
+numeric auto-numbered sessions such as `$0` are rejected fail-closed instead
+of being adopted. A live check against the resulting `$0 0 2 2` session
+returned `remote tmux has no existing session; refusing to create one` and
+left the inventory unchanged. This prevents the fixed client from attaching
+to the post-restart numeric session, but cannot control an older MainPC binary
+that is still generating SSH/tmux churn. The MainPC old client must be stopped
+before repeating the independent gate.

@@ -81,7 +81,7 @@ class RemoteTransport:
             self.state = "DEGRADED"
             raise TmuxError(f"remote transport reconnect backoff active for {self.target}")
         self.state = "CONNECTING"
-        session_probe = _remote_args(["tmux", "list-sessions", "-F", "#{session_id}"])
+        session_probe = _remote_args(["tmux", "list-sessions", "-F", "#{session_id}\t#{session_name}\t#{session_windows}"])
         try:
             sessions = subprocess.run(
                 session_probe,
@@ -98,7 +98,16 @@ class RemoteTransport:
             self.state = "DEGRADED"
             self._retry_at = now + 1.0
             raise TmuxError(f"cannot inspect remote tmux sessions: {exc}") from exc
-        session_id = next((line.strip() for line in sessions.stdout.splitlines() if line.strip()), None)
+        session_id = None
+        for line in sessions.stdout.splitlines():
+            candidate, _, rest = line.partition("\t")
+            name, _, windows = rest.partition("\t")
+            try:
+                if candidate.strip() and name.strip() and not name.strip().isdigit() and int(windows) > 0:
+                    session_id = candidate.strip()
+                    break
+            except ValueError:
+                continue
         if sessions.returncode or session_id is None:
             self.state = "DEGRADED"
             self._retry_at = now + 1.0

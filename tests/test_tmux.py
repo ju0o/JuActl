@@ -112,7 +112,7 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$1\n"})(),
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$1\tjucontrol\t5\n"})(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
     tmux.set_remote_ssh("asus")
@@ -135,7 +135,7 @@ def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 1, "stdout": ""})(),
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$0\t0\t1\n"})(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
     transport = tmux.RemoteTransport("asus")
