@@ -1,6 +1,6 @@
 """JuActl GUI: Windows native agent board (tkinter, stdlib only).
 
-Dark theme, status colors, card layout. No terminal input — buttons and
+Apple-inspired light canvas, dark live-pane tile, status colors, card layout. No terminal input — buttons and
 clicks only. Reuses the same remote backend as the TUI (--ssh delegation
 for tmux/ps/extract).
 
@@ -16,29 +16,29 @@ import threading
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
-from actl.core.discovery import STRONG_CONFIDENCE, discover, manual_map
+from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map
 from actl.core.registry import AGENTS
 from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
-BG = "#0a0a12"
-PANEL = "#12121f"
-PANEL2 = "#1a1a2e"
-LINE = "#2a2a45"
-TXT = "#e8e8f2"
-DIM = "#6e6e8c"
-NEON = "#00f0ff"
-MAGENTA = "#ff2fb3"
-LIME = "#a6ff00"
-OK = "#00ff9d"
-WARN = "#ffb300"
-BAD = "#ff3355"
+BG = "#f5f5f7"
+PANEL = "#ffffff"
+PANEL2 = "#f2f2f7"
+LINE = "#d2d2d7"
+TXT = "#1d1d1f"
+DIM = "#6e6e73"
+NEON = "#0066cc"
+MAGENTA = "#1d1d1f"
+LIME = "#248a3d"
+OK = "#248a3d"
+WARN = "#b25000"
+BAD = "#c9342f"
 ACC = NEON
-FONT = ("Consolas", 10)
-FONT_BIG = ("Consolas", 11, "bold")
-FONT_HDR = ("Consolas", 9, "bold")
-GLITCH_A = "▓▒░"
+FONT = ("Segoe UI", 10)
+FONT_BIG = ("Segoe UI", 14, "bold")
+FONT_HDR = ("Segoe UI", 10, "bold")
+GLOBAL_NAV = "#000000"
 STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": NEON}
 STATUS_GLYPH = {"UP": "●", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○", "DETECTED": "◉"}
 
@@ -53,15 +53,9 @@ class Board:
             set_remote_ssh(ssh_target)
         self.ssh_target = ssh_target
         self.config = load_config()
-        try:
-            from actl.cli import _auto_reconcile
-
-            self.config = _auto_reconcile(self.config)
-        except Exception:
-            pass
         self.root = tk.Tk()
         self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
-        self.root.geometry("1600x950")
+        self.root.geometry("1440x900")
         self.root.minsize(1100, 700)
         self.root.configure(bg=BG)
         self.selected: str | None = None
@@ -88,75 +82,79 @@ class Board:
         style.configure("TFrame", background=BG)
         style.configure("Card.TFrame", background=PANEL, borderwidth=1, relief="solid")
         style.configure("TLabel", background=PANEL, foreground=TXT, font=FONT)
-        style.configure("Title.TLabel", background=BG, foreground=NEON, font=FONT_HDR)
+        style.configure("Title.TLabel", background=BG, foreground=TXT, font=FONT_HDR)
         style.configure("TButton", font=FONT, padding=4)
         style.configure("Primary.TButton", background=ACC, foreground="white")
 
     def _btn(self, parent, text: str, fn, primary: bool = False):
         import tkinter as tk
 
-        bg = "#003844" if primary else "#1e1e35"
-        fg = NEON if primary else TXT
+        bg = ACC if primary else PANEL
+        fg = "white" if primary else ACC
         return tk.Button(parent, text=text, command=fn, bg=bg, fg=fg,
-                         activebackground="#005566", activeforeground="#ffffff",
-                         relief="flat", padx=12, pady=5, cursor="hand2",
-                         font=("Consolas", 10, "bold" if primary else "normal"))
+                         activebackground="#005bb5" if primary else PANEL2,
+                         activeforeground="white" if primary else TXT,
+                         relief="flat", borderwidth=0, padx=15 if primary else 12,
+                         pady=8 if primary else 6, cursor="hand2", font=FONT)
 
     def _build(self) -> None:
         import tkinter as tk
         from tkinter import ttk
 
         self._style()
-        top = tk.Frame(self.root, bg="#05050c", highlightbackground=NEON, highlightthickness=1)
-        top.pack(fill="x", padx=6, pady=(6, 0))
-        conn = f"◈ ssh {self.ssh_target}" if self.ssh_target else "◈ 로컬"
-        tk.Label(top, text=f"▓▒░ JUACTL // SIGNAL BOARD ░▒▓  {conn}", bg="#05050c", fg=NEON,
-                 font=("Consolas", 12, "bold")).pack(side="left", padx=10, pady=6)
+        top = tk.Frame(self.root, bg=GLOBAL_NAV)
+        top.pack(fill="x")
+        conn = f"SSH · {self.ssh_target}" if self.ssh_target else "LOCAL"
+        tk.Label(top, text="JUACTL", bg=GLOBAL_NAV, fg="white",
+                 font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
+        tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg="#a1a1a6",
+                 font=("Segoe UI", 9)).pack(side="left", pady=12)
         self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
-                  bg="#05050c", fg=DIM, relief="flat", cursor="hand2").pack(side="left", padx=12)
+                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
+                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
         self.summary_var = tk.StringVar(value="정상 0 · 문제 0 · 미확인 0")
-        tk.Label(top, textvariable=self.summary_var, bg="#05050c", fg=DIM,
+        tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg="#a1a1a6",
                  font=FONT_HDR).pack(side="left", padx=8)
         self.status_var = tk.StringVar(value="준비")
-        tk.Label(top, textvariable=self.status_var, bg="#05050c", fg=MAGENTA,
+        tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg="#a1a1a6",
                  font=FONT_HDR).pack(side="right", padx=10)
 
-        main = ttk.Frame(self.root, padding=6)
+        main = ttk.Frame(self.root, padding=(20, 18, 20, 20))
         main.pack(fill="both", expand=True)
         main.columnconfigure(0, weight=3)
         main.columnconfigure(1, weight=2)
         main.rowconfigure(0, weight=1)
 
-        left = tk.Frame(main, bg=PANEL, highlightbackground=NEON, highlightthickness=1)
-        left.grid(row=0, column=0, sticky="nsew", padx=4)
+        left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         left.rowconfigure(2, weight=5)
         left.rowconfigure(5, weight=3)
-        self.pane_title = tk.StringVar(value="▚ live pane — 에이전트 클릭")
-        tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=NEON, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.pane_title = tk.StringVar(value="Live pane — 에이전트를 선택하세요")
+        tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
         self.detail_var = tk.StringVar(value="대상을 선택하면 상태와 작업 가능 여부가 표시됩니다")
-        tk.Label(left, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=("Consolas", 9),
-                 anchor="w").grid(row=0, column=0, sticky="e", padx=6, pady=4)
-        self.preview = tk.Text(left, wrap="none", font=("Consolas", 13), bg="#05050c", fg="#d8ffd8",
+        tk.Label(left, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=("Segoe UI", 9),
+                 anchor="w").grid(row=0, column=0, sticky="e", padx=18, pady=(16, 4))
+        self.preview = tk.Text(left, wrap="none", font=("Cascadia Mono", 12), bg=GLOBAL_NAV, fg="#f5f5f7",
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.preview.grid(row=2, column=0, sticky="nsew", padx=6)
+        self.preview.grid(row=2, column=0, sticky="nsew", padx=18)
         cmdbar = tk.Frame(left, bg=PANEL)
-        cmdbar.grid(row=1, column=0, sticky="ew", pady=4, padx=6)
+        cmdbar.grid(row=1, column=0, sticky="ew", pady=12, padx=18)
         for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("⇄ 재매핑", False),
                                ("▦ pane보드", False), ("↻ 새로고침", False)]:
             fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "⇄ 재매핑": self.on_remap,
                   "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
             self._btn(cmdbar, label, fn, primary=primary).pack(side="left", padx=3)
-        tk.Label(left, text="▚ 마지막 응답", bg=PANEL, fg=MAGENTA, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=6)
-        self.resp = tk.Text(left, wrap="word", font=FONT, bg="#05050c", fg=TXT,
+        tk.Label(left, text="마지막 응답", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=18, pady=(10, 0))
+        self.resp = tk.Text(left, wrap="word", font=FONT, bg=PANEL2, fg=TXT,
                             highlightthickness=0, borderwidth=0)
-        self.resp.grid(row=5, column=0, sticky="nsew", padx=6, pady=4)
+        self.resp.grid(row=5, column=0, sticky="nsew", padx=18, pady=(6, 18))
 
         right = tk.Frame(main, bg=BG, highlightthickness=0)
-        right.grid(row=0, column=1, sticky="nsew", padx=4)
+        right.grid(row=0, column=1, sticky="nsew")
         right.rowconfigure(2, weight=1)
         right.rowconfigure(6, weight=1)
-        tk.Label(right, text="▚ 에이전트", bg=BG, fg=DIM, font=FONT_HDR).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+        tk.Label(right, text="에이전트", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=2, pady=(0, 10))
         tools = tk.Frame(right, bg=BG)
         tools.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         self.filter_var = tk.StringVar()
@@ -171,14 +169,14 @@ class Board:
         self.filter_mode = tk.StringVar(value="전체")
         mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "정상", "문제", "미확인",
                                   command=lambda _v: self._render_cards(self.selected))
-        mode_menu.configure(bg=PANEL2, fg=TXT, activebackground=NEON, activeforeground="#05050c",
+        mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white",
                             relief="flat", highlightthickness=0)
-        mode_menu["menu"].configure(bg=PANEL2, fg=TXT, activebackground=NEON, activeforeground="#05050c")
+        mode_menu["menu"].configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white")
         mode_menu.pack(side="right")
         self.cards: dict[str, tk.Frame] = {}
         self.agent_cards = tk.Frame(right, bg=BG)
         self.agent_cards.grid(row=2, column=0, sticky="nsew")
-        tk.Label(right, text="▚ 메시지 전송", bg=BG, fg=DIM, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=2)
+        tk.Label(right, text="메시지 전송", bg=BG, fg=TXT, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=(14, 4))
         from tkinter import scrolledtext
 
         self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL, fg=TXT,
@@ -189,9 +187,9 @@ class Board:
         self.send_btn = self._btn(sendrow, "➤ 전송", self.on_send, primary=True)
         self.send_btn.pack(side="left")
         self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
-                                    bg=BG, fg=DIM, relief="flat", cursor="hand2")
+                                    bg=BG, fg=DIM, activebackground=BG, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
-        self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Consolas", 9),
+        self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Cascadia Mono", 9),
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
         self.root.bind("<Control-k>", lambda _e: self.command_palette())
@@ -270,12 +268,6 @@ class Board:
     def rows_now(self) -> list[dict]:
         from actl.tui import _rows
 
-        from actl.cli import _auto_reconcile
-
-        # Automatic refresh must also repair stale pane IDs. Previously only
-        # startup/manual refresh reconciled, leaving the GUI stuck on a dead
-        # OpenCode server pane after a TUI restart.
-        self.config = _auto_reconcile(self.config, announce=False)
         return _rows(self.config)
 
     def refresh(self, quiet: bool = False) -> None:
@@ -289,6 +281,7 @@ class Board:
 
     def _refresh_done(self, result, quiet: bool = False) -> None:
         import tkinter as tk
+        from tkinter import ttk
 
         if isinstance(result, Exception):
             self.refreshing = False
@@ -352,19 +345,19 @@ class Board:
             state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
             color = STATUS_COLOR.get(r["state"], TXT)
-            card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=color,
-                            highlightthickness=1 if r["agent"] == selected else 0,
+            card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=ACC if r["agent"] == selected else LINE,
+                            highlightthickness=2 if r["agent"] == selected else 1,
                             cursor="hand2")
-            card.pack(fill="x", pady=2)
+            card.pack(fill="x", pady=4)
             top = tk.Frame(card, bg=PANEL)
             top.pack(fill="x", padx=8, pady=(6, 0))
             tk.Label(top, text=f"{glyph} {r['display']}", bg=PANEL, fg=color,
-                     font=("Consolas", 11, "bold")).pack(side="left")
+                     font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
             sub = (r["preview"] or r["detail"] or "—")[:60]
             result_label = {"READY": "결과 준비", "WAITING": "결과 대기", "UNKNOWN": "결과 미확인"}.get(r.get("result_state"), "결과 미확인")
             activity = f"{r.get('busy', '-')} · {result_label}"
-            tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Consolas", 9),
+            tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Segoe UI", 9),
                      anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
             card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
             for child in (card, top):
@@ -414,7 +407,7 @@ class Board:
         if tgt == "-" or tgt.endswith("?"):
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")
-            self.pane_title.set(f"▚ {row['display']} — 연결할 live pane 없음")
+            self.pane_title.set(f"{row['display']} — 연결할 live pane 없음")
             return
         self.set_status(f"{row['display']} 로딩…")
         self.log(f"{row['display']} 미리보기 로딩…")
@@ -425,7 +418,7 @@ class Board:
         def done(result) -> None:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
-            self.pane_title.set(f"▚ {row['display']} {tgt} — live")
+            self.pane_title.set(f"{row['display']} {tgt} — live")
             self.set_status("준비")
 
         self._bg(work, done)
@@ -506,13 +499,20 @@ class Board:
 
     def on_remap(self) -> None:
         import tkinter as tk
+        from tkinter import messagebox
 
         row = self.current()
         if not row:
             return
         dets = _unmapped_panes(self.config, row["agent"])
         if not dets:
-            self.log(f"빈 {row['display']} live pane 없음")
+            detail = (
+                f"{row['display']}의 안전한 후보 pane을 찾지 못했습니다.\n\n"
+                "전체 pane 보드에서 실제 TUI를 확인하세요.\n"
+                "OpenCode의 `opencode serve`/ACP pane은 서버라서 결과 복사·입력 대상에서 제외됩니다."
+            )
+            self.log(f"{row['display']} 매핑 후보 없음 (serve/ACP는 제외)")
+            messagebox.showinfo("안전한 매핑 후보 없음", detail, parent=self.root)
             return
         top = tk.Toplevel(self.root)
         top.title(f"{row['display']} 재매핑")
@@ -525,12 +525,12 @@ class Board:
                 command=lambda d=det: (self._do_remap(row, d), top.destroy()),
             ).pack(fill="x", padx=8, pady=2)
 
-    def _do_remap(self, row: dict, det) -> None:
+    def _do_remap(self, row: dict, det) -> bool:
         try:
             updated = manual_map(self.config, row["agent"], det)
         except ValueError as exc:
             self.log(f"매핑 실패: {exc}")
-            return
+            return False
         backup = backup_config()
         save_config(updated)
         from actl.core.audit import record
@@ -539,6 +539,7 @@ class Board:
         self.config = updated
         self.log(f"{row['display']} → {det.pane.pane_id} 매핑됨 (백업 {backup.name})")
         self.refresh()
+        return True
 
     def on_board(self) -> None:
         import tkinter as tk
@@ -571,37 +572,69 @@ class Board:
                     child.destroy()
             groups: dict[str, list] = {}
             for pane, det in result:
-                groups.setdefault(det.agent or "unknown", []).append((pane, det))
+                # Manual-first: show the tmux topology, not only detected agents.
+                # target is session:window.pane, so grouping preserves the user's
+                # mental model when several agents share one tmux server.
+                window = pane.target.rsplit(".", 1)[0]
+                groups.setdefault(window, []).append((pane, det))
             if not groups:
                 status.configure(text="live pane 없음")
                 self.set_status("준비")
                 return
             status.configure(text=f"{len(result)}개 pane · Agent 그룹을 선택하세요")
-            for agent, entries in groups.items():
-                label = AGENTS[agent].display_name if agent in AGENTS else "미감지 pane"
-                tk.Label(body, text=f"▚ {label}  ({len(entries)})", bg=PANEL, fg=NEON,
+            for window, entries in groups.items():
+                tk.Label(body, text=f"tmux {window}  ({len(entries)} panes)", bg=PANEL, fg=TXT,
                          anchor="w", font=FONT_HDR).pack(fill="x", pady=(8, 2))
                 for pane, det in entries:
                     target = pane.pane_id
                     confidence = det.confidence
-                    text = f"{target}  {pane.target}  · {pane.current_command}  · {pane.current_path}  [{confidence}]"
+                    detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
+                    text = f"{target}  {pane.target}  · {detected}  · {pane.current_command}  · {pane.current_path}  [{confidence}]"
                     row = tk.Frame(body, bg=PANEL)
                     row.pack(fill="x", pady=1)
                     tk.Label(row, text=text, bg=PANEL, fg=TXT, anchor="w",
-                             font=("Consolas", 9)).pack(side="left", fill="x", expand=True, padx=6, pady=4)
-                    if det.agent:
-                        tk.Button(
-                            row, text="선택/매핑", bg="#003844", fg=NEON, relief="flat",
-                            command=lambda d=det, a=det.agent, w=top: (
-                                self._do_remap({"agent": a, "display": AGENTS[a].display_name}, d),
-                                w.destroy(),
-                            ),
-                        ).pack(side="right", padx=5)
-                    else:
-                        tk.Label(row, text="미감지", bg=PANEL, fg=DIM).pack(side="right", padx=8)
+                             font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True, padx=6, pady=4)
+                    tk.Button(
+                        row, text="Agent 지정", bg=ACC, fg="white", relief="flat",
+                        command=lambda p=pane, d=det: self._choose_manual_agent(p, d, top),
+                    ).pack(side="right", padx=5)
             self.set_status("준비")
 
         self._bg(work, done)
+
+    def _choose_manual_agent(self, pane, detected: Detection, board) -> None:
+        """Map one explicitly selected tmux pane after validating its process."""
+        import tkinter as tk
+        from tkinter import ttk
+
+        dialog = tk.Toplevel(board)
+        dialog.title(f"{pane.pane_id} Agent 지정")
+        dialog.configure(bg=BG)
+        dialog.transient(board)
+        tk.Label(dialog, text=f"{pane.target} · {pane.current_command}", bg=BG, fg=TXT,
+                 font=FONT_HDR).pack(anchor="w", padx=16, pady=(16, 8))
+        tk.Label(dialog, text="매핑할 Agent", bg=BG, fg=DIM, font=FONT).pack(anchor="w", padx=16)
+        choice = tk.StringVar(value=AGENTS[detected.agent].display_name if detected.agent in AGENTS else next(iter(AGENTS.values())).display_name)
+        names = [spec.display_name for spec in AGENTS.values()]
+        menu = ttk.Combobox(dialog, textvariable=choice, values=names, state="readonly", width=28)
+        menu.pack(fill="x", padx=16, pady=8)
+
+        def apply() -> None:
+            agent = next((name for name, spec in AGENTS.items() if spec.display_name == choice.get()), None)
+            if not agent:
+                return
+            det = Detection(pane, agent, "manual", "user-selected tmux pane")
+            if not self._do_remap({"agent": agent, "display": AGENTS[agent].display_name}, det):
+                return
+            dialog.destroy()
+            board.destroy()
+
+        tk.Button(dialog, text="검증 후 매핑", command=apply, bg=ACC, fg="white",
+                  relief="flat", padx=16, pady=8).pack(anchor="e", padx=16, pady=(4, 16))
+        dialog.bind("<Return>", lambda _e: apply())
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        dialog.grab_set()
+        menu.focus_set()
 
     def on_send(self) -> None:
         from tkinter import messagebox
