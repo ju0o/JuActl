@@ -69,10 +69,16 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     import shlex
 
-    return [
+    command = [
         "ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
         REMOTE_SSH_TARGET, " ".join(shlex.quote(part) for part in args),
     ]
+    # Windows OpenSSH parses a Python-created single remote-command argument
+    # differently from an interactive cmd invocation; let cmd.exe apply the
+    # platform's native quoting once at this boundary.
+    if os.name == "nt":
+        return ["cmd.exe", "/d", "/c", subprocess.list2cmdline(command)]
+    return command
 
 
 def _no_window() -> dict:
