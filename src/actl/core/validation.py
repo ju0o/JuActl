@@ -235,14 +235,10 @@ def validate_target(agent: str, target: str) -> TargetValidation:
     if not target_exists(target):
         return TargetValidation("DOWN", target, detail="Configured tmux target does not exist")
     try:
-        # One tmux/SSH round trip instead of four per mapped agent.
-        fields = pane_field(
-            target,
-            "#{pane_id}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_pid}",
-        ).split("\t", 3)
-        if len(fields) != 4:
-            raise ValueError("pane metadata incomplete")
-        pane_id, command, path, raw_pid = fields
+        pane_id = pane_field(target, "#{pane_id}")
+        command = pane_field(target, "#{pane_current_command}")
+        path = pane_field(target, "#{pane_current_path}")
+        raw_pid = pane_field(target, "#{pane_pid}")
     except Exception as exc:
         return TargetValidation("DOWN", target, detail=f"Configured tmux target became unavailable: {exc}")
     try:
