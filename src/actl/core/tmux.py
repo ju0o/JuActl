@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -47,6 +48,8 @@ def set_remote_ssh(target: str | None) -> None:
     ``actl tui --ssh asus`` to drive the asus tmux server without cloning
     or installing anything on the remote side beyond tmux itself.
     """
+    if target and not re.fullmatch(r"[A-Za-z0-9_.@:-]+", target):
+        raise ValueError("SSH target must be a host alias, user@host, or hostname")
     global REMOTE_SSH_TARGET
     REMOTE_SSH_TARGET = target
 
@@ -70,11 +73,8 @@ def _remote_args(args: list[str]) -> list[str]:
     import shlex
 
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
-    # Windows needs cmd.exe to reproduce the command-line parsing used by a
-    # normal PowerShell/cmd invocation. Keep the command itself free of
-    # double quotes so subprocess does not inject backslash escapes.
     if os.name == "nt":
-        return ["cmd.exe", "/d", "/c", " ".join(command + [shlex.quote(part) for part in args])]
+        return command + [shlex.quote(part) for part in args]
     return command + [" ".join(shlex.quote(part) for part in args)]
 
 
@@ -95,11 +95,12 @@ def _no_window() -> dict:
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
     remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
+    command = " ".join(args) if remote_windows else args
     try:
         return subprocess.run(
-            args, check=check, capture_output=True, text=text,
+            command, check=check, capture_output=True, text=text,
             encoding="utf-8", errors="replace", timeout=10,
-            **({} if remote_windows else _no_window()),
+            shell=remote_windows, **({} if remote_windows else _no_window()),
         )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
@@ -116,15 +117,16 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
     # affecting this inventory read, and check=False so ssh/tmux failures
     # report False instead of raising.
     remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
+    command = _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"])
     proc = subprocess.run(
-        _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"]),
+        " ".join(command) if remote_windows else command,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         check=False,
         timeout=10,
-        **({} if remote_windows else _no_window()),
+        shell=remote_windows, **({} if remote_windows else _no_window()),
     )
     if proc.returncode:
         return False
