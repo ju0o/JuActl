@@ -24,6 +24,21 @@ def test_persona_operator_refresh_is_event_first_with_health_fallback():
     assert "60000" in gui
 
 
+def test_persona_dashboard_only_shows_actionable_mappings_and_clear_phases():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert 'r["target"] in {"-", ""}' in gui
+    assert 'phase = "결과 도착"' in gui
+    assert 'phase = "작업중"' in gui
+    assert 'phase = "Prompt 대기"' in gui
+    assert 'columns=("kind", "runtime", "path", "agent", "mapped")' in gui
+
+
+def test_persona_windows_remote_copy_prefers_mainpc_clipboard():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert 'if sys.platform == "win32" and self.ssh_target:' in gui
+    assert 'preferred = "local"' in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery

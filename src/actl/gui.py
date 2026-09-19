@@ -74,6 +74,7 @@ class Board:
             self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
             self.root.after(250, self._event_tick)
             self.root.after(60000, self._health_tick)
+            self.root.after(700, self.on_board)
         else:
             self.root.after(self.refresh_interval_ms, self._auto_tick)
 
@@ -362,6 +363,10 @@ class Board:
         mode = self.filter_mode.get()
         visible = []
         for r in self.rows:
+            # Unmapped panes remain available in the pane board, not in the
+            # operational dashboard where every card must be actionable.
+            if r["target"] in {"-", ""} or r["target"].endswith("?"):
+                continue
             haystack = f"{r['display']} {r['agent']} {r['target']}".lower()
             matches_mode = (mode == "전체" or
                             (mode == "정상" and r["state"] == "UP") or
@@ -370,9 +375,10 @@ class Board:
             if matches_mode and (not query or query in haystack):
                 visible.append(r)
         visible.sort(key=lambda r: (
-            0 if r.get("unread") else 1,
+            0 if r.get("result_state") == "READY" else 1,
             0 if r.get("activity_state") == "RUNNING" else 1,
-            0 if r.get("state") in {"DOWN", "MISMATCH"} else 1,
+            0 if r.get("activity_state") == "IDLE" else 1,
+            0 if r.get("unread") else 1,
             r.get("display", ""),
         ))
         for r in visible:
@@ -389,8 +395,17 @@ class Board:
                      font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
             sub = (r["preview"] or r["detail"] or "—")[:60]
-            result_label = {"READY": "결과 준비", "WAITING": "결과 대기", "UNKNOWN": "결과 미확인"}.get(r.get("result_state"), "결과 미확인")
-            activity = f"{r.get('busy', '-')} · {result_label}"
+            if r.get("result_state") == "READY":
+                phase = "결과 도착"
+            elif r.get("activity_state") == "RUNNING":
+                phase = "작업중"
+            elif r.get("activity_state") == "IDLE":
+                phase = "Prompt 대기"
+            elif r.get("state") == "UP":
+                phase = "연결됨"
+            else:
+                phase = "상태 확인 필요"
+            activity = phase
             tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM, font=("Segoe UI", 9),
                      anchor="w", justify="left").pack(fill="x", padx=8, pady=(0, 6))
             card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
@@ -477,7 +492,14 @@ class Board:
                        source=result.source, confidence=result.confidence)
                 return ("empty", result.detail)
             try:
-                backend = copy_text(result.text, preferred=self.config.get("clipboard_backend", "auto"))
+                import sys
+
+                preferred = self.config.get("clipboard_backend", "auto")
+                # This GUI owns the MainPC clipboard. Do not send OSC52 back
+                # into the remote tmux when running the Windows remote board.
+                if sys.platform == "win32" and self.ssh_target:
+                    preferred = "local"
+                backend = copy_text(result.text, preferred=preferred)
                 result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
                 record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
                        source=result.source, confidence=result.confidence, chars=len(result.text),
@@ -619,17 +641,19 @@ class Board:
         status.pack(fill="x", padx=12)
         body = tk.Frame(top, bg=BG)
         body.pack(fill="both", expand=True, padx=12, pady=8)
-        tree = ttk.Treeview(body, columns=("kind", "runtime", "path", "agent"), show="tree headings")
+        tree = ttk.Treeview(body, columns=("kind", "runtime", "path", "agent", "mapped"), show="tree headings")
         tree.heading("#0", text="tmux 이름 / pane")
         tree.heading("kind", text="유형")
         tree.heading("runtime", text="실행 프로세스")
         tree.heading("path", text="작업 경로")
         tree.heading("agent", text="감지 Agent")
+        tree.heading("mapped", text="현재 매핑")
         tree.column("#0", width=270, anchor="w")
         tree.column("kind", width=90, anchor="w")
         tree.column("runtime", width=150, anchor="w")
         tree.column("path", width=390, anchor="w")
         tree.column("agent", width=150, anchor="w")
+        tree.column("mapped", width=150, anchor="w")
         scroll = ttk.Scrollbar(body, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=scroll.set)
         tree.pack(side="left", fill="both", expand=True)
@@ -648,6 +672,12 @@ class Board:
                 tree.delete(item)
             pane_by_item.clear()
             groups: dict[str, dict[str, list]] = {}
+            pane_ids = {pane.pane_id for pane, _ in result}
+            mapped_by_pane = {
+                item.get("target"): AGENTS[name].display_name
+                for name, item in self.config.get("agents", {}).items()
+                if item.get("target") in pane_ids and name in AGENTS
+            }
             for pane, det in result:
                 window = pane.target.rsplit(".", 1)[0]
                 session = window.split(":", 1)[0]
@@ -658,15 +688,16 @@ class Board:
                 return
             status.configure(text=f"{len(result)}개 pane · session/window/pane을 선택하세요")
             for session, windows in groups.items():
-                sid = tree.insert("", "end", text=session, values=("session", "", "", ""), open=True)
+                sid = tree.insert("", "end", text=session, values=("session", "", "", "", ""), open=True)
                 for window, entries in windows.items():
                     wid = tree.insert(sid, "end", text=window.split(":", 1)[1],
-                                      values=("window", "", "", ""), open=True)
+                                      values=("window", "", "", "", ""), open=True)
                     for pane, det in entries:
                         detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
+                        mapped = mapped_by_pane.get(pane.pane_id, "미매핑")
                         pid = tree.insert(
                             wid, "end", text=f"{pane.pane_id}  {pane.title or '(untitled)'}",
-                            values=("pane", pane.current_command, pane.current_path, detected),
+                            values=("pane", pane.current_command, pane.current_path, detected, mapped),
                         )
                         pane_by_item[pid] = (pane, det)
             self.set_status("준비")
