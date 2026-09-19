@@ -54,6 +54,65 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     ]
 
 
+def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
+    class Pipe:
+        def __init__(self, rows=None):
+            self.rows = iter(rows or [])
+            self.writes = []
+
+        def write(self, value):
+            self.writes.append(value)
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            return next(self.rows, "")
+
+        def close(self):
+            pass
+
+    class Process:
+        def __init__(self):
+            self.stdin = Pipe()
+            self.stdout = Pipe([
+                "%begin 1 0 0\n", "%end 1 0 0\n",
+                "%begin 1 1 1\n", "%p1\n", "%end 1 1 1\n",
+                "%begin 1 2 1\n", "%p2\n", "%end 1 2 1\n",
+            ])
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+
+    processes = []
+
+    def fake_popen(*args, **kwargs):
+        process = Process()
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
+    tmux.set_remote_ssh("asus")
+    try:
+        assert tmux._run(["tmux", "list-panes", "-F", "#{pane_id}"]).stdout == "%p1\n"
+        assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
+        assert len(processes) == 1
+        assert processes[0].stdin.writes == [
+            '"list-panes" "-F" "#{pane_id}"\n',
+            '"display-message" "-p" "#{pane_title}"\n',
+        ]
+    finally:
+        tmux.set_remote_ssh(None)
+
+
 def test_socket_path_passed_as_dash_s(monkeypatch):
     calls = []
 

@@ -5,6 +5,7 @@ import re
 import subprocess
 import shlex
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +41,150 @@ def _maybe_guard_direct_writer(
 
 
 REMOTE_SSH_TARGET: str | None = None
+_REMOTE_TRANSPORT: "RemoteTransport | None" = None
+
+
+def _tmux_control_quote(value: str) -> str:
+    """Quote one argument for tmux control mode, preserving format bytes."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+class RemoteTransport:
+    """One bounded tmux control-mode session per SSH target."""
+
+    MAX_IN_FLIGHT = 1
+
+    def __init__(self, target: str) -> None:
+        self.target = target
+        self.state = "DISCONNECTED"
+        self._process: subprocess.Popen[str] | None = None
+        self._lock = threading.Lock()
+        self._retry_at = 0.0
+
+    def connect(self) -> None:
+        if self._process is not None and self._process.poll() is None:
+            self.state = "READY"
+            return
+        now = time.monotonic()
+        if now < self._retry_at:
+            self.state = "DEGRADED"
+            raise TmuxError(f"remote transport reconnect backoff active for {self.target}")
+        self.state = "CONNECTING"
+        command = [
+            "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+            self.target, "tmux", "-C",
+        ]
+        try:
+            self._process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                shell=False,
+                **_no_window(),
+            )
+            # tmux control mode emits one server-initialization frame before
+            # accepting the first command. Consume only that frame so the
+            # first caller receives its own response, not an empty startup.
+            assert self._process.stdout is not None
+            while True:
+                startup_row = self._process.stdout.readline()
+                if not startup_row:
+                    raise TmuxError("remote tmux control session closed during startup")
+                if startup_row.startswith("%end "):
+                    break
+            self.state = "READY"
+            self._retry_at = 0.0
+        except (OSError, subprocess.SubprocessError, TmuxError) as exc:
+            process, self._process = self._process, None
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+            self.state = "DEGRADED"
+            self._retry_at = now + 1.0
+            raise TmuxError(f"cannot connect remote transport to {self.target}: {exc}") from exc
+
+    def health(self) -> str:
+        if self._process is not None and self._process.poll() is None:
+            self.state = "READY"
+        elif self.state == "READY":
+            self.state = "DEGRADED"
+        return self.state
+
+    def reconnect(self) -> None:
+        self.close()
+        self.connect()
+
+    def executeTmux(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if not self._lock.acquire(timeout=10):
+            raise TmuxError("remote transport busy: maximum in-flight operations is 1")
+        try:
+            self.connect()
+            assert self._process is not None and self._process.stdin is not None
+            command = argv[1:] if argv and argv[0] == "tmux" else argv
+            line = " ".join(_tmux_control_quote(part) for part in command)
+            self._process.stdin.write(line + "\n")
+            self._process.stdin.flush()
+            stdout: list[str] = []
+            in_frame = False
+            failed = False
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                assert self._process.stdout is not None
+                row = self._process.stdout.readline()
+                if not row:
+                    self.state = "DEGRADED"
+                    raise TmuxError("remote transport closed unexpectedly")
+                row = row.rstrip("\r\n")
+                if row.startswith("%begin "):
+                    in_frame = True
+                    stdout = []
+                    failed = False
+                    continue
+                if in_frame and row.startswith("%error "):
+                    failed = True
+                    continue
+                if in_frame and row.startswith("%end "):
+                    output = "\n".join(stdout)
+                    if stdout:
+                        output += "\n"
+                    if failed:
+                        raise TmuxError(output.strip() or "remote tmux command failed")
+                    return subprocess.CompletedProcess(
+                        ["ssh", self.target, "tmux", "-C"], 0, output, ""
+                    )
+                if in_frame:
+                    stdout.append(row)
+            self.state = "DEGRADED"
+            raise TmuxError("remote tmux command timed out after 10s")
+        finally:
+            self._lock.release()
+
+    def close(self) -> None:
+        process, self._process = self._process, None
+        if process is None:
+            self.state = "DISCONNECTED"
+            return
+        try:
+            if process.stdin is not None and process.poll() is None:
+                process.stdin.write("exit\n")
+                process.stdin.flush()
+            process.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            process.kill()
+            process.wait()
+        self.state = "DISCONNECTED"
 
 
 def set_remote_ssh(target: str | None) -> None:
@@ -51,8 +196,20 @@ def set_remote_ssh(target: str | None) -> None:
     """
     if target and not re.fullmatch(r"[A-Za-z0-9_.@:-]+", target):
         raise ValueError("SSH target must be a host alias, user@host, or hostname")
-    global REMOTE_SSH_TARGET
+    global REMOTE_SSH_TARGET, _REMOTE_TRANSPORT
+    if _REMOTE_TRANSPORT is not None and _REMOTE_TRANSPORT.target != target:
+        _REMOTE_TRANSPORT.close()
+        _REMOTE_TRANSPORT = None
     REMOTE_SSH_TARGET = target
+
+
+def _remote_transport() -> RemoteTransport:
+    global _REMOTE_TRANSPORT
+    if not REMOTE_SSH_TARGET:
+        raise TmuxError("remote SSH target is not configured")
+    if _REMOTE_TRANSPORT is None or _REMOTE_TRANSPORT.target != REMOTE_SSH_TARGET:
+        _REMOTE_TRANSPORT = RemoteTransport(REMOTE_SSH_TARGET)
+    return _REMOTE_TRANSPORT
 
 
 def _tmux_base(socket_path: str | None = None) -> list[str]:
@@ -94,6 +251,13 @@ def _no_window() -> dict:
 
 
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+    if REMOTE_SSH_TARGET:
+        try:
+            return _remote_transport().executeTmux(args)
+        except TmuxError as exc:
+            if not check:
+                return subprocess.CompletedProcess(args, 1, b"" if not text else "", str(exc))
+            raise
     args = _remote_args(args)
     command = args
     try:
@@ -113,20 +277,9 @@ def _run(args: list[str], *, check: bool = True, text: bool = True) -> subproces
 def target_exists(target: str, socket_path: str | None = None) -> bool:
     # display-message succeeds with an empty expansion for some nonexistent
     # targets on tmux 3.6, so compare against the authoritative pane inventory.
-    # NOTE: raw subprocess.run (not _run) so unit tests can stub _run without
-    # affecting this inventory read, and check=False so ssh/tmux failures
-    # report False instead of raising.
-    remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
-    command = _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"])
-    proc = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+    proc = _run(
+        [*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"],
         check=False,
-        timeout=10,
-        shell=False, **_no_window(),
     )
     if proc.returncode:
         return False
@@ -235,10 +388,15 @@ def send_prompt_staged(
             record("pre_send_hook", True)
 
         try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
-                fh.write(prompt)
-                tmp_path = Path(fh.name)
-            _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
+            if REMOTE_SSH_TARGET:
+                # The persistent remote process cannot see MainPC temp paths.
+                # tmux control mode's double-quoted argument preserves LF/UTF-8.
+                _run([*base, "set-buffer", "-b", buffer_name, prompt])
+            else:
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
+                    fh.write(prompt)
+                    tmp_path = Path(fh.name)
+                _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
             record("load_buffer", True)
             side_effect = SIDE_EFFECT_POSSIBLE
         except Exception as exc:
@@ -295,10 +453,15 @@ def send_prompt_staged(
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
         try:
-            import subprocess as _sp
-
-            _sp.run(_remote_args([*base, "delete-buffer", "-b", buffer_name]), capture_output=True)
-        except OSError:
+            if REMOTE_SSH_TARGET:
+                _run([*base, "delete-buffer", "-b", buffer_name], check=False)
+            else:
+                subprocess.run(
+                    [*base, "delete-buffer", "-b", buffer_name],
+                    capture_output=True,
+                    check=False,
+                )
+        except (OSError, TmuxError):
             pass
 
 

@@ -13,8 +13,9 @@ fails on the remote `tmux list-panes -F ...` call with:
 command list-panes: -F expects an argument
 ```
 
-The current source was not changed as part of this investigation. The only
-pre-existing worktree change remains `.commandcode/taste/taste.md`.
+The confirmed transport fix is now implemented locally for independent QA.
+The unrelated pre-existing worktree change remains
+`.commandcode/taste/taste.md` and is not part of this change.
 
 The two reported incidents remain separate:
 
@@ -165,26 +166,51 @@ responding to those queries, so it cannot certify the leak absent or present.
    the reported response leak was not reproduced in a real Windows Terminal
    interactive session.
 
-## Minimum next fix design (not applied)
+## Implemented P0 transport design
 
-Before changing production behavior, the next authorized patch should:
+The selected design is a JuActl-owned persistent `tmux -C` control session
+over one `ssh.exe` process per target. Each request is a quoted tmux control
+command and each response is read from tmux's `%begin/%end` frame. The
+transport has `DISCONNECTED`, `CONNECTING`, `READY`, and `DEGRADED` states,
+one in-flight request, a ten-second request timeout, bounded reconnect
+backoff, and owned-process shutdown. The GUI already coalesces refreshes with
+its `refreshing` guard; no new polling storm or escape filtering was added.
 
-1. replace the Windows PowerShell SSH argv bridge with a Windows-safe transport
-   that preserves `#{...}` and tab-delimited arguments while avoiding pipe
-   deadlock;
-2. add a transport-level operation counter and duration log for one refresh;
-3. coalesce duplicate read operations inside one refresh;
-4. preserve bounded concurrency and explicit timeouts;
-5. surface transport errors instead of converting them to an empty pane list;
-6. add a Windows regression test for the exact `list-panes -F` argv;
-7. repeat the A/B/C/D tests and a real MainPC -> ASUS -> tmux GUI verification.
+Rejected alternatives:
 
-No persistent SSH connection, retry loop, escape-regex filter, polling-only
-interval change, or sleep was added based on this investigation.
+- OpenSSH ControlMaster/ControlPersist: not supported by the Founder's
+  Win32-OpenSSH environment and therefore not selected.
+- A remote daemon: unnecessary deployment and security surface for this
+  confirmed defect.
+- Regex removal of DA responses: unrelated to the confirmed transport defects
+  and deliberately not implemented.
+
+The remote path now routes `list-panes`, `display-message`, `capture-pane`,
+validation target checks, pane naming/topology commands, and send/paste tmux
+commands through the transport. Remote prompt loading uses tmux `set-buffer`
+inside the control session, so it does not depend on a MainPC temporary file
+being visible on ASUS.
+
+Source-level before/after reconciliation:
+
+| Metric | Before | After implementation | Status |
+|---|---:|---:|---|
+| Logical remote operations/idle refresh | ~19 | unchanged logical fan-out | amplification remains visible |
+| Logical operations/min idle | ~95 | ~95 | no polling concealment |
+| Logical operations/min RUNNING | ~380 | ~380 | no polling concealment |
+| SSH process spawns per warm refresh | one-shot path per operation | 0 expected | MainPC E2E pending |
+| SSH handshakes/min after warm-up | unknown | 0 expected while READY | MainPC E2E pending |
+| PowerShell process spawns for tmux | not isolated | 0 for transport | MainPC E2E pending |
+| In-flight tmux requests | unbounded fan-out | 1 per target | source/test proven |
+
+The after values marked pending are intentionally not presented as live
+Windows measurements. The ASUS smoke test opened one control session and
+successfully executed `list-panes`, `display-message`, and `capture-pane`; the
+unit transport test executed two commands with one `Popen`.
 
 ## MainPC verification after investigation
 
-The currently installed MainPC build was tested directly:
+The currently installed MainPC build was tested before this local fix:
 
 ```text
 doctor --ssh asus: exit 0, live mapping 0/8
@@ -194,5 +220,14 @@ GUI process: started and remained alive for 5 seconds
 
 The failing `discover` error was the same `list-panes -F expects an argument`
 transport failure above. The GUI test processes were stopped after the check.
-The installation is therefore **not certified stable** and no production fix
-was applied during this incident-investigation phase.
+That old installation is not evidence for the new transport. A new Windows
+installer/MainPC E2E run remains an independent-QA gate.
+
+## Remaining UNKNOWNs
+
+- The Founder interactive SSH disconnect root cause remains UNKNOWN. If the
+  post-fix 30-minute E2E run has no disconnect, report only
+  `NOT REPRODUCED AFTER FIX`.
+- The DA/escape response leak remains UNKNOWN and was not filtered or altered.
+- Windows process/handshake counts, fault recovery, and GUI visual behavior
+  require the independent MainPC QA run.
