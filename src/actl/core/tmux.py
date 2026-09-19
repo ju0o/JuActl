@@ -95,33 +95,8 @@ def _no_window() -> dict:
 
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
-    remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
     command = args
     try:
-        if remote_windows:
-            # Direct pipes can deadlock on Windows OpenSSH. File-backed stdio
-            # keeps the direct argv path while preserving the tmux format.
-            with tempfile.TemporaryDirectory() as temp_dir:
-                stdout_path = Path(temp_dir) / "stdout"
-                stderr_path = Path(temp_dir) / "stderr"
-                with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
-                    process = subprocess.Popen(
-                        command, stdout=stdout_file, stderr=stderr_file, **_no_window()
-                    )
-                    try:
-                        returncode = process.wait(timeout=10)
-                    except subprocess.TimeoutExpired as exc:
-                        process.kill()
-                        process.wait()
-                        raise TmuxError("ssh command timed out after 10s") from exc
-                stdout_bytes = stdout_path.read_bytes()
-                stderr_bytes = stderr_path.read_bytes()
-                stdout = stdout_bytes.decode("utf-8", "replace") if text else stdout_bytes
-                stderr = stderr_bytes.decode("utf-8", "replace") if text else stderr_bytes
-                result = subprocess.CompletedProcess(command, returncode, stdout, stderr)
-                if check and returncode:
-                    raise subprocess.CalledProcessError(returncode, command, stdout, stderr)
-                return result
         return subprocess.run(
             command, check=check, capture_output=True, text=text,
             encoding="utf-8", errors="replace", timeout=10,
