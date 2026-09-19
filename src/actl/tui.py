@@ -113,7 +113,7 @@ actl 에이전트 보드 — 도움말
   c       선택한 에이전트의 마지막 응답 복사 (SSH=OSC52, 로컬=wl-copy/xclip/xsel)
   p       마지막 응답 화면 출력 (클립보드 막히면 수동 복사)
   m       재매핑: 이 에이전트의 빈 live pane 목록 표시, 번호 또는 %ID 선택
-          (예: %69). OpenCode 세션은 재매핑 시 자동 바인딩.
+          (예: %69). OpenCode는 TUI만 매핑하며 세션은 별도 확인.
   s       전송: 여러 줄 입력 후 '::send' 줄로 종료 (::cancel은 취소)
   r       새로고침: 오래된 매핑 제거 + 자동 매핑 + 전체 재탐색
   v       전체 live pane 보드 (모든 tmux pane + 감지 에이전트 + 매핑 상태)
@@ -137,7 +137,9 @@ actl 에이전트 보드 — 도움말
     클라이언트는 차단 — 그땐 p 눌러 수동 복사).
   - 같은 에이전트 pane 여러 개: 가장 최근 시작 프로세스 자동 선택,
     기존 live 매핑은 유지. 동점/판독불가만 직접 질문.
-  - OpenCode는 별도 bind 불필요: 매핑 시 세션 자동 바인딩.
+  - OpenCode 서버(`opencode serve`)는 pane 후보에서 제외.
+  - `opencode --auto`는 pane 매핑과 세션 바인딩이 별개다. 결과 복사는
+    exact 세션이 확인될 때만 가능하며, 필요하면 `actl bind opencode`를 사용.
 아무 키나 눌러 돌아가기.
 """
 
@@ -303,7 +305,7 @@ def _pane_board(config: dict) -> str:
             f"{busy:<6} 결과{flag} {state_ko:<8} {pane.current_path}"
         )
         board.append((key, pane, det))
-    lines.append("번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 세션 자동바인딩)")
+    lines.append("번호키: 미리보기 + 그 pane로 즉시 매핑 (OpenCode 서버 제외, 세션은 별도 확인)")
     lines.append("●=결과 있음(복사 가능) ○=결과 없음(아직 응답 전) 활동=CPU+pane tail, 미확인=증거 부족")
     _pane_board_cache(config, board)
     return "\n".join(lines)
@@ -436,6 +438,12 @@ def run_tui() -> int:
             if ch is None:
                 if time.monotonic() >= next_refresh:
                     config = load_config()
+                    try:
+                        from actl.cli import _auto_reconcile
+
+                        config = _auto_reconcile(config, announce=False)
+                    except Exception:
+                        pass
                     rows = _rows(config)
                     interval = 3.0 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12.0
                     next_refresh = time.monotonic() + interval

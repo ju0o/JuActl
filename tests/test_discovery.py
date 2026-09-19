@@ -21,6 +21,11 @@ def test_claude_team_detection(monkeypatch):
     assert (result.agent, result.confidence) == ("claude-team", "exact")
 
 
+def test_wrapped_claude_team_detection(monkeypatch):
+    result = _detect(monkeypatch, [ProcessInfo(11, 10, "node /opt/claude.cmd --tui")], {"CLAUDE_CONFIG_DIR": str(AGENTS["claude-team"].data_dirs[0])})
+    assert (result.agent, result.confidence) == ("claude-team", "exact")
+
+
 def test_claude_pro_detection(monkeypatch):
     result = _detect(monkeypatch, [ProcessInfo(11, 10, "claude")], {"CLAUDE_CONFIG_DIR": str(AGENTS["claude-pro"].data_dirs[0])})
     assert (result.agent, result.confidence) == ("claude-pro", "exact")
@@ -33,6 +38,18 @@ def test_claude_team_pro_isolation(monkeypatch):
 
 def test_opencode_detection(monkeypatch):
     assert _detect(monkeypatch, [ProcessInfo(11, 10, "/bin/opencode")]).agent == "opencode"
+
+
+def test_opencode_server_is_not_detected(monkeypatch):
+    result = _detect(monkeypatch, [ProcessInfo(11, 10, "/bin/opencode serve --port 4111")])
+    assert result.agent is None and result.confidence == "unknown"
+
+
+def test_reconcile_does_not_map_opencode_server(monkeypatch):
+    detected = _detect(monkeypatch, [ProcessInfo(11, 10, "/bin/opencode serve --port 4111")])
+    updated, changes = reconcile({"agents": {}}, [detected])
+    assert "opencode" not in updated["agents"]
+    assert not changes
 
 
 def test_grok_detection(monkeypatch):

@@ -34,7 +34,7 @@ from typing import Any
 
 from actl.core.models import CopyResult
 from actl.core.tmux import TmuxError, pane_field
-from actl.core.validation import pane_processes
+from actl.core.validation import is_opencode_tui, pane_processes
 
 
 SESSION_ID_RE = re.compile(r"^ses_[A-Za-z0-9]{8,}$")
@@ -108,8 +108,7 @@ def live_cmdline_session(pid: int) -> str | None:
 def _opencode_pids(pane_pid: int) -> list[int]:
     found = []
     for process in pane_processes(pane_pid):
-        executable = process.args.split(maxsplit=1)[0] if process.args else ""
-        if Path(executable).name == "opencode":
+        if is_opencode_tui(process.args):
             found.append(process.pid)
     return found
 

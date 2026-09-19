@@ -933,7 +933,7 @@ def _unmap(config: dict, agent: str) -> dict:
     return updated
 
 
-def _auto_reconcile(config: dict) -> dict:
+def _auto_reconcile(config: dict, *, announce: bool = True) -> dict:
     """Fail-closed automatic resync: remove stale mappings and map unique
     strong detections. reconcile() only ever applies unambiguous changes, so
     this never guesses. Writes config only when something changed."""
@@ -943,9 +943,10 @@ def _auto_reconcile(config: dict) -> dict:
         return config
     backup = backup_config()
     save_config(updated)
-    print("Mappings changed:")
-    print("\n".join(changes))
-    print(f"Backup: {backup}")
+    if announce:
+        print("Mappings changed:")
+        print("\n".join(changes))
+        print(f"Backup: {backup}")
     return updated
 
 

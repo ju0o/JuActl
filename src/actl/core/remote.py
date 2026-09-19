@@ -44,8 +44,8 @@ def remote_extract(agent: str, target: str, timeout: float = 30.0) -> CopyResult
         )
     except Exception as exc:
         return CopyResult(None, f"{agent}-remote-unresolved", "none", f"ssh failed: {exc}")
-    text = proc.stdout
-    if text:
+    if proc.returncode == 0 and proc.stdout:
+        text = proc.stdout
         return CopyResult(text, f"{agent}-remote:{target}", "exact")
     detail = (proc.stderr or "").strip().splitlines()
     tail = detail[-1] if detail else f"remote exit {proc.returncode}"

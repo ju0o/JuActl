@@ -180,8 +180,15 @@ def _is_codex(process: ProcessInfo) -> bool:
 
 
 def _is_opencode(process: ProcessInfo) -> bool:
-    executable = process.args.split(maxsplit=1)[0] if process.args else ""
-    return Path(executable).name == "opencode"
+    return is_opencode_tui(process.args)
+
+
+def is_opencode_tui(args: str) -> bool:
+    """Accept the interactive TUI, never its serve/ACP background processes."""
+    tokens = args.replace("\\", "/").split()
+    if not tokens or Path(tokens[0].strip("'\"")).name.lower().removesuffix(".exe") != "opencode":
+        return False
+    return not any(token.strip("'\"").lower() in {"serve", "acp", "web"} for token in tokens[1:])
 
 
 def _is_cline(process: ProcessInfo) -> bool:
@@ -196,13 +203,31 @@ def _is_commandcode(process: ProcessInfo) -> bool:
 
 
 def _is_claude(process: ProcessInfo, profile: Path) -> bool:
-    executable = process.args.split(maxsplit=1)[0] if process.args else ""
-    if Path(executable).name != "claude":
-        return False
-    configured = process_environment(process.pid).get("CLAUDE_CONFIG_DIR")
+    return claude_profile(process) == profile.expanduser().resolve(strict=False)
+
+
+def _command_has_claude(args: str) -> bool:
+    """Recognize direct and wrapped Claude launchers without trusting names alone."""
+    for token in args.replace("\\", "/").split():
+        name = Path(token.strip("'\"")).name.lower()
+        if name.removesuffix(".exe").removesuffix(".cmd") == "claude":
+            return True
+    return False
+
+
+def claude_profile(process: ProcessInfo, *, env_reader=None) -> Path | None:
+    """Return the selected Claude profile only for a live Claude command."""
+    if not _command_has_claude(process.args):
+        return None
+    configured = (env_reader or process_environment)(process.pid).get("CLAUDE_CONFIG_DIR")
     if not configured:
-        return False
-    return Path(configured).expanduser().resolve(strict=False) == profile.expanduser().resolve(strict=False)
+        return None
+    resolved = Path(configured).expanduser().resolve(strict=False)
+    for agent in ("claude-team", "claude-pro"):
+        expected = AGENTS[agent].data_dirs[0].expanduser().resolve(strict=False)
+        if resolved == expected:
+            return resolved
+    return None
 
 
 def validate_target(agent: str, target: str) -> TargetValidation:

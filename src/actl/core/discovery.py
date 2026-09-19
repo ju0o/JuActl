@@ -8,7 +8,7 @@ from actl.core.config import get_target
 from actl.core.models import PaneInfo
 from actl.core.registry import AGENTS
 from actl.core.tmux import TmuxError, list_panes, pane_field
-from actl.core.validation import ProcessInfo, pane_processes, process_environment, validate_target
+from actl.core.validation import ProcessInfo, _command_has_claude, claude_profile, is_opencode_tui, pane_processes, process_environment, validate_target
 
 STRONG_CONFIDENCE = {"exact", "high"}
 
@@ -29,16 +29,16 @@ def _candidate(pane_pid: int, processes: list[ProcessInfo]) -> tuple[str | None,
     found: list[tuple[str, str, str, int]] = []
     for process in processes:
         executable = _executable(process)
-        if executable == "claude":
-            profile = process_environment(process.pid).get("CLAUDE_CONFIG_DIR")
+        profile = claude_profile(process, env_reader=process_environment)
+        if profile:
             for agent in ("claude-team", "claude-pro"):
                 expected = AGENTS[agent].data_dirs[0].expanduser().resolve(strict=False)
-                if profile and Path(profile).expanduser().resolve(strict=False) == expected:
+                if profile == expected:
                     found.append((agent, "exact", f"pid {process.pid}: claude profile {expected}", process.pid))
                     break
-            else:
-                found.append(("", "low", f"pid {process.pid}: claude without a supported CLAUDE_CONFIG_DIR", process.pid))
-        elif executable == "opencode":
+        elif _command_has_claude(process.args):
+            found.append(("", "low", f"pid {process.pid}: claude without a supported CLAUDE_CONFIG_DIR", process.pid))
+        elif is_opencode_tui(process.args):
             found.append(("opencode", "high", f"pid {process.pid}: opencode", process.pid))
         elif executable == "codex":
             found.append(("codex", "high", f"pid {process.pid}: codex", process.pid))

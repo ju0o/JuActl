@@ -270,6 +270,12 @@ class Board:
     def rows_now(self) -> list[dict]:
         from actl.tui import _rows
 
+        from actl.cli import _auto_reconcile
+
+        # Automatic refresh must also repair stale pane IDs. Previously only
+        # startup/manual refresh reconciled, leaving the GUI stuck on a dead
+        # OpenCode server pane after a TUI restart.
+        self.config = _auto_reconcile(self.config, announce=False)
         return _rows(self.config)
 
     def refresh(self, quiet: bool = False) -> None:

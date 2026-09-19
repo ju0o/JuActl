@@ -50,7 +50,7 @@ MainPC 브라우저:
 http://100.82.108.31:8765/
 ```
 
-상태에 따라 3초(실행 중)~12초(안정 상태) adaptive 감시, 카드 클릭=미리보기, pane 행 클릭=즉시 매핑,
+상태에 따라 3초(실행 중)~12초(안정 상태) adaptive 감시와 stale pane 자동 재매핑, 카드 클릭=미리보기, pane 행 클릭=즉시 매핑,
 복사는 브라우저 클립보드 직행.
 
 ## MainPC에서 실행 (CLI 원격)
@@ -76,7 +76,9 @@ actl doctor --ssh asus
 - pane 1개 → 자동 매핑.
 - 같은 에이전트 pane 여러 개 → 가장 최근 시작 프로세스 자동 선택.
   기존 live 매핑은 유지. 동점/판독불가만 직접 질문.
-- OpenCode `session_id` 자동 바인딩 (별도 `actl bind` 불필요).
+- OpenCode 서버(`opencode serve`)는 매핑하지 않는다. TUI 매핑과
+  `session_id` 바인딩은 별도이며, exact 결과 복사가 필요하면 asus에서
+  `~/.local/bin/actl bind opencode`를 실행한다.
 - pane이 죽거나 바뀌면 stale 제거 후 위 규칙으로 재매핑.
 
 ## CLI 명령
