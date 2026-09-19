@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import base64
 import os
 import re
-import base64
 import subprocess
+import shlex
 import tempfile
 import time
 from pathlib import Path
@@ -71,13 +72,13 @@ def _remote_args(args: list[str]) -> list[str]:
     """
     if not REMOTE_SSH_TARGET:
         return args
-    import shlex
-
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
         # PowerShell's argument-array invocation avoids cmd.exe and Python's
         # Windows CRT quote rewriting around tmux formats such as #{pane_id}.
-        values = command + args
+        # ssh joins remote arguments into a shell command; preserve quotes so
+        # #{...} is not consumed as a remote-shell comment.
+        values = command + [shlex.quote(part) for part in args]
         ps = "$a=@(" + ",".join("'" + value.replace("'", "''") + "'" for value in values) + "); & ssh.exe @a; exit $LASTEXITCODE"
         encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
         return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded]
