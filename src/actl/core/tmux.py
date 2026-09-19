@@ -94,10 +94,12 @@ def _no_window() -> dict:
 
 def _run(args: list[str], *, check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
     args = _remote_args(args)
+    remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
     try:
         return subprocess.run(
             args, check=check, capture_output=True, text=text,
-            encoding="utf-8", errors="replace", timeout=10, **_no_window(),
+            encoding="utf-8", errors="replace", timeout=10,
+            **({} if remote_windows else _no_window()),
         )
     except FileNotFoundError as exc:
         hint = "ssh" if args and args[0] == "ssh" else "tmux"
@@ -113,6 +115,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
     # NOTE: raw subprocess.run (not _run) so unit tests can stub _run without
     # affecting this inventory read, and check=False so ssh/tmux failures
     # report False instead of raising.
+    remote_windows = os.name == "nt" and REMOTE_SSH_TARGET is not None
     proc = subprocess.run(
         _remote_args([*_tmux_base(socket_path), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}"]),
         capture_output=True,
@@ -121,7 +124,7 @@ def target_exists(target: str, socket_path: str | None = None) -> bool:
         errors="replace",
         check=False,
         timeout=10,
-        **_no_window(),
+        **({} if remote_windows else _no_window()),
     )
     if proc.returncode:
         return False
