@@ -628,6 +628,11 @@ def rename_pane(target: str, name: str, socket_path: str | None = None) -> None:
     _run([*_tmux_base(socket_path), "select-pane", "-t", target, "-T", _valid_tmux_name(name)])
 
 
+def move_pane(source: str, destination: str, socket_path: str | None = None) -> None:
+    """Move one existing pane to a window; the pane ID and mapping survive."""
+    _run([*_tmux_base(socket_path), "move-pane", "-s", source, "-t", destination])
+
+
 def create_session(name: str, cwd: str | None = None, socket_path: str | None = None) -> None:
     args = [*_tmux_base(socket_path), "new-session", "-d", "-s", _valid_tmux_name(name)]
     if cwd:

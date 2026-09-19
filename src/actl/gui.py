@@ -730,6 +730,8 @@ class Board:
         tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
         pane_by_item: dict[str, tuple[object, Detection]] = {}
+        node_targets: dict[str, str] = {}
+        drag_state: dict[str, str | None] = {"source": None}
 
         def work():
             return _all_panes()
@@ -742,6 +744,7 @@ class Board:
             for item in tree.get_children():
                 tree.delete(item)
             pane_by_item.clear()
+            node_targets.clear()
             groups: dict[str, dict[str, list]] = {}
             pane_ids = {pane.pane_id for pane, _ in result}
             mapped_by_pane = {
@@ -760,9 +763,11 @@ class Board:
             status.configure(text=f"{len(result)}개 pane · session/window/pane을 선택하세요")
             for session, windows in groups.items():
                 sid = tree.insert("", "end", text=session, values=("session", "", "", "", ""), open=True)
+                node_targets[sid] = session
                 for window, entries in windows.items():
                     wid = tree.insert(sid, "end", text=window.split(":", 1)[1],
                                       values=("window", "", "", "", ""), open=True)
+                    node_targets[wid] = window
                     for pane, det in entries:
                         detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
                         mapped = mapped_by_pane.get(pane.pane_id, "미매핑")
@@ -771,6 +776,7 @@ class Board:
                             values=("pane", pane.current_command, pane.current_path, detected, mapped),
                         )
                         pane_by_item[pid] = (pane, det)
+                        node_targets[pid] = pane.target
             self.set_status("준비")
 
         def selected_target() -> tuple[str, str] | None:
@@ -799,14 +805,13 @@ class Board:
             item, kind = picked
             if kind == "pane":
                 pane, _ = pane_by_item[item]
-                target, initial, rename = pane.pane_id, pane.title, tmux.rename_pane
+                target, initial, rename = node_targets[item], pane.title, tmux.rename_pane
                 prompt = f"{pane.pane_id} pane 이름"
             elif kind == "window":
-                parent = tree.parent(item)
-                target = f"{tree.item(parent, 'text')}:{tree.item(item, 'text')}"
+                target = node_targets[item]
                 initial, rename, prompt = tree.item(item, "text"), tmux.rename_window, "window 이름"
             else:
-                target = tree.item(item, "text")
+                target = node_targets[item]
                 initial, rename, prompt = target, tmux.rename_session, "session 이름"
             name = simpledialog.askstring("tmux 이름 변경", prompt, initialvalue=initial, parent=top)
             if name is None:
@@ -873,6 +878,52 @@ class Board:
             top.destroy()
             self.on_board()
 
+        def window_target(item: str) -> str | None:
+            kind = tree.set(item, "kind")
+            if kind == "window":
+                return node_targets.get(item)
+            if kind == "session":
+                children = tree.get_children(item)
+                return window_target(children[0]) if children else None
+            if kind == "pane" and item in pane_by_item:
+                pane, _ = pane_by_item[item]
+                return node_targets.get(item, pane.target).rsplit(".", 1)[0]
+            return None
+
+        def drag_start(event) -> None:
+            item = tree.identify_row(event.y)
+            drag_state["source"] = item if item in pane_by_item else None
+
+        def drag_drop(event) -> None:
+            source_item = drag_state.get("source")
+            drag_state["source"] = None
+            if not source_item or source_item not in pane_by_item:
+                return
+            destination_item = tree.identify_row(event.y)
+            destination = window_target(destination_item) if destination_item else None
+            if not destination:
+                return
+            pane, _ = pane_by_item[source_item]
+            current_window = pane.target.rsplit(".", 1)[0]
+            if destination == current_window:
+                return
+            if not messagebox.askyesno(
+                "pane 이동 확인",
+                f"{pane.pane_id}를 {destination} 윈도우로 이동할까요?\n\n"
+                "작업 중인 Agent는 입력 상태가 바뀔 수 있습니다.",
+                parent=top,
+            ):
+                return
+            try:
+                tmux.move_pane(pane.pane_id, destination)
+            except Exception as exc:
+                messagebox.showerror("pane 이동 실패", str(exc), parent=top)
+                return
+            self.log(f"{pane.pane_id} → {destination} 이동됨")
+            top.destroy()
+            self.refresh()
+            self.on_board()
+
         actions = tk.Frame(top, bg=BG)
         actions.pack(fill="x", padx=12, pady=(0, 12))
         self._btn(actions, "Agent 지정", map_selected, primary=True).pack(side="left")
@@ -881,6 +932,8 @@ class Board:
         self._btn(actions, "새 window", create_window).pack(side="left")
         self._btn(actions, "pane 분할", split_selected).pack(side="left", padx=8)
         self._btn(actions, "새로고침", lambda: (top.destroy(), self.on_board())).pack(side="left")
+        tree.bind("<ButtonPress-1>", drag_start, add="+")
+        tree.bind("<ButtonRelease-1>", drag_drop, add="+")
         tree.bind("<Double-1>", lambda _e: map_selected() if tree.selection() and tree.set(tree.selection()[0], "kind") == "pane" else rename_selected())
         self._bg(work, done)
 
@@ -943,6 +996,19 @@ class Board:
             if result is True:
                 self.log(f"{row['display']}에 전송됨")
                 self.msg.delete("1.0", "end")
+                self.preview.delete("1.0", "end")
+                self.preview.insert("end", f"✓ {row['display']}에 메시지를 전송했습니다.\n\n작업 결과를 기다리는 중…")
+            elif isinstance(result, Exception):
+                detail = str(result) or type(result).__name__
+                self.set_status("전송 실패")
+                self.preview.delete("1.0", "end")
+                self.preview.insert(
+                    "end",
+                    f"✗ {row['display']} 전송 실패\n\n{detail}\n\n"
+                    "매핑 상태와 pane 작업 상태를 확인하세요.\n"
+                    "BUSY라면 현재 다른 작업이 pane을 점유 중입니다.",
+                )
+                self.log(f"{row['display']} 전송 실패: {detail}")
             else:
                 self.log(f"전송 실패: {result}")
 

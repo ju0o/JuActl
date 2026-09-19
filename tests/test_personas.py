@@ -70,6 +70,22 @@ def test_persona_pane_event_refresh_is_targeted_not_full_rows_refresh():
     assert "self._bg(lambda: _pane_preview(target), self._event_pane_done)" in gui
 
 
+def test_persona_send_failure_is_visible_in_monitor_surface():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert 'self.set_status("전송 실패")' in gui
+    assert "전송 실패\\n\\n{detail}" in gui
+    assert "BUSY라면 현재 다른 작업이 pane을 점유 중입니다." in gui
+
+
+def test_persona_pane_board_supports_confirmed_cross_window_move():
+    tmux = (ROOT / "src/actl/core/tmux.py").read_text(encoding="utf-8")
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    assert '"move-pane"' in tmux
+    assert "messagebox.askyesno" in gui
+    assert "<ButtonRelease-1>" in gui
+    assert "작업 중인 Agent는 입력 상태가 바뀔 수 있습니다." in gui
+
+
 def test_persona_mapping_stays_fail_closed_for_ambiguous_panes():
     discovery = (ROOT / "src/actl/core/discovery.py").read_text(encoding="utf-8")
     assert 'STRONG_CONFIDENCE = {"exact", "high"}' in discovery

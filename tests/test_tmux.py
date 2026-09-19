@@ -196,6 +196,13 @@ def test_tmux_names_reject_empty_or_multiline_values():
             raise AssertionError("expected tmux name validation")
 
 
+def test_tmux_move_pane_preserves_explicit_source_and_destination(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tmux, "_run", lambda args: calls.append(args))
+    tmux.move_pane("%7", "main:agents")
+    assert calls == [["tmux", "move-pane", "-s", "%7", "-t", "main:agents"]]
+
+
 def test_tmux_create_commands_preserve_session_window_pane_hierarchy(monkeypatch):
     calls = []
     monkeypatch.setattr(tmux, "_run", lambda args: calls.append(args))
