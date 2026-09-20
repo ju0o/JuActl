@@ -63,7 +63,16 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     args = tmux._remote_args(["tmux", "list-panes", "-F", "#{pane_id}	#{session_name}"])
     assert args == [
         "ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
-        "tmux", "list-panes", "-F", "'#{pane_id}\t#{session_name}'",
+        "tmux list-panes -F '#{pane_id}\t#{session_name}'",
+    ]
+
+
+def test_windows_remote_control_uses_one_remote_command(monkeypatch):
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+    assert tmux._remote_control_args("$1") == [
+        "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
+        "tmux -C attach-session -t '$1'",
     ]
 
 

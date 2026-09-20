@@ -112,10 +112,8 @@ class RemoteTransport:
             self.state = "DEGRADED"
             self._retry_at = now + 1.0
             raise TmuxError("remote tmux has no existing session; refusing to create one")
-        command = [
-            "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            self.target, "tmux", "-C", "attach-session", "-t", shlex.quote(session_id),
-        ]
+        command = _remote_control_args(session_id)
+        command[6] = self.target
         try:
             self._process = subprocess.Popen(
                 command,
@@ -299,10 +297,19 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
-        # ssh concatenates remote argv into a shell command. Quote each
-        # argument so tmux formats beginning with `#` survive that shell.
-        return command + [shlex.quote(part) for part in args]
+        # Windows OpenSSH handles the remote command as one argument. Passing
+        # separate argv items loses quoting through CreateProcess, especially
+        # for tmux formats beginning with `#`.
+        return command + [" ".join(shlex.quote(part) for part in args)]
     return command + [" ".join(shlex.quote(part) for part in args)]
+
+
+def _remote_control_args(session_id: str) -> list[str]:
+    parts = ["tmux", "-C", "attach-session", "-t", session_id]
+    command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET or ""]
+    if os.name == "nt":
+        return command + [" ".join(shlex.quote(part) for part in parts)]
+    return command + parts
 
 
 def _no_window() -> dict:
