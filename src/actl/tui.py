@@ -97,6 +97,13 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                              str(pane.pane_pid or "?"), pane.current_path or "-"))
         return "|".join((str(machine), name, target, path))
 
+    def tmux_coordinates(target: str) -> dict[str, str]:
+        parts = target.split(":", 1)
+        if len(parts) != 2 or "." not in parts[1]:
+            return {"session": UNKNOWN, "window": UNKNOWN, "pane_index": UNKNOWN}
+        window, pane = parts[1].split(".", 1)
+        return {"session": parts[0], "window": window, "pane_index": pane}
+
     instances: list[tuple[str, str, object, object | None]] = []
     for detection in all_dets:
         name = detection.agent
@@ -135,6 +142,7 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
         result_flag = "-"
         result_hash = ""
         result_state = "UNKNOWN"
+        coordinates = tmux_coordinates(det.pane.target if det is not None else target)
         if target != "-" and live_runtime:
             if hydrate:
                 try:
@@ -167,6 +175,9 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                 detail = str(exc)[:80]
                 result_flag = "?오류"
         from actl.core.projection import project_metadata
+        profile = None
+        if det is not None and "claude profile " in det.evidence:
+            profile = Path(det.evidence.rsplit(" ", 1)[-1]).name
         overlay = None
         if isinstance(overlays, dict):
             overlay = overlays.get(key) or overlays.get(name)
@@ -174,6 +185,7 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
             config, name, pane_path,
             activity_state=activity_state,
             result_state=result_state,
+            profile=profile,
             overlay=overlay,
         )
         if metadata.get("project") == UNKNOWN:
@@ -187,6 +199,13 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
             "machine": machine, "pane_path": pane_path, "control_ready": control_ready,
             "live_runtime": live_runtime,
             "runtime_identity": key,
+            "pane_id": det.pane.pane_id if det is not None else UNKNOWN,
+            "pane_target": det.pane.target if det is not None else target,
+            "pane_command": det.pane.current_command if det is not None else UNKNOWN,
+            "pane_pid": str(det.pane.pane_pid) if det is not None and det.pane.pane_pid else UNKNOWN,
+            "session": coordinates["session"], "window": coordinates["window"],
+            "pane_index": coordinates["pane_index"],
+            "detection_evidence": det.evidence if det is not None else UNKNOWN,
             **metadata,
             "project": "UNASSIGNED" if metadata.get("project") == "UNKNOWN" else metadata.get("project"),
             "unread": bool(result_hash and seen.get(name) != result_hash),

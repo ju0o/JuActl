@@ -60,6 +60,17 @@ def test_projection_keeps_duplicate_agent_runtime_instances(monkeypatch):
     assert {row["project"] for row in rows} == {"Agent-Relay", "actl", "UNASSIGNED"}
     assert rows[-1]["role"] == "UNKNOWN"
     assert all(not row["control_ready"] for row in rows)
+    assert {row["pane_id"] for row in rows} == {"%1", "%2", "%3", "%4"}
+    assert {row["session"] for row in rows} == {"0"}
+    assert {row["window"] for row in rows} == {"0"}
+    assert {row["pane_index"] for row in rows} == {"0", "1", "2", "3"}
+    assert all(row["model_profile"] == "UNKNOWN" for row in rows)
+
+
+def test_projection_exposes_evidence_backed_claude_profile():
+    config = {"agents": {"claude-team": {}}}
+    result = project_metadata(config, "claude-team", "/work/Agent-Relay", profile=".claude-team")
+    assert result["model_profile"] == ".claude-team"
 
 
 def test_projection_mismatched_mapping_remains_visible_and_not_actionable(monkeypatch):

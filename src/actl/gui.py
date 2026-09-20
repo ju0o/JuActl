@@ -468,6 +468,8 @@ class Board:
         self._render_projects()
         self._render_cards(self.selected)
         self._update_action_state()
+        if self.selected:
+            self.on_select()
         self.log("runtime detail hydration 완료")
 
     def refresh(self, quiet: bool = False) -> None:
@@ -611,7 +613,9 @@ class Board:
             tk.Label(top, text=r.get("runtime_state", "UNKNOWN"), bg=PANEL, fg=color, font=FONT).pack(side="right")
             pane_tail = (r.get("pane_preview") or r["preview"] or r["detail"] or "—").replace("\n", " ")
             sub = (f"{r.get('project', 'UNKNOWN')} · {r.get('model_profile', 'UNKNOWN')} · "
-                   f"{r.get('runtime_state', 'UNKNOWN')} · {r.get('current_task', 'UNKNOWN')} · {pane_tail}")[:180]
+                   f"Pane {r.get('pane_id', 'UNKNOWN')} {r.get('pane_target', '')} · "
+                   f"{r.get('runtime_state', 'UNKNOWN')} · "
+                   f"{r.get('current_task', 'UNKNOWN')} · {pane_tail}")[:180]
             phase = self._phase(r)
             activity = phase
             if r.get("activity_state") == "RUNNING":
@@ -670,6 +674,9 @@ class Board:
             f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')}\n"
             f"Agent {row.get('display', row.get('agent'))} · Role {row.get('role', 'UNKNOWN')}\n"
             f"Model/Profile {row.get('model_profile', 'UNKNOWN')} · State {row.get('runtime_state', 'UNKNOWN')}\n"
+            f"Pane {row.get('pane_id', 'UNKNOWN')} · Session {row.get('session', 'UNKNOWN')} "
+            f"Window {row.get('window', 'UNKNOWN')} Pane {row.get('pane_index', 'UNKNOWN')}\n"
+            f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}\n"
             f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}"
         )
         if tgt == "-":
@@ -682,12 +689,12 @@ class Board:
 
         def work():
             diagnostic = _verify_row(row["agent"], tgt, self.config) if row.get("control_ready") else "읽기 전용 발견 runtime — 매핑 전 제어 비활성"
-            return diagnostic + "\n" + _pane_preview(tgt)
+            return "LIVE PANE PREVIEW\n" + diagnostic + "\n\n" + _pane_preview(tgt)
 
         def done(result) -> None:
             self.preview.delete("1.0", "end")
             self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
-            self.pane_title.set(f"{row['display']} {tgt} — live")
+            self.pane_title.set(f"{row['display']} · {row.get('pane_id', tgt)} — LIVE PANE")
             self.set_status("준비")
         self._bg(work, done)
 
