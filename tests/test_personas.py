@@ -24,13 +24,13 @@ def test_persona_operator_refresh_is_event_first_with_health_fallback():
     assert "60000" in gui
 
 
-def test_persona_dashboard_only_shows_actionable_mappings_and_clear_phases():
+def test_persona_dashboard_shows_live_runtimes_and_gates_controls():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
-    assert 'r["target"] in {"-", ""}' in gui
+    assert 'row.get("control_ready")' in gui
+    assert "LIVE RUNTIME INSTANCES" in gui
     assert 'return "결과 도착"' in gui
     assert 'return "작업중"' in gui
     assert 'return "Prompt 대기"' in gui
-    assert 'columns=("kind", "runtime", "path", "agent", "mapped")' in gui
 
 
 def test_persona_windows_remote_copy_prefers_mainpc_clipboard():

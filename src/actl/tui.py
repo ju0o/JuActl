@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import hashlib
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from actl.agents.extract import extract_last_response
@@ -33,8 +34,10 @@ RESET = "\x1b[0m"
 
 
 def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[dict]:
-    """One row per agent: live target, status, busy/result, preview, candidates."""
+    """Project each verified live detection as its own runtime row."""
     from actl.core.discovery import discover as _disc
+    from actl.core.discovery import target_matches
+    from actl.core.models import PaneInfo
 
     all_dets = [d for d in (detections if detections is not None else _disc())
                 if d.agent and d.confidence in STRONG_CONFIDENCE]
@@ -44,30 +47,80 @@ def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[d
     from actl.core.state import seen_results
     seen = seen_results()
 
-    def build(item: tuple[int, tuple[str, object]]) -> dict:
-        idx, (name, spec) = item
+    from actl.core.tmux import REMOTE_SSH_TARGET
+    from actl.core.projection import UNKNOWN
+    machine = config.get("machine") or REMOTE_SSH_TARGET or "local"
+
+    def verified_project_names(paths: set[str]) -> dict[str, str]:
+        import subprocess
+
+        from actl.core.tmux import _no_window, _remote_args
+
+        names: dict[str, str] = {}
+        for path in paths:
+            if not path or path in {"-", UNKNOWN}:
+                continue
+            try:
+                result = subprocess.run(
+                    _remote_args(["git", "-C", path, "rev-parse", "--show-toplevel"]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    check=False, timeout=5, **_no_window(),
+                )
+                root = result.stdout.strip() if result.returncode == 0 else ""
+                if root:
+                    names[path] = Path(root).name or UNKNOWN
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return names
+
+    project_names = verified_project_names({d.pane.current_path for d in all_dets})
+
+    def runtime_key(name: str, pane: PaneInfo | None = None, *, target: str = "-", path: str = "-") -> str:
+        """Projection key from existing runtime evidence, not a new identity."""
+        if pane is not None:
+            return "|".join((str(machine), name, pane.target, pane.pane_id,
+                             str(pane.pane_pid or "?"), pane.current_path or "-"))
+        return "|".join((str(machine), name, target, path))
+
+    instances: list[tuple[str, str, object, object | None]] = []
+    for detection in all_dets:
+        name = detection.agent
+        instances.append((runtime_key(name, detection.pane), name, AGENTS[name], detection))
+    def build(item: tuple[str, str, object, object | None]) -> dict:
+        key, name, spec, det = item
         target = "-"
         state = "UNMAPPED"
         pane_path = "-"
+        control_ready = False
+        live_runtime = det is not None
         try:
-            target = get_target(config, name).target
+            mapped_target = get_target(config, name).target
+        except ValueError:
+            mapped_target = None
+        if det is not None:
+            target = det.pane.pane_id
+            pane_path = det.pane.current_path
+            if mapped_target and target_matches(det.pane, mapped_target):
+                validation = validate_target(name, mapped_target)
+                state = validation.state
+                control_ready = state == "UP"
+            else:
+                state = "DETECTED"
+        elif mapped_target:
+            target = mapped_target
             validation = validate_target(name, target)
             state = validation.state
             pane_path = validation.path
-        except ValueError:
-            det = by_agent.get(name, [None])[0]
-            if det:
-                target = f"{det.pane.pane_id}?"
-                state = "DETECTED"
-                pane_path = det.pane.current_path
+            control_ready = state == "UP"
         preview = ""
+        pane_preview = ""
         detail = ""
         busy = "-"
         activity_state = "UNKNOWN"
         result_flag = "-"
         result_hash = ""
         result_state = "UNKNOWN"
-        if target != "-" and not target.endswith("?"):
+        if target != "-" and live_runtime:
             try:
                 from actl.core.activity import observe_activity
 
@@ -75,6 +128,13 @@ def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[d
                 busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
             except Exception:
                 busy = "?"
+            try:
+                from actl.core.tmux import capture_pane
+
+                pane_preview = capture_pane(target, history=8).strip()[-900:]
+            except Exception:
+                pane_preview = ""
+        if target != "-" and control_ready:
             try:
                 result = extract_last_response(name, target, config)
                 if result.text:
@@ -90,32 +150,44 @@ def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[d
             except Exception as exc:
                 detail = str(exc)[:80]
                 result_flag = "?오류"
-        cands = [d for d in by_agent.get(name, []) if d.pane.pane_id != target]
         from actl.core.projection import project_metadata
-        from actl.core.tmux import REMOTE_SSH_TARGET
+        overlay = None
+        if isinstance(overlays, dict):
+            overlay = overlays.get(key) or overlays.get(name)
         metadata = project_metadata(
             config, name, pane_path,
             activity_state=activity_state,
             result_state=result_state,
-            overlay=(overlays or {}).get(name),
+            overlay=overlay,
         )
+        if metadata.get("project") == UNKNOWN:
+            metadata["project"] = project_names.get(pane_path, UNKNOWN)
         return {
-            "key": str(idx), "agent": name, "display": spec.display_name,
+            "key": key, "runtime_key": key, "agent": name, "display": spec.display_name,
             "target": target, "state": state, "preview": preview, "detail": detail,
+            "pane_preview": pane_preview,
             "busy": busy, "activity_state": activity_state, "result_flag": result_flag,
             "result_state": result_state, "result_hash": result_hash,
-            "machine": config.get("machine") or REMOTE_SSH_TARGET or "local", "pane_path": pane_path,
+            "machine": machine, "pane_path": pane_path, "control_ready": control_ready,
+            "live_runtime": live_runtime,
+            "runtime_identity": key,
             **metadata,
+            "project": "UNASSIGNED" if metadata.get("project") == "UNKNOWN" else metadata.get("project"),
             "unread": bool(result_hash and seen.get(name) != result_hash),
-            "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
-                            "evidence": d.evidence} for d in cands],
         }
 
-    items = list(enumerate(AGENTS.items(), 1))
     # ponytail: bounded workers hide slow independent pane/storage reads;
     # increase only after measuring a real remote saturation problem.
-    with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
-        return list(pool.map(build, items))
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(instances)))) as pool:
+        rows = list(pool.map(build, instances))
+    role_order = {"PM": 0, "BUILDER": 1, "QA": 2}
+    rows.sort(key=lambda row: (row.get("machine", ""), row.get("project", "UNKNOWN") == "UNASSIGNED",
+                               row.get("project", "UNKNOWN"), role_order.get(row.get("role"), 3),
+                               row.get("runtime_identity", "")))
+    for index, row in enumerate(rows, 1):
+        row["key"] = str(index)
+        row["key_display"] = str(index)
+    return rows
 
 
 STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED": "미매핑", "DETECTED": "감지됨"}
@@ -610,8 +682,8 @@ def run_tui() -> int:
             if ch == "s":
                 row = rows[selected]
                 tgt = row["target"]
-                if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} live pane 없음 (먼저 m 눌러 매핑)"
+                if tgt == "-" or not row.get("control_ready"):
+                    message = f"✗ {row['display']} 제어 비활성 (validated mapping 필요)"
                     _render(rows, selected, message)
                     continue
                 cb.restore()
@@ -655,8 +727,8 @@ def run_tui() -> int:
             if ch in {"c", "p"}:
                 row = rows[selected]
                 tgt = row["target"]
-                if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} live pane 없음"
+                if tgt == "-" or not row.get("control_ready"):
+                    message = f"✗ {row['display']} 복사 비활성 (validated mapping 필요)"
                     _render(rows, selected, message)
                     continue
                 try:

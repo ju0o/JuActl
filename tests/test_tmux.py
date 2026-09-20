@@ -76,6 +76,12 @@ def test_windows_remote_control_uses_one_remote_command(monkeypatch):
     ]
 
 
+def test_remote_control_quotes_numeric_session_id_on_posix(monkeypatch):
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+    assert tmux._remote_control_args("$0")[-1] == "tmux -C attach-session -t '$0'"
+
+
 def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     class Pipe:
         def __init__(self, rows=None, on_write=None):
@@ -142,7 +148,7 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
         assert tmux._run(["tmux", "list-panes", "-F", "#{pane_id}"]).stdout == "%p1\n"
         assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
         assert len(processes) == 1
-        assert "attach-session" in processes[0].command
+        assert "attach-session" in " ".join(processes[0].command)
         assert "$0" in " ".join(processes[0].command)
         assert "new-session" not in processes[0].command
         assert processes[0].stdin.writes == [

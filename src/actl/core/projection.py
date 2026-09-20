@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 UNKNOWN = "UNKNOWN"
+RUNTIME_STATES = ("WORKING", "IDLE", "BLOCKED", "DONE", UNKNOWN)
 
 
 def _string(value: Any) -> str:
@@ -21,6 +22,16 @@ def _inside(path: str, root: str) -> bool:
 
 
 def _project_metadata(config: dict, agent: str, pane_path: str) -> tuple[str, dict]:
+    projects = config.get("projects")
+    if isinstance(projects, dict):
+        for name, value in projects.items():
+            if not isinstance(value, dict):
+                continue
+            root = value.get("root")
+            if root and _inside(pane_path, str(root)):
+                agents = value.get("agents")
+                details = agents.get(agent, {}) if isinstance(agents, dict) else {}
+                return _string(name), details if isinstance(details, dict) else {}
     project = config.get("project")
     if isinstance(project, str):
         return _string(project), {}
@@ -75,3 +86,23 @@ def project_metadata(config: dict, agent: str, pane_path: str = "-",
         "current_task": _string(task_id),
         "live_pane": pane_path not in {"", "-", UNKNOWN},
     }
+
+
+def runtime_counts(rows: list[dict]) -> dict[str, int]:
+    """Count projected runtime instances, never canonical Agent types."""
+    return {state: sum(row.get("runtime_state") == state for row in rows) for state in RUNTIME_STATES}
+
+
+def project_groups(rows: list[dict]) -> dict[str, list[dict]]:
+    """Group the already projected rows without deduplicating them."""
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row.get("project") or "UNASSIGNED", []).append(row)
+    return groups
+
+
+def filter_project(rows: list[dict], project: str | None) -> list[dict]:
+    """Return all runtime rows for one project, or all rows for None."""
+    if project is None:
+        return list(rows)
+    return [row for row in rows if row.get("project") == project]

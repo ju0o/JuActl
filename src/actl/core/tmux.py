@@ -308,9 +308,7 @@ def _remote_args(args: list[str]) -> list[str]:
 def _remote_control_args(session_id: str) -> list[str]:
     parts = ["tmux", "-C", "attach-session", "-t", session_id]
     command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET or ""]
-    if os.name == "nt":
-        return command + [" ".join(shlex.quote(part) for part in parts)]
-    return command + parts
+    return command + [" ".join(shlex.quote(part) for part in parts)]
 
 
 def _no_window() -> dict:
