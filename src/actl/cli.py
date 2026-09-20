@@ -306,6 +306,13 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
                 f"Selected runtime is {validation.state}; sending blocked: {validation.detail}"
             )
         try:
+            if is_remote():
+                from actl.core.remote import ManagedUnsupported, remote_managed_send
+
+                try:
+                    return remote_managed_send(agent, target, prompt)
+                except ManagedUnsupported:
+                    pass
             send_prompt(target, prompt)
         except WriterDenied as denied:
             from actl.core.audit import record
