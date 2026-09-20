@@ -103,7 +103,8 @@ class RemoteTransport:
             candidate, _, rest = line.partition("\t")
             name, _, windows = rest.partition("\t")
             try:
-                if candidate.strip() and name.strip() and not name.strip().isdigit() and int(windows) > 0:
+                valid_session_id = re.fullmatch(r"\$\d+", candidate.strip())
+                if valid_session_id and name.strip() and int(windows) > 0:
                     session_id = candidate.strip()
                     break
             except ValueError:
