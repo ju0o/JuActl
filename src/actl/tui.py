@@ -32,7 +32,7 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
-def _rows(config: dict, detections=None) -> list[dict]:
+def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[dict]:
     """One row per agent: live target, status, busy/result, preview, candidates."""
     from actl.core.discovery import discover as _disc
 
@@ -48,14 +48,18 @@ def _rows(config: dict, detections=None) -> list[dict]:
         idx, (name, spec) = item
         target = "-"
         state = "UNMAPPED"
+        pane_path = "-"
         try:
             target = get_target(config, name).target
-            state = validate_target(name, target).state
+            validation = validate_target(name, target)
+            state = validation.state
+            pane_path = validation.path
         except ValueError:
             det = by_agent.get(name, [None])[0]
             if det:
                 target = f"{det.pane.pane_id}?"
                 state = "DETECTED"
+                pane_path = det.pane.current_path
         preview = ""
         detail = ""
         busy = "-"
@@ -87,11 +91,21 @@ def _rows(config: dict, detections=None) -> list[dict]:
                 detail = str(exc)[:80]
                 result_flag = "?오류"
         cands = [d for d in by_agent.get(name, []) if d.pane.pane_id != target]
+        from actl.core.projection import project_metadata
+        from actl.core.tmux import REMOTE_SSH_TARGET
+        metadata = project_metadata(
+            config, name, pane_path,
+            activity_state=activity_state,
+            result_state=result_state,
+            overlay=(overlays or {}).get(name),
+        )
         return {
             "key": str(idx), "agent": name, "display": spec.display_name,
             "target": target, "state": state, "preview": preview, "detail": detail,
             "busy": busy, "activity_state": activity_state, "result_flag": result_flag,
             "result_state": result_state, "result_hash": result_hash,
+            "machine": config.get("machine") or REMOTE_SSH_TARGET or "local", "pane_path": pane_path,
+            **metadata,
             "unread": bool(result_hash and seen.get(name) != result_hash),
             "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
                             "evidence": d.evidence} for d in cands],
@@ -157,7 +171,8 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
         state_ko = STATE_KO.get(row["state"], row["state"])
         sys.stdout.write(
             f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} "
-            f"{state_ko:<9}{RESET} {row['busy']:<4} {row['result_flag']:<6} "
+            f"{state_ko:<9}{RESET} {row.get('busy', '미확인'):<4} "
+            f"{row.get('runtime_state', 'UNKNOWN'):<7} {row['result_flag']:<6} "
             f"{row['preview'] or row['detail']}\n"
         )
     if message:

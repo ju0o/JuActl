@@ -185,7 +185,7 @@ async function refresh(quiet){
       div.className = "card"+(a.agent===SEL?" sel":"");
       div.dataset.agent = a.agent;
       const resultLabel={READY:'결과 준비',WAITING:'결과 대기',UNKNOWN:'결과 미확인'}[a.result_state]||'결과 미확인';
-      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.target)} · ${esc(KO[a.state]||a.state)}</span><div class="sub">${esc(a.activity_ko||a.activity||"미확인")} · ${esc(resultLabel)} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
+      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.runtime_state||'UNKNOWN')}</span><div class="sub">${esc(a.project||'UNKNOWN')} · ${esc(a.role||'UNKNOWN')} · ${esc(a.model_profile||'UNKNOWN')} · ${esc(a.current_task||'UNKNOWN')} · ${esc(resultLabel)} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
       div.onclick = ()=>select(a.agent);
       box.appendChild(div);
     });
@@ -300,6 +300,10 @@ def _board_data(*, reconcile: bool = False) -> dict:
     return {
         "agents": [
             {"agent": r["agent"], "display": r["display"], "target": r["target"],
+             "machine": r.get("machine", "local"), "project": r.get("project", "UNKNOWN"),
+             "role": r.get("role", "UNKNOWN"), "model_profile": r.get("model_profile", "UNKNOWN"),
+             "runtime_state": r.get("runtime_state", "UNKNOWN"), "current_task": r.get("current_task", "UNKNOWN"),
+             "live_pane": bool(r.get("live_pane")),
              "state": r["state"], "preview": r["preview"], "detail": r["detail"],
              "activity": r.get("busy", "미확인"), "activity_ko": r.get("busy", "미확인"),
              "activity_state": r.get("activity_state", "UNKNOWN"), "result_flag": r.get("result_flag", "-"),

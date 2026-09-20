@@ -526,7 +526,9 @@ class Board:
             tk.Label(top, text=f"{glyph} {r['display']}", bg=PANEL, fg=color,
                      font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
-            sub = (r["preview"] or r["detail"] or "—")[:60]
+            sub = (f"{r.get('project', 'UNKNOWN')} · {r.get('role', 'UNKNOWN')} · "
+                   f"{r.get('model_profile', 'UNKNOWN')} · {r.get('runtime_state', 'UNKNOWN')} · "
+                   f"{r.get('current_task', 'UNKNOWN')} · {r['preview'] or r['detail'] or '—'}")[:120]
             phase = self._phase(r)
             activity = phase
             if r.get("activity_state") == "RUNNING":
@@ -579,7 +581,11 @@ class Board:
         self.selected = row["agent"]
         tgt = row["target"]
         result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(row.get("result_state"), "미확인")
-        self.detail_var.set(f"상태 {STATE_KO.get(row['state'], row['state'])} · {row.get('busy', '활동 미확인')} · 결과 {result_label} · 대상 {tgt}")
+        self.detail_var.set(
+            f"{row.get('project', 'UNKNOWN')} · {row.get('role', 'UNKNOWN')} · "
+            f"{row.get('model_profile', 'UNKNOWN')} · {row.get('runtime_state', 'UNKNOWN')} · "
+            f"결과 {result_label} · 대상 {tgt}"
+        )
         if tgt == "-" or tgt.endswith("?"):
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")
