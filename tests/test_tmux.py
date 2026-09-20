@@ -70,9 +70,9 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
 def test_windows_remote_control_uses_one_remote_command(monkeypatch):
     monkeypatch.setattr(tmux.os, "name", "nt")
     monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
-    assert tmux._remote_control_args("$1") == [
+    assert tmux._remote_control_args("$0") == [
         "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
-        "tmux -C attach-session -t '$1'",
+        "tmux -C attach-session -t '$0'",
     ]
 
 
@@ -134,7 +134,7 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$1\tjucontrol\t5\n"})(),
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$0\t0\t5\n"})(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
     tmux.set_remote_ssh("asus")
@@ -143,6 +143,7 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
         assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
         assert len(processes) == 1
         assert "attach-session" in processes[0].command
+        assert "$0" in " ".join(processes[0].command)
         assert "new-session" not in processes[0].command
         assert processes[0].stdin.writes == [
             '"list-panes" "-F" "#{pane_id}"\n',
@@ -171,6 +172,30 @@ def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
         assert spawned == []
     finally:
         transport.close()
+
+
+def test_remote_transport_rejects_invalid_or_empty_session_identity(monkeypatch):
+    spawned = []
+    monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
+    for stdout in ("", "0\t0\t1\n", "$\t0\t1\n", "$abc\t0\t1\n", "$0\t\t1\n", "$0\t0\t0\n"):
+        monkeypatch.setattr(
+            tmux.subprocess,
+            "run",
+            lambda *args, stdout=stdout, **kwargs: type(
+                "Result", (), {"returncode": 0, "stdout": stdout}
+            )(),
+        )
+        transport = tmux.RemoteTransport("asus")
+        try:
+            try:
+                transport.executeTmux(["tmux", "list-panes"])
+            except tmux.TmuxError as exc:
+                assert "refusing to create one" in str(exc)
+            else:
+                raise AssertionError(f"invalid remote tmux identity must fail closed: {stdout!r}")
+        finally:
+            transport.close()
+    assert spawned == []
 
 
 def test_socket_path_passed_as_dash_s(monkeypatch):
