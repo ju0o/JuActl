@@ -53,6 +53,8 @@ def test_projection_keeps_duplicate_agent_runtime_instances(monkeypatch):
     ]
     detections = [Detection(pane, "codex", "high", f"pid {pane.pane_pid}: codex") for pane in panes]
     monkeypatch.setattr(tui_module, "get_target", lambda *_args: (_ for _ in ()).throw(ValueError("unmapped")))
+    monkeypatch.setattr(tui_module, "validate_target",
+                        lambda agent, target: TargetValidation("UP", target, pane_id=target))
     rows = _rows(config, detections=detections)
     rows = [row for row in rows if row["agent"] == "codex"]
     assert len(rows) == 4
@@ -60,7 +62,8 @@ def test_projection_keeps_duplicate_agent_runtime_instances(monkeypatch):
     assert [row["project"] for row in rows].count("actl") == 2
     assert {row["project"] for row in rows} == {"Agent-Relay", "actl", "UNASSIGNED"}
     assert rows[-1]["role"] == "UNKNOWN"
-    assert all(not row["control_ready"] for row in rows)
+    assert all(row["control_ready"] for row in rows)
+    assert all(row["control_reason"] == "READY" for row in rows)
     assert {row["pane_id"] for row in rows} == {"%1", "%2", "%3", "%4"}
     assert {row["session"] for row in rows} == {"0"}
     assert {row["window"] for row in rows} == {"0"}
@@ -79,12 +82,15 @@ def test_projection_mismatched_mapping_remains_visible_and_not_actionable(monkey
     config = {"project": {"name": "Agent-Relay", "root": "/work/Agent-Relay"},
               "agents": {"codex": {"target": "%2"}}}
     monkeypatch.setattr(tui_module, "get_target", lambda *_args: AgentTarget("codex", "%2"))
+    monkeypatch.setattr(tui_module, "validate_target",
+                        lambda agent, target: TargetValidation("MISMATCH", target, detail="pid changed"))
     rows = [row for row in _rows(config, detections=[Detection(pane, "codex", "high", "pid 101: codex")])
             if row["agent"] == "codex"]
     assert len(rows) == 1
-    assert rows[0]["state"] == "DETECTED"
+    assert rows[0]["state"] == "MISMATCH"
     assert rows[0]["live_runtime"] is True
     assert rows[0]["control_ready"] is False
+    assert rows[0]["control_reason"] == "MISMATCH"
 
 
 def test_projection_enables_control_only_for_validated_up_target(monkeypatch):
@@ -97,6 +103,19 @@ def test_projection_enables_control_only_for_validated_up_target(monkeypatch):
             if row["agent"] == "codex"]
     assert rows[0]["control_ready"] is True
     assert rows[0]["control_reason"] == "READY"
+
+
+def test_duplicate_agent_family_is_not_an_instance_ambiguity(monkeypatch):
+    panes = [
+        PaneInfo("%3", "0:0.0", "codex", "/work/actl", "", 103),
+        PaneInfo("%4", "0:0.1", "codex", "/work/actl", "", 104),
+    ]
+    monkeypatch.setattr(tui_module, "get_target", lambda *_args: (_ for _ in ()).throw(ValueError("unmapped")))
+    monkeypatch.setattr(tui_module, "validate_target",
+                        lambda agent, target: TargetValidation("UP", target, pane_id=target))
+    rows = _rows({}, [Detection(p, "codex", "high", f"pid {p.pane_pid}: codex") for p in panes], hydrate=False)
+    assert {row["pane_id"] for row in rows} == {"%3", "%4"}
+    assert all(row["control_reason"] == "READY" for row in rows)
 
 
 def test_fast_projection_keeps_inventory_without_detail_hydration(monkeypatch):

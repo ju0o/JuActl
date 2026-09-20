@@ -36,14 +36,10 @@ RESET = "\x1b[0m"
 def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrate: bool = True) -> list[dict]:
     """Project each verified live detection as its own runtime row."""
     from actl.core.discovery import discover as _disc
-    from actl.core.discovery import target_matches
     from actl.core.models import PaneInfo
 
     all_dets = [d for d in (detections if detections is not None else _disc())
                 if d.agent and d.confidence in STRONG_CONFIDENCE]
-    by_agent: dict[str, list] = {}
-    for d in all_dets:
-        by_agent.setdefault(d.agent, []).append(d)
     from actl.core.state import seen_results
     seen = seen_results()
 
@@ -124,19 +120,16 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
         if det is not None:
             target = det.pane.pane_id
             pane_path = det.pane.current_path
-            if mapped_target and target_matches(det.pane, mapped_target):
-                validation = validate_target(name, mapped_target)
-                state = validation.state
-                control_ready = state == "UP"
-                control_reason = "READY" if control_ready else validation.state
-                control_detail = validation.detail or f"validated target state is {validation.state}"
-            else:
-                state = "DETECTED"
-                control_reason = "AMBIGUOUS" if len(by_agent.get(name, [])) > 1 else ("MISMATCH" if mapped_target else "UNMAPPED")
-                control_detail = ("multiple strong live runtimes share this Agent family; existing mapping preserved"
-                                  if control_reason == "AMBIGUOUS" else
-                                  f"live runtime is different from mapped target {mapped_target}"
-                                  if mapped_target else "strong runtime detected but no validated mapping")
+            # Validate the selected live pane itself. Another pane using the
+            # same Agent family does not make this instance ambiguous.
+            validation = validate_target(name, target)
+            state = validation.state
+            control_ready = state == "UP"
+            control_reason = "READY" if control_ready else (
+                "STALE" if state == "DOWN" else
+                "MISMATCH" if state == "MISMATCH" else state
+            )
+            control_detail = validation.detail or f"validated selected runtime state is {state}"
         elif mapped_target:
             target = mapped_target
             validation = validate_target(name, target)

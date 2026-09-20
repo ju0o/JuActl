@@ -295,9 +295,32 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     return 0
 
 
-def _send_to_selected(config: dict, agent: str, prompt: str) -> str:
+def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | None = None) -> str:
     """Resolve on every send; never retain a target across /switch."""
     from actl.core.remote import is_remote, remote_send
+
+    if target is not None:
+        validation = validate_target(agent, target)
+        if not validation.valid:
+            raise ValueError(
+                f"Selected runtime is {validation.state}; sending blocked: {validation.detail}"
+            )
+        try:
+            send_prompt(target, prompt)
+        except WriterDenied as denied:
+            from actl.core.audit import record
+
+            record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=denied.code)
+            raise RuntimeError(f"{denied.code}: {denied.detail}") from denied
+        except Exception as exc:
+            from actl.core.audit import record
+
+            record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=type(exc).__name__)
+            raise
+        from actl.core.audit import record
+
+        record("send", agent=agent, target=target, ok=True, chars=len(prompt))
+        return target
 
     if is_remote():
         try:

@@ -1214,7 +1214,7 @@ class Board:
         def work():
             from actl.cli import _send_to_selected
 
-            _send_to_selected(self.config, row["agent"], text)
+            _send_to_selected(self.config, row["agent"], text, target=row["target"])
             return True
 
         def done(result) -> None:
