@@ -39,7 +39,8 @@ def test_persona_dashboard_inventory_is_fast_and_hydrates_after_render():
     assert 'hydrate=False' in gui
     assert 'hydrate=True' in gui
     assert 'if self.hydrating' in gui
-    assert 'capture_pane(target, history=8)' in tui
+    assert 'capture_pane(target, history=8)' not in tui
+    assert 'history=8' not in tui
 
 
 def test_persona_windows_remote_copy_prefers_mainpc_clipboard():
@@ -76,7 +77,14 @@ def test_persona_pane_event_refresh_is_targeted_not_full_rows_refresh():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert "self.pending_event_panes" in gui
     assert "self._refresh_event_panes(pane_ids)" in gui
-    assert "self._bg(lambda: _pane_preview(target), self._event_pane_done)" in gui
+    assert "self._request_preview(row)" in gui
+
+
+def test_persona_preview_preserves_last_good_on_failure():
+    from actl.gui import _preview_text
+
+    text, fresh = _preview_text("last pane", "(미리보기 불가: timeout)")
+    assert "last pane" in text and "STALE" in text and not fresh
 
 
 def test_persona_send_failure_is_visible_in_monitor_surface():

@@ -111,6 +111,20 @@ def test_low_confidence_is_not_auto_applied():
     assert updated["agents"] == {} and not changes
 
 
+def test_unique_only_reconcile_maps_one_strong_runtime(monkeypatch):
+    detected = Detection(PANE, "cursor", "high", "pid 11: cursor")
+    updated, changes = reconcile({"agents": {}}, [detected], unique_only=True)
+    assert updated["agents"]["cursor"]["target"] == "%3"
+    assert changes
+
+
+def test_unique_only_reconcile_does_not_map_ambiguous_agent():
+    first = Detection(PANE, "codex", "high", "pid 11: codex")
+    second = Detection(PaneInfo("%4", "work:0.4", "codex", "/project", ""), "codex", "high", "pid 12: codex")
+    updated, changes = reconcile({"agents": {}}, [first, second], unique_only=True)
+    assert updated["agents"] == {} and not changes
+
+
 def test_manual_map_override_stores_pane_id(monkeypatch):
     monkeypatch.setattr(discovery, "validate_target", lambda *_: TargetValidation("UP", "%3"))
     updated = manual_map({"agents": {}}, "cursor", Detection(PANE, None, "unknown", "manual choice"))

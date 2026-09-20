@@ -1,5 +1,6 @@
 from actl.core.models import AgentTarget, PaneInfo
-from actl.core.projection import filter_project, project_groups, project_metadata, runtime_counts, runtime_state
+from actl.core.validation import TargetValidation
+from actl.core.projection import attention_rows, filter_project, project_groups, project_metadata, runtime_counts, runtime_state
 from actl.core.discovery import Detection
 from actl.tui import _rows
 import actl.tui as tui_module
@@ -86,6 +87,18 @@ def test_projection_mismatched_mapping_remains_visible_and_not_actionable(monkey
     assert rows[0]["control_ready"] is False
 
 
+def test_projection_enables_control_only_for_validated_up_target(monkeypatch):
+    pane = PaneInfo("%1", "0:0.0", "codex", "/work/Agent-Relay", "", 101)
+    config = {"project": {"name": "Agent-Relay", "root": "/work/Agent-Relay"},
+              "agents": {"codex": {"target": "%1"}}}
+    monkeypatch.setattr(tui_module, "get_target", lambda *_args: AgentTarget("codex", "%1"))
+    monkeypatch.setattr(tui_module, "validate_target", lambda *_args: TargetValidation("UP", "%1", path="/work/Agent-Relay"))
+    rows = [row for row in _rows(config, detections=[Detection(pane, "codex", "high", "pid 101: codex")], hydrate=False)
+            if row["agent"] == "codex"]
+    assert rows[0]["control_ready"] is True
+    assert rows[0]["control_reason"] == "READY"
+
+
 def test_fast_projection_keeps_inventory_without_detail_hydration(monkeypatch):
     pane = PaneInfo("%1", "0:0.0", "codex", "/work/Agent-Relay", "", 101)
     config = {"project": {"name": "Agent-Relay", "root": "/work/Agent-Relay"}, "agents": {}}
@@ -108,3 +121,12 @@ def test_runtime_groups_filters_and_counts_use_instances():
     assert len(filter_project(rows, "actl")) == 2
     assert len(filter_project(rows, None)) == 3
     assert runtime_counts(rows) == {"WORKING": 1, "IDLE": 1, "BLOCKED": 0, "DONE": 0, "UNKNOWN": 1}
+
+
+def test_attention_excludes_plain_unknown_but_keeps_actionable_reasons():
+    rows = [{"runtime_state": "UNKNOWN", "state": "DETECTED", "control_reason": "READY"},
+            {"runtime_state": "UNKNOWN", "state": "DETECTED", "control_reason": "UNMAPPED"},
+            {"runtime_state": "IDLE", "state": "MISMATCH", "control_reason": "MISMATCH"}]
+    result = attention_rows(rows)
+    assert len(result) == 2
+    assert result[0]["control_reason"] == "UNMAPPED"

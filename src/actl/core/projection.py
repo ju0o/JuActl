@@ -106,3 +106,10 @@ def filter_project(rows: list[dict], project: str | None) -> list[dict]:
     if project is None:
         return list(rows)
     return [row for row in rows if row.get("project") == project]
+
+
+def attention_rows(rows: list[dict]) -> list[dict]:
+    """Return conditions requiring operator action; UNKNOWN alone is informational."""
+    reasons = {"UNMAPPED", "AMBIGUOUS", "MISMATCH", "UNSUPPORTED", "TRANSPORT"}
+    return [row for row in rows if row.get("runtime_state") == "BLOCKED" or
+            row.get("state") in {"DOWN", "MISMATCH"} or row.get("control_reason") in reasons]

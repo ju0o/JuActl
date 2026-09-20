@@ -114,6 +114,8 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
         state = "UNMAPPED"
         pane_path = "-"
         control_ready = False
+        control_reason = "UNMAPPED"
+        control_detail = "strong runtime detected but no validated mapping"
         live_runtime = det is not None
         try:
             mapped_target = get_target(config, name).target
@@ -126,14 +128,23 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                 validation = validate_target(name, mapped_target)
                 state = validation.state
                 control_ready = state == "UP"
+                control_reason = "READY" if control_ready else validation.state
+                control_detail = validation.detail or f"validated target state is {validation.state}"
             else:
                 state = "DETECTED"
+                control_reason = "AMBIGUOUS" if len(by_agent.get(name, [])) > 1 else ("MISMATCH" if mapped_target else "UNMAPPED")
+                control_detail = ("multiple strong live runtimes share this Agent family; existing mapping preserved"
+                                  if control_reason == "AMBIGUOUS" else
+                                  f"live runtime is different from mapped target {mapped_target}"
+                                  if mapped_target else "strong runtime detected but no validated mapping")
         elif mapped_target:
             target = mapped_target
             validation = validate_target(name, target)
             state = validation.state
             pane_path = validation.path
             control_ready = state == "UP"
+            control_reason = "READY" if control_ready else state
+            control_detail = validation.detail or f"validated target state is {state}"
         preview = ""
         pane_preview = ""
         detail = ""
@@ -152,12 +163,6 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                     busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
                 except Exception:
                     busy = "?"
-                try:
-                    from actl.core.tmux import capture_pane
-
-                    pane_preview = capture_pane(target, history=8).strip()[-900:]
-                except Exception:
-                    pane_preview = ""
         if target != "-" and control_ready and hydrate:
             try:
                 result = extract_last_response(name, target, config)
@@ -197,6 +202,7 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
             "busy": busy, "activity_state": activity_state, "result_flag": result_flag,
             "result_state": result_state, "result_hash": result_hash,
             "machine": machine, "pane_path": pane_path, "control_ready": control_ready,
+            "control_reason": control_reason, "control_detail": control_detail,
             "live_runtime": live_runtime,
             "runtime_identity": key,
             "pane_id": det.pane.pane_id if det is not None else UNKNOWN,
@@ -315,12 +321,8 @@ def _pane_preview(target: str, lines: int = 0) -> str:
     """
     from actl.core.tmux import capture_pane as _cap
 
-    try:
-        width, height = _pane_geometry(target)
-    except Exception:
-        width, height = 100, 30
     if lines <= 0:
-        lines = height
+        lines = 12
     try:
         text = _cap(target, history=lines)
     except Exception as exc:

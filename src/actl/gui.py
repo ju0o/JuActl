@@ -44,6 +44,14 @@ STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETEC
 STATUS_GLYPH = {"UP": "●", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○", "DETECTED": "◉"}
 
 
+def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
+    text = result if isinstance(result, str) else f"실패: {result}"
+    failed = text.startswith("(미리보기 불가:") or text.startswith("실패:")
+    if failed and previous:
+        return previous + "\n\n[STALE — PREVIEW UNAVAILABLE]\n" + text, False
+    return text, not failed
+
+
 class Board:
     def __init__(self, ssh_target: str | None = None) -> None:
         import tkinter as tk
@@ -65,6 +73,8 @@ class Board:
         self.auto_refresh = True
         self.refreshing = False
         self.hydrating = False
+        self.preview_inflight: set[str] = set()
+        self.last_previews: dict[str, str] = {}
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
         self.last_event_refresh = 0.0
@@ -425,11 +435,31 @@ class Board:
         if not row or row.get("target") not in pane_ids:
             return
         target = row["target"]
-        self._bg(lambda: _pane_preview(target), self._event_pane_done)
+        self._request_preview(row)
 
-    def _event_pane_done(self, result) -> None:
-        self.preview.delete("1.0", "end")
-        self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+    def _request_preview(self, row: dict) -> None:
+        key = row["runtime_key"]
+        if key in self.preview_inflight:
+            return
+        self.preview_inflight.add(key)
+        target = row["target"]
+
+        def work():
+            return _pane_preview(target, lines=12)
+
+        def done(result) -> None:
+            self.preview_inflight.discard(key)
+            if self.selected != key:
+                return
+            text, fresh = _preview_text(self.last_previews.get(key), result)
+            if fresh:
+                self.last_previews[key] = text
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", "LIVE PANE PREVIEW\n" + text)
+            self.pane_title.set(f"{row['display']} · {row.get('pane_id', target)} — LIVE PANE")
+            self.set_status("준비")
+
+        self._bg(work, done)
 
     def _health_tick(self) -> None:
         if self.auto_refresh:
@@ -442,7 +472,7 @@ class Board:
         from actl.tui import _rows
 
         detections = discover()
-        updated, changes = reconcile(self.config, detections)
+        updated, changes = reconcile(self.config, detections, unique_only=True)
         if changes:
             backup_config()
             save_config(updated)
@@ -529,7 +559,7 @@ class Board:
 
     def _render_projects(self) -> None:
         import tkinter as tk
-        from actl.core.projection import project_groups
+        from actl.core.projection import attention_rows, project_groups
 
         for child in self.project_buttons.winfo_children():
             child.destroy()
@@ -558,10 +588,9 @@ class Board:
         self.project_counts.set(f"{len(self.rows)} runtime instances · {len(counts)} projects")
         for child in self.attention_frame.winfo_children():
             child.destroy()
-        attention = [row for row in self.rows if row.get("runtime_state") in {"BLOCKED", "UNKNOWN"} or
-                     row.get("state") in {"DOWN", "MISMATCH", "DETECTED"}]
+        attention = attention_rows(self.rows)
         for row in attention[:8]:
-            label = f"{row.get('project', 'UNASSIGNED')} · {row['display']} · {row.get('role', 'UNKNOWN')} · {row.get('runtime_state', row.get('state'))}"
+            label = f"{row.get('project', 'UNASSIGNED')} · {row['display']} · {row.get('role', 'UNKNOWN')} · {row.get('control_reason') or row.get('runtime_state', row.get('state'))}\n  Reason: {row.get('control_detail', 'Founder action may be required')}"
             tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg="#fff7ed", fg=WARN,
                       relief="flat", padx=6, pady=4,
                       command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)
@@ -677,7 +706,8 @@ class Board:
             f"Pane {row.get('pane_id', 'UNKNOWN')} · Session {row.get('session', 'UNKNOWN')} "
             f"Window {row.get('window', 'UNKNOWN')} Pane {row.get('pane_index', 'UNKNOWN')}\n"
             f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}\n"
-            f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}"
+            f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}\n"
+            f"Controls {row.get('control_reason', 'UNKNOWN')}: {row.get('control_detail', '')}"
         )
         if tgt == "-":
             self.preview.delete("1.0", "end")
@@ -688,15 +718,10 @@ class Board:
         self.log(f"{row['display']} 미리보기 로딩…")
 
         def work():
-            diagnostic = _verify_row(row["agent"], tgt, self.config) if row.get("control_ready") else "읽기 전용 발견 runtime — 매핑 전 제어 비활성"
-            return "LIVE PANE PREVIEW\n" + diagnostic + "\n\n" + _pane_preview(tgt)
-
-        def done(result) -> None:
-            self.preview.delete("1.0", "end")
-            self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
-            self.pane_title.set(f"{row['display']} · {row.get('pane_id', tgt)} — LIVE PANE")
-            self.set_status("준비")
-        self._bg(work, done)
+            return _verify_row(row["agent"], tgt, self.config) if row.get("control_ready") else "읽기 전용 발견 runtime — 매핑 전 제어 비활성"
+        if row.get("control_ready"):
+            self._bg(work, lambda result: self.log(result) if isinstance(result, str) else self.log(f"preview diagnostic failed: {result}"))
+        self._request_preview(row)
 
     def on_focus(self) -> None:
         row = self.current()
