@@ -33,7 +33,7 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
-def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[dict]:
+def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrate: bool = True) -> list[dict]:
     """Project each verified live detection as its own runtime row."""
     from actl.core.discovery import discover as _disc
     from actl.core.discovery import target_matches
@@ -53,10 +53,25 @@ def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[d
 
     def verified_project_names(paths: set[str]) -> dict[str, str]:
         import subprocess
-
         from actl.core.tmux import _no_window, _remote_args
 
         names: dict[str, str] = {}
+        paths = {path for path in paths if path and path not in {"-", UNKNOWN}}
+        if REMOTE_SSH_TARGET and paths:
+            script = "for p do r=$(git -C \"$p\" rev-parse --show-toplevel 2>/dev/null) && printf '%s\\t%s\\n' \"$p\" \"$r\"; done"
+            try:
+                result = subprocess.run(
+                    _remote_args(["sh", "-c", script, "sh", *sorted(paths)]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    check=False, timeout=5, **_no_window(),
+                )
+                for line in result.stdout.splitlines():
+                    path, _, root = line.partition("\t")
+                    if root:
+                        names[path] = Path(root).name or UNKNOWN
+                return names
+            except (OSError, subprocess.SubprocessError):
+                return names
         for path in paths:
             if not path or path in {"-", UNKNOWN}:
                 continue
@@ -121,20 +136,21 @@ def _rows(config: dict, detections=None, overlays: dict | None = None) -> list[d
         result_hash = ""
         result_state = "UNKNOWN"
         if target != "-" and live_runtime:
-            try:
-                from actl.core.activity import observe_activity
+            if hydrate:
+                try:
+                    from actl.core.activity import observe_activity
 
-                activity_state, _ = observe_activity(target)
-                busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
-            except Exception:
-                busy = "?"
-            try:
-                from actl.core.tmux import capture_pane
+                    activity_state, _ = observe_activity(target)
+                    busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
+                except Exception:
+                    busy = "?"
+                try:
+                    from actl.core.tmux import capture_pane
 
-                pane_preview = capture_pane(target, history=8).strip()[-900:]
-            except Exception:
-                pane_preview = ""
-        if target != "-" and control_ready:
+                    pane_preview = capture_pane(target, history=8).strip()[-900:]
+                except Exception:
+                    pane_preview = ""
+        if target != "-" and control_ready and hydrate:
             try:
                 result = extract_last_response(name, target, config)
                 if result.text:

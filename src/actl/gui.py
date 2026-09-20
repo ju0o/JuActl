@@ -64,6 +64,7 @@ class Board:
         self.jobs: queue.Queue = queue.Queue()
         self.auto_refresh = True
         self.refreshing = False
+        self.hydrating = False
         self.refresh_interval_ms = 12000
         self.event_refresh_scheduled = False
         self.last_event_refresh = 0.0
@@ -446,7 +447,28 @@ class Board:
             backup_config()
             save_config(updated)
             self.config = updated
-        return _rows(self.config, detections)
+        return {"rows": _rows(self.config, detections, hydrate=False), "detections": detections}
+
+    def _start_hydration(self) -> None:
+        if self.hydrating or not getattr(self, "_snapshot_detections", None):
+            return
+        self.hydrating = True
+        from actl.tui import _rows
+
+        detections = self._snapshot_detections
+        config = self.config
+        self._bg(lambda: _rows(config, detections, hydrate=True), self._hydration_done)
+
+    def _hydration_done(self, result) -> None:
+        self.hydrating = False
+        if isinstance(result, Exception):
+            self.log(f"상세 hydration 실패 — 기존 inventory 유지: {result}")
+            return
+        self.rows = result
+        self._render_projects()
+        self._render_cards(self.selected)
+        self._update_action_state()
+        self.log("runtime detail hydration 완료")
 
     def refresh(self, quiet: bool = False) -> None:
         if self.refreshing:
@@ -469,7 +491,9 @@ class Board:
         prev_sel = self.selected
         from actl.core.events import detect_events
 
-        self.rows = result
+        payload = result if isinstance(result, dict) else {"rows": result, "detections": []}
+        self.rows = payload["rows"]
+        self._snapshot_detections = payload["detections"]
         if self.previous_rows:
             for event in detect_events(self.previous_rows, self.rows):
                 self.log(f"◆ {event['agent']} · {event['detail']}")
@@ -494,6 +518,8 @@ class Board:
             self.selected = keep
             self._highlight(keep)
             self._update_action_state()
+            self.on_select()
+        self._start_hydration()
         if self.ssh_target and not self.board_opened:
             self.board_opened = True
             self.root.after(80, self.on_board)

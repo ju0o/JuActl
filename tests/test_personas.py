@@ -33,6 +33,15 @@ def test_persona_dashboard_shows_live_runtimes_and_gates_controls():
     assert 'return "Prompt 대기"' in gui
 
 
+def test_persona_dashboard_inventory_is_fast_and_hydrates_after_render():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    tui = (ROOT / "src/actl/tui.py").read_text(encoding="utf-8")
+    assert 'hydrate=False' in gui
+    assert 'hydrate=True' in gui
+    assert 'if self.hydrating' in gui
+    assert 'capture_pane(target, history=8)' in tui
+
+
 def test_persona_windows_remote_copy_prefers_mainpc_clipboard():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert 'if sys.platform == "win32" and self.ssh_target:' in gui

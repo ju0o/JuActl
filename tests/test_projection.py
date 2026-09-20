@@ -75,6 +75,18 @@ def test_projection_mismatched_mapping_remains_visible_and_not_actionable(monkey
     assert rows[0]["control_ready"] is False
 
 
+def test_fast_projection_keeps_inventory_without_detail_hydration(monkeypatch):
+    pane = PaneInfo("%1", "0:0.0", "codex", "/work/Agent-Relay", "", 101)
+    config = {"project": {"name": "Agent-Relay", "root": "/work/Agent-Relay"}, "agents": {}}
+    monkeypatch.setattr(tui_module, "get_target", lambda *_args: (_ for _ in ()).throw(ValueError("unmapped")))
+    rows = _rows(config, detections=[Detection(pane, "codex", "high", "pid 101: codex")], hydrate=False)
+    assert len(rows) == 1
+    assert rows[0]["live_runtime"] is True
+    assert rows[0]["activity_state"] == "UNKNOWN"
+    assert rows[0]["result_state"] == "UNKNOWN"
+    assert rows[0]["pane_preview"] == ""
+
+
 def test_runtime_groups_filters_and_counts_use_instances():
     rows = [
         {"project": "actl", "runtime_state": "WORKING"},
