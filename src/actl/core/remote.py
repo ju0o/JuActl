@@ -112,6 +112,10 @@ def remote_managed_send(agent: str, target_pane: str, prompt: str, timeout: floa
             _runtime_request(REMOTE_SSH_TARGET, "reserve", {
                 **scope, "action": "release", "reservationId": grant["reservationId"],
                 "leaseToken": grant["leaseToken"], "fence": grant["fence"],
+                "captureAck": {
+                    "kind": "RECONCILE", "commandId": command_id,
+                    "disposition": "DELIVERY_AMBIGUOUS", "acknowledged": True,
+                },
             }, timeout)
         except Exception:
             # The managed send result remains authoritative; lease recovery is
