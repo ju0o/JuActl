@@ -2,6 +2,8 @@
 
 User actions (P0) must never fail merely because background polling holds the
 single RemoteTransport slot. Background work is coalesced and replaceable.
+Active replaceable P2 work is cooperatively cancelled so P0 can acquire the
+transport within FOREGROUND_ACQUIRE_MAX_S.
 """
 from __future__ import annotations
 
@@ -21,6 +23,10 @@ P0_USER = 0
 P1_RESULT = 1
 P2_BACKGROUND = 2
 
+# Founder-facing contract: P0 must obtain executable ownership within this
+# window when only replaceable background work holds the transport.
+FOREGROUND_ACQUIRE_MAX_S = 2.0
+
 KIND_SEND = "SEND"
 KIND_COPY = "COPY"
 KIND_FOCUS = "FOCUS"
@@ -38,11 +44,15 @@ BACKGROUND_KINDS = {KIND_PREVIEW, KIND_HYDRATE, KIND_HEALTH, KIND_REFRESH, KIND_
 
 
 class RemoteOpCancelled(RuntimeError):
-    """Queued replaceable background work was deferred for a user action."""
+    """Queued or active replaceable background work was deferred for a user action."""
 
 
 class TransportBusyError(RuntimeError):
     """Transport contention visible to callers that must not map it as DOWN."""
+
+
+class ForegroundAcquireTimeout(RuntimeError):
+    """P0 could not obtain transport ownership within the latency contract."""
 
 
 @dataclass(order=True)
@@ -57,6 +67,8 @@ class _QueuedOp:
     result: Any = field(compare=False, default=None)
     error: BaseException | None = field(compare=False, default=None)
     cancelled: bool = field(compare=False, default=False)
+    cancel_event: threading.Event = field(compare=False, default_factory=threading.Event)
+    started_at: float | None = field(compare=False, default=None)
     waiters: list[threading.Event] = field(compare=False, default_factory=list)
 
 
@@ -125,17 +137,21 @@ class RemoteOpScheduler:
         self._worker: threading.Thread | None = None
         self._closed = False
         self._user_inflight = 0
+        self._last_p0_acquire_s: float | None = None
         self._stats = {
             "submitted": 0,
             "coalesced": 0,
             "cancelled": 0,
             "completed": 0,
             "user_preempts": 0,
+            "active_preempts": 0,
         }
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, int | float | None]:
         with self._cv:
-            return dict(self._stats)
+            out: dict[str, int | float | None] = dict(self._stats)
+            out["last_p0_acquire_s"] = self._last_p0_acquire_s
+            return out
 
     def user_action_inflight(self) -> bool:
         with self._cv:
@@ -143,14 +159,36 @@ class RemoteOpScheduler:
                 self._inflight is not None and self._inflight.priority == P0_USER
             )
 
+    def inflight_cancel_event(self) -> threading.Event | None:
+        """Cancel event for the active op, if any (read without holding lock long)."""
+        with self._cv:
+            if self._inflight is None:
+                return None
+            return self._inflight.cancel_event
+
+    def active_op_is_replaceable_background(self) -> bool:
+        with self._cv:
+            op = self._inflight
+            return (
+                op is not None
+                and op.replaceable
+                and op.priority >= P2_BACKGROUND
+                and not op.cancelled
+            )
+
     def pause_background(self) -> None:
-        """Mark that a user action is starting; cancel queued replaceable work."""
+        """Mark user action starting; cancel queued + active replaceable P2."""
         with self._cv:
             self._user_inflight += 1
             cancelled = self._cancel_replaceable_locked()
+            active = self._request_cancel_active_replaceable_locked()
             self._stats["user_preempts"] += 1
             self._stats["cancelled"] += cancelled
+            if active:
+                self._stats["active_preempts"] += 1
             self._cv.notify_all()
+        if active:
+            self._abort_transport_safely()
 
     def resume_background(self) -> None:
         with self._cv:
@@ -179,6 +217,7 @@ class RemoteOpScheduler:
         if replaceable is None:
             replaceable = priority >= P2_BACKGROUND and kind in BACKGROUND_KINDS
         wait_timeout = 60.0 if timeout is None else timeout
+        requested_at = time.monotonic()
 
         with self._cv:
             if self._closed:
@@ -196,8 +235,18 @@ class RemoteOpScheduler:
                     self._cv.notify()
             if existing is None:
                 if priority == P0_USER:
-                    self._stats["cancelled"] += self._cancel_replaceable_locked()
+                    queued = self._cancel_replaceable_locked()
+                    active = self._request_cancel_active_replaceable_locked()
+                    self._stats["cancelled"] += queued
                     self._stats["user_preempts"] += 1
+                    if active:
+                        self._stats["active_preempts"] += 1
+                        # Transport abort must happen outside the lock.
+                        need_abort = True
+                    else:
+                        need_abort = False
+                else:
+                    need_abort = False
                 self._seq += 1
                 existing = _QueuedOp(
                     priority=priority,
@@ -213,12 +262,21 @@ class RemoteOpScheduler:
                 waiter = existing.done
                 self._ensure_worker_locked()
                 self._cv.notify()
+            else:
+                need_abort = False
+
+        if need_abort:
+            self._abort_transport_safely()
 
         if not waiter.wait(wait_timeout):
             raise TransportBusyError(
                 f"remote transport busy: operation {kind} timed out waiting for slot on {self.target}"
             )
         assert existing is not None
+        if priority == P0_USER and existing.started_at is not None:
+            acquire = existing.started_at - requested_at
+            with self._cv:
+                self._last_p0_acquire_s = acquire
         if existing.cancelled:
             raise RemoteOpCancelled(
                 f"remote background op {kind} deferred for higher-priority work"
@@ -233,12 +291,38 @@ class RemoteOpScheduler:
             while self._heap:
                 op = heapq.heappop(self._heap)
                 op.cancelled = True
+                op.cancel_event.set()
                 op.error = RemoteOpCancelled("scheduler closed")
                 op.done.set()
                 for waiter in op.waiters:
                     waiter.set()
+            if self._inflight is not None and self._inflight.replaceable:
+                self._inflight.cancel_event.set()
             self._coalesce.clear()
             self._cv.notify_all()
+        self._abort_transport_safely()
+
+    def _abort_transport_safely(self) -> None:
+        try:
+            from actl.core.tmux import abort_remote_transport_for_preempt
+
+            abort_remote_transport_for_preempt(self.target)
+        except Exception:
+            # Preemption must not raise into Founder actions; transport reset is best-effort.
+            pass
+
+    def _request_cancel_active_replaceable_locked(self) -> bool:
+        op = self._inflight
+        if op is None:
+            return False
+        if not (op.replaceable and op.priority >= P2_BACKGROUND):
+            return False
+        if op.cancelled:
+            return False
+        op.cancelled = True
+        op.cancel_event.set()
+        op.error = RemoteOpCancelled(f"active {op.kind} preempted for higher-priority work")
+        return True
 
     def _cancel_replaceable_locked(self) -> int:
         kept: list[_QueuedOp] = []
@@ -247,6 +331,7 @@ class RemoteOpScheduler:
             op = heapq.heappop(self._heap)
             if op.replaceable and op.priority >= P2_BACKGROUND:
                 op.cancelled = True
+                op.cancel_event.set()
                 op.error = RemoteOpCancelled(f"deferred {op.kind}")
                 op.done.set()
                 for waiter in op.waiters:
@@ -286,16 +371,25 @@ class RemoteOpScheduler:
                 op = heapq.heappop(self._heap)
                 if op.cancelled:
                     continue
+                op.started_at = time.monotonic()
                 self._inflight = op
             try:
                 token = _IN_SCHEDULER_WORKER.set(True)
                 try:
+                    if op.cancel_event.is_set():
+                        raise RemoteOpCancelled(f"active {op.kind} preempted before start")
                     result = op.work()
+                    if op.cancel_event.is_set():
+                        # Work returned after cancel — treat as deferred, drop result.
+                        raise RemoteOpCancelled(f"active {op.kind} preempted during work")
                     op.result = result
                 finally:
                     _IN_SCHEDULER_WORKER.reset(token)
             except BaseException as exc:  # noqa: BLE001 — delivered to waiter
-                op.error = exc
+                if op.error is None:
+                    op.error = exc
+                if isinstance(exc, RemoteOpCancelled):
+                    op.cancelled = True
             finally:
                 op.done.set()
                 for waiter in op.waiters:
@@ -343,7 +437,8 @@ def is_transport_contention(exc: BaseException | str) -> bool:
     return (
         "remote transport busy" in text
         or "deferred for higher-priority" in text
+        or "preempted" in text
         or "deferred " in text and "remote" in text
         or "timed out waiting for slot" in text
-        or isinstance(exc, (TransportBusyError, RemoteOpCancelled))
+        or isinstance(exc, (TransportBusyError, RemoteOpCancelled, ForegroundAcquireTimeout))
     )

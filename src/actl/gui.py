@@ -897,19 +897,44 @@ class Board:
         if tgt == "-" or tgt.endswith("?"):
             self.log(f"{row['display']} live pane 없음")
             return
-        self.set_status("복사 중…")
-        from actl.core.remote_scheduler import KIND_COPY, P0_USER, scheduler_for
-        from actl.core.send_truth import RESULT_CLASS_KO, classify_result, result_hash as hash_result
+        from actl.core.remote_scheduler import KIND_COPY, P0_USER, FOREGROUND_ACQUIRE_MAX_S, scheduler_for
+        from actl.core.send_truth import (
+            COPY_ACQUIRE_TIMEOUT,
+            COPY_CLEARING,
+            COPY_QUEUED,
+            COPY_READING,
+            COPY_STATE_KO,
+            RESULT_CLASS_KO,
+            classify_result,
+            result_hash as hash_result,
+        )
 
         target_host = self.ssh_target
+        self.set_status(COPY_STATE_KO[COPY_QUEUED])
+        self.log(f"{row['display']} · {COPY_STATE_KO[COPY_QUEUED]}")
         if target_host:
-            scheduler_for(target_host).pause_background()
+            sched = scheduler_for(target_host)
+            sched.pause_background()
+            self.set_status(COPY_STATE_KO[COPY_CLEARING])
+            self.log(f"{row['display']} · {COPY_STATE_KO[COPY_CLEARING]}")
 
         def work():
             from actl.core.audit import record
             import hashlib
 
+            owned = threading.Event()
+
             def copy_body():
+                owned.set()
+                # UI phase: only claim reading once P0 owns the transport.
+
+                def mark_reading():
+                    self.set_status(COPY_STATE_KO[COPY_READING])
+
+                try:
+                    self.root.after(0, mark_reading)
+                except Exception:
+                    pass
                 result = extract_last_response(row["agent"], tgt, self.config)
                 current_hash = hash_result(result.text)
                 result_class, corr = classify_result(row["agent"], tgt, current_hash, text=result.text)
@@ -940,6 +965,17 @@ class Board:
 
             try:
                 if target_host:
+                    def watchdog():
+                        if not owned.wait(FOREGROUND_ACQUIRE_MAX_S):
+                            try:
+                                self.root.after(
+                                    0,
+                                    lambda: self.set_status(COPY_STATE_KO[COPY_ACQUIRE_TIMEOUT]),
+                                )
+                            except Exception:
+                                pass
+
+                    threading.Thread(target=watchdog, daemon=True).start()
                     return scheduler_for(target_host).submit(
                         copy_body,
                         priority=P0_USER,
@@ -1403,8 +1439,15 @@ class Board:
             return
         if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
-        from actl.core.remote_scheduler import KIND_SEND, P0_USER, scheduler_for
+        from actl.core.remote_scheduler import (
+            KIND_SEND,
+            P0_USER,
+            FOREGROUND_ACQUIRE_MAX_S,
+            scheduler_for,
+        )
         from actl.core.send_truth import (
+            CLEARING_BACKGROUND,
+            FOREGROUND_ACQUIRE_TIMEOUT,
             SEND_FAILED,
             SEND_QUEUED,
             SENDING,
@@ -1423,11 +1466,17 @@ class Board:
         target_host = self.ssh_target
         if target_host:
             scheduler_for(target_host).pause_background()
+            set_send_state(row["agent"], row["target"], CLEARING_BACKGROUND)
+            self.set_status(SEND_STATE_KO[CLEARING_BACKGROUND])
+            self.log(f"{row['display']} · {SEND_STATE_KO[CLEARING_BACKGROUND]}")
 
         def work():
             from actl.core.activity import observe_activity
             from actl.core.remote import ManagedUnsupported, is_remote, remote_managed_send
             from actl.core.tmux import send_prompt_staged
+            import threading
+
+            owned = threading.Event()
 
             def _ack_from_activity(evidence: dict):
                 activity, detail = observe_activity(row["target"])
@@ -1455,7 +1504,17 @@ class Board:
                 return ("submitted", activity, evidence)
 
             def send_body():
+                owned.set()
+                # Do not claim "전송 중" until P0 actually owns the transport.
                 set_send_state(row["agent"], row["target"], SENDING)
+
+                def mark_sending():
+                    self.set_status(SEND_STATE_KO[SENDING])
+
+                try:
+                    self.root.after(0, mark_sending)
+                except Exception:
+                    pass
                 # Preserve Stable remote managed-send semantics when available.
                 if is_remote():
                     try:
@@ -1510,6 +1569,24 @@ class Board:
 
             try:
                 if target_host:
+                    def watchdog():
+                        if not owned.wait(FOREGROUND_ACQUIRE_MAX_S):
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                FOREGROUND_ACQUIRE_TIMEOUT,
+                            )
+                            try:
+                                self.root.after(
+                                    0,
+                                    lambda: self.set_status(
+                                        SEND_STATE_KO[FOREGROUND_ACQUIRE_TIMEOUT]
+                                    ),
+                                )
+                            except Exception:
+                                pass
+
+                    threading.Thread(target=watchdog, daemon=True).start()
                     return scheduler_for(target_host).submit(
                         send_body,
                         priority=P0_USER,

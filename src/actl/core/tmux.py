@@ -71,6 +71,11 @@ class RemoteTransport:
         self._events: queue.Queue[str] = queue.Queue()
         self._responses: queue.Queue[object] | None = None
         self._reader: threading.Thread | None = None
+        # Cooperative preemption: set by scheduler when active replaceable P2
+        # must release the exclusive transport without killing Python threads.
+        self._preempt = threading.Event()
+        self._exclusive_generation = 0
+        self._needs_reset = False
 
     def connect(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -230,15 +235,35 @@ class RemoteTransport:
             timeout=ctx.timeout if ctx is not None else 60.0,
         )
 
+    def request_preempt(self) -> None:
+        """Signal the active exclusive wait to abort for a P0 user action."""
+        self._preempt.set()
+
     def _execute_tmux_exclusive(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        from actl.core.remote_scheduler import RemoteOpCancelled, TransportBusyError, scheduler_for
+
         # Safety belt: scheduler already serializes; lock rejects true races.
         if not self._lock.acquire(timeout=0.05):
-            from actl.core.remote_scheduler import TransportBusyError
-
             raise TransportBusyError(
                 "remote transport busy: maximum in-flight operations is 1"
             )
+        self._exclusive_generation += 1
+        generation = self._exclusive_generation
+        cancel_event = None
         try:
+            cancel_event = scheduler_for(self.target).inflight_cancel_event()
+        except Exception:
+            cancel_event = None
+        try:
+            # Only the active op's cancel_event aborts. Stale preempt from a prior
+            # background abort must reset the control session, not cancel P0/P1.
+            if cancel_event is not None and cancel_event.is_set():
+                self._needs_reset = True
+                raise RemoteOpCancelled("remote transport preempted before exclusive start")
+            if self._needs_reset or self._preempt.is_set():
+                self.close(aggressive=True)
+                self._needs_reset = False
+                self._preempt.clear()
             self.connect()
             assert self._process is not None and self._process.stdin is not None
             command = argv[1:] if argv and argv[0] == "tmux" else argv
@@ -247,11 +272,28 @@ class RemoteTransport:
             self._responses = response_queue
             self._process.stdin.write(line + "\n")
             self._process.stdin.flush()
-            try:
-                response = response_queue.get(timeout=10)
-            except queue.Empty as exc:
-                self.state = "DEGRADED"
-                raise TmuxError("remote tmux command timed out after 10s") from exc
+            # Poll so an active replaceable op can release within FOREGROUND_ACQUIRE_MAX_S.
+            deadline = time.monotonic() + 10.0
+            response: object | None = None
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._needs_reset = True
+                    self._responses = None
+                    # Soft-close the SSH control process so the next op gets a clean session.
+                    self.close(aggressive=True)
+                    self._preempt.clear()
+                    raise RemoteOpCancelled("remote transport preempted during exclusive wait")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.state = "DEGRADED"
+                    raise TmuxError("remote tmux command timed out after 10s")
+                try:
+                    response = response_queue.get(timeout=min(0.05, remaining))
+                    break
+                except queue.Empty:
+                    continue
+            if generation != self._exclusive_generation:
+                raise RemoteOpCancelled("remote transport generation invalidated")
             if isinstance(response, TmuxError):
                 raise response
             return response  # type: ignore[return-value]
@@ -267,23 +309,33 @@ class RemoteTransport:
             except queue.Empty:
                 return events
 
-    def close(self) -> None:
+    def close(self, *, aggressive: bool = False) -> None:
         process, self._process = self._process, None
         if process is None:
             self.state = "DISCONNECTED"
             return
+        wait_s = 0.25 if aggressive else 2.0
         try:
             if process.stdin is not None and process.poll() is None:
-                process.stdin.write("exit\n")
-                process.stdin.flush()
-            process.wait(timeout=2)
+                try:
+                    process.stdin.write("exit\n")
+                    process.stdin.flush()
+                except OSError:
+                    pass
+            process.wait(timeout=wait_s)
         except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-            process.wait()
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=0.5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         reader = self._reader
         self._reader = None
         if reader is not None and reader is not threading.current_thread():
-            reader.join(timeout=1)
+            reader.join(timeout=0.2 if aggressive else 1.0)
         self.state = "DISCONNECTED"
 
 
@@ -312,6 +364,19 @@ def set_remote_ssh(target: str | None) -> None:
     if target is None and REMOTE_SSH_TARGET:
         close_scheduler(REMOTE_SSH_TARGET)
     REMOTE_SSH_TARGET = target
+
+
+def abort_remote_transport_for_preempt(target: str) -> None:
+    """Cooperatively abort an active replaceable exclusive wait on ``target``.
+
+    Signals the transport's preempt event. If an exclusive SSH control process
+    is mid-command, the waiter exits and closes that process cleanly so P0 can
+    reconnect. Does not kill Python threads. Does not touch unrelated hosts.
+    """
+    transport = _REMOTE_TRANSPORT
+    if transport is None or transport.target != target:
+        return
+    transport.request_preempt()
 
 
 def _remote_transport() -> RemoteTransport:

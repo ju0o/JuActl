@@ -15,10 +15,12 @@ from typing import Any
 
 # Send lifecycle (evidence-gated).
 SEND_QUEUED = "SEND_QUEUED"
+CLEARING_BACKGROUND = "CLEARING_BACKGROUND"
 SENDING = "SENDING"
 SUBMITTED = "SUBMITTED"
 START_ACKNOWLEDGED = "START_ACKNOWLEDGED"
 SEND_FAILED = "SEND_FAILED"
+FOREGROUND_ACQUIRE_TIMEOUT = "FOREGROUND_ACQUIRE_TIMEOUT"
 
 # Result classification for COPY RESULT.
 NEW_RESULT = "NEW_RESULT"
@@ -26,12 +28,27 @@ STALE_RESULT = "STALE_RESULT"
 NO_RESULT = "NO_RESULT"
 RESULT_PENDING = "RESULT_PENDING"
 
+# COPY progress phases (Founder-facing; independent of result class).
+COPY_QUEUED = "COPY_QUEUED"
+COPY_CLEARING = "COPY_CLEARING"
+COPY_READING = "COPY_READING"
+COPY_ACQUIRE_TIMEOUT = "COPY_ACQUIRE_TIMEOUT"
+
 SEND_STATE_KO = {
     SEND_QUEUED: "전송 대기",
+    CLEARING_BACKGROUND: "백그라운드 작업 정리 중",
     SENDING: "전송 중",
     SUBMITTED: "제출 완료",
     START_ACKNOWLEDGED: "Agent 작업 시작 확인",
     SEND_FAILED: "전송 실패",
+    FOREGROUND_ACQUIRE_TIMEOUT: "전송 지연: 백그라운드 정리 초과",
+}
+
+COPY_STATE_KO = {
+    COPY_QUEUED: "복사 대기",
+    COPY_CLEARING: "백그라운드 작업 정리 중",
+    COPY_READING: "결과 읽는 중",
+    COPY_ACQUIRE_TIMEOUT: "복사 지연: 백그라운드 정리 초과",
 }
 
 RESULT_CLASS_KO = {
