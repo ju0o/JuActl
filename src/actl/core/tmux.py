@@ -198,8 +198,46 @@ class RemoteTransport:
             pending.put(TmuxError("remote transport closed unexpectedly"))
 
     def executeTmux(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
-        if not self._lock.acquire(timeout=10):
-            raise TmuxError("remote transport busy: maximum in-flight operations is 1")
+        """Serialize through the per-target priority scheduler, then the lock.
+
+        When already inside a scheduler worker, run exclusively without
+        re-queueing (avoids nested-submit deadlock).
+        """
+        from actl.core.remote_scheduler import (
+            KIND_GENERIC,
+            P2_BACKGROUND,
+            current_op_context,
+            in_scheduler_worker,
+            scheduler_for,
+        )
+
+        if in_scheduler_worker():
+            return self._execute_tmux_exclusive(argv)
+
+        ctx = current_op_context()
+
+        def work() -> subprocess.CompletedProcess[str]:
+            return self._execute_tmux_exclusive(argv)
+
+        # Individual tmux commands are never coalesced; coalesce applies only to
+        # high-level GUI operations submitted explicitly via scheduler.submit.
+        return scheduler_for(self.target).submit(
+            work,
+            priority=ctx.priority if ctx is not None else P2_BACKGROUND,
+            kind=ctx.kind if ctx is not None else KIND_GENERIC,
+            coalesce_key=None,
+            replaceable=ctx.replaceable if ctx is not None else True,
+            timeout=ctx.timeout if ctx is not None else 60.0,
+        )
+
+    def _execute_tmux_exclusive(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        # Safety belt: scheduler already serializes; lock rejects true races.
+        if not self._lock.acquire(timeout=0.05):
+            from actl.core.remote_scheduler import TransportBusyError
+
+            raise TransportBusyError(
+                "remote transport busy: maximum in-flight operations is 1"
+            )
         try:
             self.connect()
             assert self._process is not None and self._process.stdin is not None
@@ -265,9 +303,14 @@ def set_remote_ssh(target: str | None) -> None:
     if target and not re.fullmatch(r"[A-Za-z0-9_.@:-]+", target):
         raise ValueError("SSH target must be a host alias, user@host, or hostname")
     global REMOTE_SSH_TARGET, _REMOTE_TRANSPORT
+    from actl.core.remote_scheduler import close_scheduler
+
     if _REMOTE_TRANSPORT is not None and _REMOTE_TRANSPORT.target != target:
         _REMOTE_TRANSPORT.close()
+        close_scheduler(_REMOTE_TRANSPORT.target)
         _REMOTE_TRANSPORT = None
+    if target is None and REMOTE_SSH_TARGET:
+        close_scheduler(REMOTE_SSH_TARGET)
     REMOTE_SSH_TARGET = target
 
 

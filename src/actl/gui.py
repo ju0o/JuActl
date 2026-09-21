@@ -40,8 +40,16 @@ FONT = ("Segoe UI", 10)
 FONT_BIG = ("Segoe UI", 14, "bold")
 FONT_HDR = ("Segoe UI", 10, "bold")
 GLOBAL_NAV = "#000000"
-STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": NEON}
-STATUS_GLYPH = {"UP": "●", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○", "DETECTED": "◉"}
+STATUS_COLOR = {
+    "UP": OK, "WORKING": OK, "IDLE": OK, "TRANSPORT_BUSY": WARN,
+    "DEGRADED": WARN, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM,
+    "DETECTED": NEON, "UNKNOWN": DIM,
+}
+STATUS_GLYPH = {
+    "UP": "●", "WORKING": "◐", "IDLE": "●", "TRANSPORT_BUSY": "…",
+    "DEGRADED": "◈", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○",
+    "DETECTED": "◉", "UNKNOWN": "·",
+}
 
 
 def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
@@ -441,11 +449,35 @@ class Board:
         key = row["runtime_key"]
         if key in self.preview_inflight:
             return
+        if self.ssh_target:
+            from actl.core.remote_scheduler import scheduler_for
+
+            if scheduler_for(self.ssh_target).user_action_inflight():
+                return
         self.preview_inflight.add(key)
         target = row["target"]
 
         def work():
-            return _pane_preview(target, lines=12)
+            from actl.core.remote_scheduler import (
+                KIND_PREVIEW,
+                P2_BACKGROUND,
+                RemoteOpCancelled,
+                scheduler_for,
+            )
+
+            try:
+                if self.ssh_target:
+                    return scheduler_for(self.ssh_target).submit(
+                        lambda: _pane_preview(target, lines=12),
+                        priority=P2_BACKGROUND,
+                        kind=KIND_PREVIEW,
+                        coalesce_key=f"preview:{key}",
+                        replaceable=True,
+                        timeout=60.0,
+                    )
+                return _pane_preview(target, lines=12)
+            except RemoteOpCancelled:
+                return self.last_previews.get(key) or "(미리보기 보류: 사용자 작업 우선)"
 
         def done(result) -> None:
             self.preview_inflight.discard(key)
@@ -469,28 +501,74 @@ class Board:
 
     def rows_now(self) -> list[dict]:
         from actl.core.discovery import discover, reconcile
+        from actl.core.remote_scheduler import KIND_REFRESH, P2_BACKGROUND, scheduler_for
         from actl.tui import _rows
 
-        detections = discover()
-        updated, changes = reconcile(self.config, detections, unique_only=True)
-        if changes:
-            backup_config()
-            save_config(updated)
-            self.config = updated
-        return {"rows": _rows(self.config, detections, hydrate=False), "detections": detections}
+        def work():
+            detections = discover()
+            updated, changes = reconcile(self.config, detections, unique_only=True)
+            if changes:
+                backup_config()
+                save_config(updated)
+                self.config = updated
+            return {"rows": _rows(self.config, detections, hydrate=False), "detections": detections}
+
+        if self.ssh_target:
+            return scheduler_for(self.ssh_target).submit(
+                work,
+                priority=P2_BACKGROUND,
+                kind=KIND_REFRESH,
+                coalesce_key=f"refresh:{self.ssh_target}",
+                replaceable=True,
+                timeout=90.0,
+            )
+        return work()
 
     def _start_hydration(self) -> None:
         if self.hydrating or not getattr(self, "_snapshot_detections", None):
             return
+        if self.ssh_target:
+            from actl.core.remote_scheduler import scheduler_for
+
+            if scheduler_for(self.ssh_target).user_action_inflight():
+                return
         self.hydrating = True
         from actl.tui import _rows
 
         detections = self._snapshot_detections
         config = self.config
-        self._bg(lambda: _rows(config, detections, hydrate=True), self._hydration_done)
+
+        def work():
+            from actl.core.remote_scheduler import (
+                KIND_HYDRATE,
+                P2_BACKGROUND,
+                RemoteOpCancelled,
+                scheduler_for,
+            )
+
+            try:
+                if self.ssh_target:
+                    return scheduler_for(self.ssh_target).submit(
+                        lambda: _rows(config, detections, hydrate=True),
+                        priority=P2_BACKGROUND,
+                        kind=KIND_HYDRATE,
+                        coalesce_key=f"hydrate:{self.ssh_target}",
+                        replaceable=True,
+                        timeout=90.0,
+                    )
+                return _rows(config, detections, hydrate=True)
+            except RemoteOpCancelled as exc:
+                return exc
+
+        self._bg(work, self._hydration_done)
 
     def _hydration_done(self, result) -> None:
         self.hydrating = False
+        from actl.core.remote_scheduler import RemoteOpCancelled
+
+        if isinstance(result, RemoteOpCancelled):
+            self.log("상세 hydration 보류 — 사용자 작업 우선")
+            return
         if isinstance(result, Exception):
             self.log(f"상세 hydration 실패 — 기존 inventory 유지: {result}")
             return
@@ -505,6 +583,13 @@ class Board:
     def refresh(self, quiet: bool = False) -> None:
         if self.refreshing:
             return
+        if self.ssh_target:
+            from actl.core.remote_scheduler import scheduler_for
+
+            if scheduler_for(self.ssh_target).user_action_inflight():
+                if not quiet:
+                    self.log("새로고침 보류 — 사용자 작업 우선")
+                return
         self.refreshing = True
         self.set_status("새로고침 중…")
         if not quiet:
@@ -728,13 +813,39 @@ class Board:
         if not row or not row.get("control_ready"):
             self.log("FOCUS disabled: validated tmux mapping required")
             return
+        from actl.core.remote_scheduler import KIND_FOCUS, P0_USER, scheduler_for
         from actl.core.tmux import _run
 
-        try:
-            _run(["tmux", "select-pane", "-t", row["target"]])
-            self.log(f"{row['display']} pane focused")
-        except Exception as exc:
-            self.log(f"FOCUS failed: {exc}")
+        target_host = self.ssh_target
+        if target_host:
+            scheduler_for(target_host).pause_background()
+
+        def work():
+            try:
+                def focus():
+                    _run(["tmux", "select-pane", "-t", row["target"]])
+                    return True
+
+                if target_host:
+                    return scheduler_for(target_host).submit(
+                        focus,
+                        priority=P0_USER,
+                        kind=KIND_FOCUS,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return focus()
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
+
+        def done(result) -> None:
+            if result is True:
+                self.log(f"{row['display']} pane focused")
+            else:
+                self.log(f"FOCUS failed: {result}")
+
+        self._bg(work, done)
 
     def on_collect(self) -> None:
         row = self.current()
@@ -752,44 +863,92 @@ class Board:
             self.log(f"{row['display']} live pane 없음")
             return
         self.set_status("복사 중…")
+        from actl.core.remote_scheduler import KIND_COPY, P0_USER, scheduler_for
+        from actl.core.send_truth import RESULT_CLASS_KO, classify_result, result_hash as hash_result
+
+        target_host = self.ssh_target
+        if target_host:
+            scheduler_for(target_host).pause_background()
 
         def work():
             from actl.core.audit import record
             import hashlib
 
-            result = extract_last_response(row["agent"], tgt, self.config)
-            if not result.text:
-                record("copy", agent=row["agent"], target=tgt, ok=False,
-                       source=result.source, confidence=result.confidence)
-                return ("empty", result.detail)
-            try:
-                import sys
+            def copy_body():
+                result = extract_last_response(row["agent"], tgt, self.config)
+                current_hash = hash_result(result.text)
+                result_class, corr = classify_result(row["agent"], tgt, current_hash, text=result.text)
+                if not result.text:
+                    record("copy", agent=row["agent"], target=tgt, ok=False,
+                           source=result.source, confidence=result.confidence,
+                           result_class=result_class)
+                    return ("empty", result.detail, result_class, corr)
+                try:
+                    import sys
 
-                preferred = self.config.get("clipboard_backend", "auto")
-                # This GUI owns the MainPC clipboard. Do not send OSC52 back
-                # into the remote tmux when running the Windows remote board.
-                if sys.platform == "win32" and self.ssh_target:
-                    preferred = "local"
-                backend = copy_text(result.text, preferred=preferred)
-                result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
-                record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
-                       source=result.source, confidence=result.confidence, chars=len(result.text),
-                       result_hash=result_hash)
-                return ("ok", backend, len(result.text), result_hash)
-            except Exception as exc:
-                record("copy", agent=row["agent"], target=tgt, ok=False,
-                       source=result.source, confidence=result.confidence, error=type(exc).__name__)
-                return ("clip-fail", str(exc), result.text[:2000])
+                    preferred = self.config.get("clipboard_backend", "auto")
+                    # This GUI owns the MainPC clipboard. Do not send OSC52 back
+                    # into the remote tmux when running the Windows remote board.
+                    if sys.platform == "win32" and self.ssh_target:
+                        preferred = "local"
+                    backend = copy_text(result.text, preferred=preferred)
+                    result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
+                    record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
+                           source=result.source, confidence=result.confidence, chars=len(result.text),
+                           result_hash=result_hash, result_class=result_class)
+                    return ("ok", backend, len(result.text), result_hash, result_class, corr, result.text)
+                except Exception as exc:
+                    record("copy", agent=row["agent"], target=tgt, ok=False,
+                           source=result.source, confidence=result.confidence, error=type(exc).__name__,
+                           result_class=result_class)
+                    return ("clip-fail", str(exc), result.text[:2000], result_class, corr)
+
+            try:
+                if target_host:
+                    return scheduler_for(target_host).submit(
+                        copy_body,
+                        priority=P0_USER,
+                        kind=KIND_COPY,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return copy_body()
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
             self.set_status("준비")
             if result[0] == "ok":
                 from actl.core.state import acknowledge
 
-                acknowledge(row["agent"], result[3])
-                self.log(f"{row['display']} 복사됨 ({result[1]}, {result[2]}자)")
+                result_class = result[4]
+                label = RESULT_CLASS_KO.get(result_class, result_class)
+                if result_class == "NEW_RESULT":
+                    acknowledge(row["agent"], result[3])
+                    self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert("end", f"✓ {label}\n\n{result[6][:4000]}")
+                elif result_class == "RESULT_PENDING":
+                    self.log(f"{row['display']} · {label} — 아직 새 결과가 없습니다 (이전 텍스트는 복사하지 않음)")
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert("end", f"⏳ {label}\n\n전송 후 Agent 결과가 아직 바뀌지 않았습니다.")
+                elif result_class == "STALE_RESULT":
+                    self.log(f"{row['display']} · {label} — 이전 작업 결과입니다 (새 작업 결과 아님)")
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert(
+                        "end",
+                        f"⚠ {label}\n\n이 텍스트는 이전 작업의 결과입니다.\n"
+                        f"최근 전송이 실패했거나 새 결과가 아직 없습니다.\n\n"
+                        f"(참고용 이전 결과 {result[2]}자 — 클립보드에는 넣지 않음)\n\n"
+                        f"{result[6][:2000]}",
+                    )
+                else:
+                    acknowledge(row["agent"], result[3])
+                    self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
             elif result[0] == "empty":
-                self.log(f"응답 없음 ({result[1] or '비어 있음'})")
+                label = RESULT_CLASS_KO.get(result[2], result[2])
+                self.log(f"응답 없음 · {label} ({result[1] or '비어 있음'})")
             else:
                 self.resp.delete("1.0", "end")
                 self.resp.insert("end", f"클립보드 실패: {result[1]}\n--- 수동 복사 ---\n{result[2]}")
@@ -1209,34 +1368,160 @@ class Board:
             return
         if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
-        self.set_status("전송 중…")
+        from actl.core.remote_scheduler import KIND_SEND, P0_USER, scheduler_for
+        from actl.core.send_truth import (
+            SEND_FAILED,
+            SEND_QUEUED,
+            SENDING,
+            SEND_STATE_KO,
+            START_ACKNOWLEDGED,
+            SUBMITTED,
+            begin_send,
+            set_send_state,
+        )
+
+        previous_hash = row.get("result_hash") or None
+        begin_send(row["agent"], row["target"], previous_result_hash=previous_hash)
+        set_send_state(row["agent"], row["target"], SEND_QUEUED)
+        self.set_status(SEND_STATE_KO[SEND_QUEUED])
+        self.log(f"{row['display']} · {SEND_STATE_KO[SEND_QUEUED]}")
+        target_host = self.ssh_target
+        if target_host:
+            scheduler_for(target_host).pause_background()
 
         def work():
-            from actl.cli import _send_to_selected
+            from actl.core.activity import observe_activity
+            from actl.core.tmux import send_prompt_staged
 
-            _send_to_selected(self.config, row["agent"], text, target=row["target"])
-            return True
+            def send_body():
+                set_send_state(row["agent"], row["target"], SENDING)
+                # Prefer staged send so "pasted" alone is not treated as success.
+                staged = send_prompt_staged(row["target"], text, press_enter=True)
+                if not staged.get("ok"):
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error=str(staged.get("error") or "send failed"),
+                        evidence={"stages": staged.get("stages")},
+                    )
+                    return ("failed", staged.get("error") or "send failed", staged)
+                completed = staged.get("completedStages") or []
+                if "paste_buffer" not in completed or "enter" not in completed:
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error="paste/enter evidence missing",
+                        evidence={"stages": staged.get("stages")},
+                    )
+                    return ("failed", "paste/enter evidence missing", staged)
+                set_send_state(
+                    row["agent"],
+                    row["target"],
+                    SUBMITTED,
+                    evidence={"stages": staged.get("stages"), "disposition": staged.get("deliveryDisposition")},
+                )
+                # Evidence that runtime moved into processing / changed state.
+                activity, detail = observe_activity(row["target"])
+                if activity == "RUNNING":
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        START_ACKNOWLEDGED,
+                        evidence={"activity": activity, "detail": detail},
+                    )
+                    return ("acked", activity, staged)
+                # Brief bounded recheck — do not invent success without evidence.
+                import time as _time
+
+                for _ in range(3):
+                    _time.sleep(0.35)
+                    activity, detail = observe_activity(row["target"])
+                    if activity == "RUNNING":
+                        set_send_state(
+                            row["agent"],
+                            row["target"],
+                            START_ACKNOWLEDGED,
+                            evidence={"activity": activity, "detail": detail},
+                        )
+                        return ("acked", activity, staged)
+                # Submitted with enter evidence but start not yet observed.
+                return ("submitted", activity, staged)
+
+            try:
+                if target_host:
+                    return scheduler_for(target_host).submit(
+                        send_body,
+                        priority=P0_USER,
+                        kind=KIND_SEND,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return send_body()
+            except Exception as exc:
+                set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(exc))
+                return ("failed", str(exc), None)
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
-            self.set_status("준비")
-            if result is True:
-                self.log(f"{row['display']}에 전송됨")
-                self.msg.delete("1.0", "end")
+            if isinstance(result, Exception):
+                set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(result))
+                self.set_status(SEND_STATE_KO[SEND_FAILED])
                 self.preview.delete("1.0", "end")
-                self.preview.insert("end", f"✓ {row['display']}에 메시지를 전송했습니다.\n\n작업 결과를 기다리는 중…")
-            elif isinstance(result, Exception):
                 detail = str(result) or type(result).__name__
-                self.set_status("전송 실패")
+                from actl.core.remote_scheduler import is_transport_contention
+
+                if is_transport_contention(result):
+                    self.preview.insert(
+                        "end",
+                        f"✗ {row['display']} 전송 실패\n\n원격 통신 대기 중\n\n"
+                        "매핑이 죽은 것이 아닙니다. 잠시 후 다시 전송하세요.\n"
+                        "재매핑은 필요 없습니다.",
+                    )
+                    self.log(f"{row['display']} · 원격 통신 대기 중 (매핑 DOWN 아님): {detail}")
+                else:
+                    self.preview.insert(
+                        "end",
+                        f"✗ {row['display']} 전송 실패\n\n{detail}\n\n"
+                        "작업이 시작되지 않았습니다. 이전 결과는 새 결과가 아닙니다.",
+                    )
+                    self.log(f"{row['display']} 전송 실패: {detail}")
+                return
+            status, detail, staged = result
+            if status == "acked":
+                self.set_status(SEND_STATE_KO[START_ACKNOWLEDGED])
+                self.log(f"{row['display']} · {SEND_STATE_KO[START_ACKNOWLEDGED]}")
+                self.msg.delete("1.0", "end")
                 self.preview.delete("1.0", "end")
                 self.preview.insert(
                     "end",
-                    f"✗ {row['display']} 전송 실패\n\n{detail}\n\n"
-                    "매핑 상태와 pane 작업 상태를 확인하세요.\n"
-                    "BUSY라면 현재 다른 작업이 pane을 점유 중입니다.",
+                    f"✓ {SEND_STATE_KO[SUBMITTED]} → {SEND_STATE_KO[START_ACKNOWLEDGED]}\n\n"
+                    "새 결과 기다리는 중…",
                 )
-                self.log(f"{row['display']} 전송 실패: {detail}")
+            elif status == "submitted":
+                self.set_status(SEND_STATE_KO[SUBMITTED])
+                self.log(f"{row['display']} · {SEND_STATE_KO[SUBMITTED]} (시작 확인 대기)")
+                self.msg.delete("1.0", "end")
+                self.preview.delete("1.0", "end")
+                self.preview.insert(
+                    "end",
+                    f"✓ {SEND_STATE_KO[SUBMITTED]}\n\n"
+                    "Enter 제출 증거는 확인됨. Agent 작업 시작 확인은 아직입니다.\n"
+                    "새 결과 기다리는 중…",
+                )
             else:
-                self.log(f"전송 실패: {result}")
+                self.set_status(SEND_STATE_KO[SEND_FAILED])
+                self.preview.delete("1.0", "end")
+                self.preview.insert(
+                    "end",
+                    f"✗ {SEND_STATE_KO[SEND_FAILED]}\n\n{detail}\n\n"
+                    "Task/결과 상관관계가 갱신되지 않았습니다.\n"
+                    "COPY RESULT는 이전 작업 결과로 표시됩니다.",
+                )
+                self.log(f"{row['display']} · {SEND_STATE_KO[SEND_FAILED]}: {detail}")
 
         self._bg(work, done)
 
