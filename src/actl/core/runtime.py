@@ -68,6 +68,7 @@ _RESERVE_FIELDS = frozenset({
     "leaseToken",
     "fence",
     "captureAck",
+    "recoveryEvidence",
 }) | _SCOPE_FIELDS
 _ALLOWED_BY_OPERATION = {
     "reserve": _COMMON_FIELDS | _RESERVE_FIELDS,
@@ -859,6 +860,93 @@ class Journal:
             "observationCursor": json.loads(row["observation_cursor_json"]) if row["observation_cursor_json"] else None,
         }
 
+    def recover_ownerless_expired(
+        self,
+        *,
+        reservation_id: str,
+        fence: str,
+        recovery_evidence: Any,
+    ) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM reservations WHERE reservation_id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if row is None:
+            raise ReserveInvalid("reservation not found")
+        if str(row["state"]) != "EXPIRED_HELD":
+            raise ReserveBusy("ownerless recovery requires EXPIRED_HELD")
+        if str(row["fence"]) != str(fence):
+            raise ReserveBusy("stale fence")
+        if not isinstance(recovery_evidence, dict):
+            raise ReserveInvalid("recoveryEvidence must be an object")
+        if recovery_evidence.get("kind") != "OWNERLESS_EXPIRED_RECOVERY":
+            raise ReserveInvalid("recoveryEvidence.kind must be OWNERLESS_EXPIRED_RECOVERY")
+        if recovery_evidence.get("acknowledged") is not True:
+            raise ReserveInvalid("recoveryEvidence requires acknowledged=true")
+        if recovery_evidence.get("reason") != "LEASE_CREDENTIAL_IRRECOVERABLE":
+            raise ReserveInvalid("recoveryEvidence.reason must be LEASE_CREDENTIAL_IRRECOVERABLE")
+        if recovery_evidence.get("reservationId") != reservation_id:
+            raise ReserveInvalid("recoveryEvidence reservationId mismatch")
+        if str(recovery_evidence.get("fence")) != str(fence):
+            raise ReserveInvalid("recoveryEvidence fence mismatch")
+        commands = recovery_evidence.get("commands")
+        if not isinstance(commands, list):
+            raise ReserveInvalid("recoveryEvidence.commands must be a list")
+        stored = _reservation_commands(self, reservation_id)
+        if len(commands) != len(stored):
+            raise ReserveInvalid("recoveryEvidence.commands must cover every reservation command")
+        by_id = {str(command["command_id"]): command for command in stored}
+        seen: set[str] = set()
+        for item in commands:
+            if not isinstance(item, dict):
+                raise ReserveInvalid("recoveryEvidence command must be an object")
+            command_id = item.get("commandId")
+            disposition = item.get("disposition")
+            if not isinstance(command_id, str) or command_id in seen:
+                raise ReserveInvalid("recoveryEvidence commandId must be unique")
+            command = by_id.get(command_id)
+            if command is None:
+                raise ReserveInvalid("recoveryEvidence commandId does not belong to reservation")
+            if disposition not in _RECONCILE_DISPOSITIONS:
+                raise ReserveInvalid("recoveryEvidence disposition must be FAILED|CANCEL_REQUESTED|DELIVERY_AMBIGUOUS")
+            if not _reconcile_disposition_allowed(command, str(disposition)):
+                raise ReserveInvalid(
+                    f"recovery disposition {disposition} does not match command stage {command['stage']}"
+                )
+            seen.add(command_id)
+        if seen != set(by_id):
+            raise ReserveInvalid("recoveryEvidence.commands must cover every reservation command")
+
+        stamp = observed_at_now()
+        for item in commands:
+            command_id = str(item["commandId"])
+            disposition = str(item["disposition"])
+            self.update_command(command_id, stage=disposition, delivery_disposition=disposition)
+            self.add_receipt(
+                command_id=command_id,
+                request_id=None,
+                kind="OWNERLESS_EXPIRED_RECOVERY",
+                stage=disposition,
+                side_effect=SIDE_EFFECT_POSSIBLE,
+                payload={"reservationId": reservation_id, "fence": str(fence), "disposition": disposition},
+            )
+        ack = dict(recovery_evidence)
+        ack["recoveredAt"] = stamp
+        updated = self.conn.execute(
+            "UPDATE reservations SET state = 'RELEASED', updated_at = ?, release_ack_json = ? "
+            "WHERE reservation_id = ? AND state = 'EXPIRED_HELD' AND fence = ?",
+            (stamp, json.dumps(ack, ensure_ascii=False, separators=(",", ":"), sort_keys=True), reservation_id, str(fence)),
+        )
+        if updated.rowcount != 1:
+            raise ReserveBusy("reservation changed during ownerless recovery")
+        return {
+            "reservationId": reservation_id,
+            "runtimeId": row["runtime_id"],
+            "state": "RELEASED",
+            "recoveredAt": stamp,
+            "recovery": "OWNERLESS_EXPIRED_RECOVERY",
+        }
+
     def release(
         self,
         *,
@@ -1605,8 +1693,8 @@ def _handle_status(request: dict[str, Any], journal: Journal) -> tuple[dict[str,
 def _handle_reserve(request: dict[str, Any], journal: Journal) -> tuple[dict[str, Any], int]:
     request_id = str(request["requestId"])
     action = request.get("action")
-    if action not in {"acquire", "renew", "release"}:
-        err = build_error("INVALID_ARGUMENT", "action must be acquire|renew|release")
+    if action not in {"acquire", "renew", "release", "recover"}:
+        err = build_error("INVALID_ARGUMENT", "action must be acquire|renew|release|recover")
         return build_response(request_id, False, error=err), 3
 
     try:
@@ -1684,6 +1772,18 @@ def _handle_reserve(request: dict[str, Any], journal: Journal) -> tuple[dict[str
             return build_response(request_id, True, data=data), 0
 
         reservation_id = request.get("reservationId")
+        if action == "recover":
+            fence = request.get("fence")
+            if not isinstance(reservation_id, str) or not reservation_id:
+                raise ReserveInvalid("reservationId is required")
+            if not isinstance(fence, str) or not fence:
+                raise ReserveInvalid("fence is required")
+            data = journal.recover_ownerless_expired(
+                reservation_id=reservation_id,
+                fence=fence,
+                recovery_evidence=request.get("recoveryEvidence"),
+            )
+            return build_response(request_id, True, data=data), 0
         lease_token = request.get("leaseToken")
         fence = request.get("fence")
         if not isinstance(reservation_id, str) or not reservation_id:
