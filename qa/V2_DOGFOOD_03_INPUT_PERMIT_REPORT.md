@@ -11,7 +11,8 @@ Date: 2026-09-22
 ```text
 BASE_SHA=a059f9faff86bd21b96c5fa43f4a6a74ffbd439e
 STABLE=7f1d6c4e05b90a8b417c3952207027c4b77b1a69
-NEW_CANDIDATE_SHA=<git rev-parse HEAD on feat/v2-input-permit-dogfood-03>
+NEW_CANDIDATE_SHA=confirm with git rev-parse HEAD / origin/feat/v2-input-permit-dogfood-03
+IMPLEMENTATION_SHA=56e3aea6ad9d7eeba8547d9e736126219b620442
 branch=feat/v2-input-permit-dogfood-03
 worktree=C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-03
 ```
