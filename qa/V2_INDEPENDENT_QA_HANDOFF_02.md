@@ -18,7 +18,8 @@ This branch transplants V2 onto the real Stable tip without modifying Stable or 
 ```text
 STABLE_BASE_SHA=7f1d6c4e05b90a8b417c3952207027c4b77b1a69
 OLD_V2_SHA=22422803a852f6b3bf882dbc04bb883124052308
-NEW_V2_SHA=549870d40e941e84c02a43051009a2b5b2570cb2
+NEW_V2_IMPLEMENTATION_SHA=549870d40e941e84c02a43051009a2b5b2570cb2
+NEW_V2_SHA=confirm with `git rev-parse HEAD` / `origin/feat/v2-remote-scheduler-dogfood-02`
 MERGE_BASE_SHA=7f1d6c4e05b90a8b417c3952207027c4b77b1a69
 ```
 
