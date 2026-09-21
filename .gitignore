@@ -3,3 +3,8 @@ __pycache__/
 *.pyo
 .commandcode/
 *.bak-*
+/dist/
+/build/
+/*.spec
+/qa/test-logs/
+/qa/artifacts/

@@ -89,9 +89,12 @@ def test_persona_preview_preserves_last_good_on_failure():
 
 def test_persona_send_failure_is_visible_in_monitor_surface():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
-    assert 'self.set_status("전송 실패")' in gui
-    assert "전송 실패\\n\\n{detail}" in gui
-    assert "BUSY라면 현재 다른 작업이 pane을 점유 중입니다." in gui
+    # V2: Founder-facing send failure remains visible; transport busy is not remap/DOWN.
+    assert "SEND_STATE_KO[SEND_FAILED]" in gui
+    assert "전송 실패" in gui
+    assert "원격 통신 대기 중" in gui
+    assert "매핑 DOWN 아님" in gui or "재매핑은 필요 없습니다" in gui
+    assert "BUSY라면 현재 다른 작업이 pane을 점유 중입니다." not in gui
 
 
 def test_persona_pane_board_supports_confirmed_cross_window_move():
