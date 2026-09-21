@@ -16,7 +16,6 @@ import hashlib
 import json
 import subprocess
 import uuid
-from datetime import datetime, timezone
 
 from actl.core.models import CopyResult
 
@@ -84,10 +83,19 @@ def remote_managed_send(agent: str, target_pane: str, prompt: str, timeout: floa
                 if candidate.get(key) is not None}
     expected["paneId"] = target_pane
     scope = {"socketPath": socket_path}
-    grant = _runtime_request(REMOTE_SSH_TARGET, "reserve", {
+    grant_envelope = _runtime_request(REMOTE_SSH_TARGET, "reserve", {
         **scope, "action": "acquire", "runtimeId": candidate["runtimeId"],
         "mode": "MANAGED", "ownerRef": "actl-gui", "expectedContext": expected,
-    }, timeout)["data"]
+    }, timeout)
+    grant = grant_envelope.get("data") or {}
+    # Permit freshness must use the same ASUS/server observation as the snapshot.
+    # MainPC wall clock is not an authority for inputPermit.confirmedAt.
+    observed_at = grant_envelope.get("observedAt")
+    if not isinstance(observed_at, str) or not observed_at.strip():
+        raise RuntimeError("managed reserve response missing server observedAt")
+    snapshot_hash = grant.get("currentSnapshotHash")
+    if not isinstance(snapshot_hash, str) or not snapshot_hash:
+        raise RuntimeError("managed reserve response missing currentSnapshotHash")
     command_id = "cmd_" + uuid.uuid4().hex
     try:
         response = _runtime_request(REMOTE_SSH_TARGET, "send", {
@@ -98,12 +106,12 @@ def remote_managed_send(agent: str, target_pane: str, prompt: str, timeout: floa
             "wirePrompt": prompt,
             "promptSha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "observationCursor": grant.get("observationCursor"),
-            "currentSnapshotHash": grant.get("currentSnapshotHash"),
+            "currentSnapshotHash": snapshot_hash,
             "inputPermit": {
                 "commandId": command_id, "runtimeId": grant["runtimeId"],
                 "fence": grant["fence"], "paneMode": "normal",
-                "confirmedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-                "snapshotHash": grant.get("currentSnapshotHash"),
+                "confirmedAt": observed_at,
+                "snapshotHash": snapshot_hash,
             },
         }, timeout)
         return str(response.get("data", {}).get("command", {}).get("target") or target_pane)

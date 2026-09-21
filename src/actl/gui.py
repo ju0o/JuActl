@@ -60,6 +60,43 @@ def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
     return text, not failed
 
 
+def inspector_truth(row: dict) -> dict[str, str]:
+    """Derive all Founder-facing inspector fields from one runtime row.
+
+    Title, detail, and action target must always share the same runtime_key.
+    """
+    target = str(row.get("target") or "-")
+    display = str(row.get("display") or row.get("agent") or "UNKNOWN")
+    pane_id = str(row.get("pane_id") or target)
+    result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(
+        row.get("result_state"), "미확인"
+    )
+    if target == "-":
+        title = f"{display} — no live runtime"
+    else:
+        title = f"{display} · {pane_id} — LIVE PANE"
+    detail = (
+        f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')}\n"
+        f"Agent {display} · Role {row.get('role', 'UNKNOWN')}\n"
+        f"Model/Profile {row.get('model_profile', 'UNKNOWN')} · State {row.get('runtime_state', 'UNKNOWN')}\n"
+        f"Pane {pane_id} · Session {row.get('session', 'UNKNOWN')} "
+        f"Window {row.get('window', 'UNKNOWN')} Pane {row.get('pane_index', 'UNKNOWN')}\n"
+        f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}\n"
+        f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}\n"
+        f"Controls {row.get('control_reason', 'UNKNOWN')}: {row.get('control_detail', '')}"
+    )
+    return {
+        "runtime_key": str(row.get("runtime_key") or ""),
+        "agent": str(row.get("agent") or ""),
+        "display": display,
+        "target": target,
+        "pane_id": pane_id,
+        "session": str(row.get("session") or "UNKNOWN"),
+        "title": title,
+        "detail": detail,
+    }
+
+
 class Board:
     def __init__(self, ssh_target: str | None = None) -> None:
         import tkinter as tk
@@ -483,12 +520,18 @@ class Board:
             self.preview_inflight.discard(key)
             if self.selected != key:
                 return
+            # Re-resolve the same runtime_key so title cannot lag a newer selection.
+            live = next((r for r in self.rows if r.get("runtime_key") == key), None)
+            if live is None:
+                return
+            truth = inspector_truth(live)
             text, fresh = _preview_text(self.last_previews.get(key), result)
             if fresh:
                 self.last_previews[key] = text
             self.preview.delete("1.0", "end")
             self.preview.insert("end", "LIVE PANE PREVIEW\n" + text)
-            self.pane_title.set(f"{row['display']} · {row.get('pane_id', target)} — LIVE PANE")
+            self.pane_title.set(truth["title"])
+            self.detail_var.set(truth["detail"])
             self.set_status("준비")
 
         self._bg(work, done)
@@ -782,25 +825,17 @@ class Board:
         if not row:
             return
         self.selected = row["runtime_key"]
-        tgt = row["target"]
-        result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(row.get("result_state"), "미확인")
-        self.detail_var.set(
-            f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')}\n"
-            f"Agent {row.get('display', row.get('agent'))} · Role {row.get('role', 'UNKNOWN')}\n"
-            f"Model/Profile {row.get('model_profile', 'UNKNOWN')} · State {row.get('runtime_state', 'UNKNOWN')}\n"
-            f"Pane {row.get('pane_id', 'UNKNOWN')} · Session {row.get('session', 'UNKNOWN')} "
-            f"Window {row.get('window', 'UNKNOWN')} Pane {row.get('pane_index', 'UNKNOWN')}\n"
-            f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}\n"
-            f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}\n"
-            f"Controls {row.get('control_reason', 'UNKNOWN')}: {row.get('control_detail', '')}"
-        )
+        truth = inspector_truth(row)
+        # Synchronize title + detail + action identity before any async preview.
+        self.pane_title.set(truth["title"])
+        self.detail_var.set(truth["detail"])
+        tgt = truth["target"]
         if tgt == "-":
             self.preview.delete("1.0", "end")
-            self.preview.insert("end", f"{row['display']}: live runtime 없음")
-            self.pane_title.set(f"{row['display']} — no live runtime")
+            self.preview.insert("end", f"{truth['display']}: live runtime 없음")
             return
-        self.set_status(f"{row['display']} 로딩…")
-        self.log(f"{row['display']} 미리보기 로딩…")
+        self.set_status(f"{truth['display']} 로딩…")
+        self.log(f"{truth['display']} 미리보기 로딩…")
 
         def work():
             return _verify_row(row["agent"], tgt, self.config) if row.get("control_ready") else "읽기 전용 발견 runtime — 매핑 전 제어 비활성"
