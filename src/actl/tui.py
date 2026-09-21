@@ -124,20 +124,28 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
             # same Agent family does not make this instance ambiguous.
             validation = validate_target(name, target)
             state = validation.state
-            control_ready = state == "UP"
-            control_reason = "READY" if control_ready else (
+            control_ready = validation.valid
+            if state == "UP":
+                # Refine UP with activity once hydrated; temporary busy stays distinct.
+                pass
+            control_reason = "READY" if control_ready and state != "TRANSPORT_BUSY" else (
+                "TRANSPORT_BUSY" if state == "TRANSPORT_BUSY" else (
                 "STALE" if state == "DOWN" else
                 "MISMATCH" if state == "MISMATCH" else state
-            )
+            ))
             control_detail = validation.detail or f"validated selected runtime state is {state}"
+            if state == "TRANSPORT_BUSY":
+                control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
         elif mapped_target:
             target = mapped_target
             validation = validate_target(name, target)
             state = validation.state
             pane_path = validation.path
-            control_ready = state == "UP"
-            control_reason = "READY" if control_ready else state
+            control_ready = validation.valid
+            control_reason = "READY" if control_ready and state != "TRANSPORT_BUSY" else state
             control_detail = validation.detail or f"validated target state is {state}"
+            if state == "TRANSPORT_BUSY":
+                control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
         preview = ""
         pane_preview = ""
         detail = ""
@@ -154,9 +162,21 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
 
                     activity_state, _ = observe_activity(target)
                     busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
-                except Exception:
+                    if state == "UP":
+                        if activity_state == "RUNNING":
+                            state = "WORKING"
+                        elif activity_state == "IDLE":
+                            state = "IDLE"
+                except Exception as exc:
+                    from actl.core.remote_scheduler import is_transport_contention
+
+                    if is_transport_contention(exc) and state == "UP":
+                        state = "TRANSPORT_BUSY"
+                        control_ready = True
+                        control_reason = "TRANSPORT_BUSY"
+                        control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
                     busy = "?"
-        if target != "-" and control_ready and hydrate:
+        if target != "-" and control_ready and hydrate and state != "TRANSPORT_BUSY":
             try:
                 result = extract_last_response(name, target, config)
                 if result.text:
@@ -170,8 +190,16 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                     result_flag = "○대기"
                     result_state = "WAITING"
             except Exception as exc:
-                detail = str(exc)[:80]
-                result_flag = "?오류"
+                from actl.core.remote_scheduler import is_transport_contention
+
+                if is_transport_contention(exc):
+                    state = "TRANSPORT_BUSY"
+                    control_ready = True
+                    control_reason = "TRANSPORT_BUSY"
+                    control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
+                else:
+                    detail = str(exc)[:80]
+                    result_flag = "?오류"
         from actl.core.projection import project_metadata
         profile = None
         if det is not None and "claude profile " in det.evidence:
@@ -224,7 +252,18 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
     return rows
 
 
-STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED": "미매핑", "DETECTED": "감지됨"}
+STATE_KO = {
+    "UP": "정상",
+    "WORKING": "작업 중",
+    "IDLE": "대기",
+    "TRANSPORT_BUSY": "원격 통신 대기 중",
+    "DEGRADED": "통신 저하",
+    "DOWN": "꺼짐",
+    "UNKNOWN": "미확인",
+    "MISMATCH": "불일치",
+    "UNMAPPED": "미매핑",
+    "DETECTED": "감지됨",
+}
 
 HELP_TEXT = """\
 actl 에이전트 보드 — 도움말
