@@ -907,9 +907,13 @@ class Journal:
             command = by_id.get(command_id)
             if command is None:
                 raise ReserveInvalid("recoveryEvidence commandId does not belong to reservation")
-            if disposition not in _RECONCILE_DISPOSITIONS:
-                raise ReserveInvalid("recoveryEvidence disposition must be FAILED|CANCEL_REQUESTED|DELIVERY_AMBIGUOUS")
-            if not _reconcile_disposition_allowed(command, str(disposition)):
+            if disposition == "FINAL_CAPTURE":
+                result_id = item.get("resultId")
+                if not isinstance(result_id, str) or result_id not in _known_result_ids_for_command(self, command):
+                    raise ReserveInvalid("FINAL_CAPTURE recovery requires a matching resultId")
+            elif disposition not in _RECONCILE_DISPOSITIONS:
+                raise ReserveInvalid("recoveryEvidence disposition must be FAILED|CANCEL_REQUESTED|DELIVERY_AMBIGUOUS|FINAL_CAPTURE")
+            elif not _reconcile_disposition_allowed(command, str(disposition)):
                 raise ReserveInvalid(
                     f"recovery disposition {disposition} does not match command stage {command['stage']}"
                 )
@@ -921,14 +925,16 @@ class Journal:
         for item in commands:
             command_id = str(item["commandId"])
             disposition = str(item["disposition"])
-            self.update_command(command_id, stage=disposition, delivery_disposition=disposition)
+            if disposition != "FINAL_CAPTURE":
+                self.update_command(command_id, stage=disposition, delivery_disposition=disposition)
             self.add_receipt(
                 command_id=command_id,
                 request_id=None,
                 kind="OWNERLESS_EXPIRED_RECOVERY",
                 stage=disposition,
                 side_effect=SIDE_EFFECT_POSSIBLE,
-                payload={"reservationId": reservation_id, "fence": str(fence), "disposition": disposition},
+                payload={"reservationId": reservation_id, "fence": str(fence), "disposition": disposition,
+                         "resultId": item.get("resultId")},
             )
         ack = dict(recovery_evidence)
         ack["recoveredAt"] = stamp
