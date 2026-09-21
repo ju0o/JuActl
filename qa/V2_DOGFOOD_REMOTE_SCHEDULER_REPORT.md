@@ -9,7 +9,7 @@ Worktree: `C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-01`
 | Item | Value |
 |---|---|
 | V1 stable SHA | `4899b8562f3b8c3297342b756b80ef4e4b1c3a0e` (`feat/founder-workspace-dashboard-v1`) |
-| Candidate SHA | *(filled after commit)* |
+| Candidate SHA | `fc5c5d1d8bcc15762ec3bd22124d0dc8a77900b5` |
 | Worktree path | `C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-01` |
 | V1 worktree | `C:\Users\user\Desktop\4_Projects_Ju\juactl` (left unchanged; dirty build/dist preserved) |
 
