@@ -12,7 +12,7 @@ Status target: `V2_QA_HANDOFF_READY`
 | LOCAL_STABLE_SHA | `4899b8562f3b8c3297342b756b80ef4e4b1c3a0e` |
 | REMOTE_STABLE_BRANCH_SHA | `7f1d6c4e05b90a8b417c3952207027c4b77b1a69` (`origin/feat/founder-workspace-dashboard-v1`) |
 | CANDIDATE_BASE_SHA | `4899b8562f3b8c3297342b756b80ef4e4b1c3a0e` |
-| CANDIDATE_HEAD_SHA | `db3b6b2a30252ad225cadcfc9d82753c9ee467e2` |
+| CANDIDATE_HEAD_SHA | confirm with `git rev-parse HEAD` and `git rev-parse origin/feat/v2-remote-scheduler-dogfood-01` (must match) |
 | Remote candidate | `origin/feat/v2-remote-scheduler-dogfood-01` |
 
 Relationship:
