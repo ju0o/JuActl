@@ -1391,48 +1391,19 @@ class Board:
 
         def work():
             from actl.core.activity import observe_activity
+            from actl.core.remote import ManagedUnsupported, is_remote, remote_managed_send
             from actl.core.tmux import send_prompt_staged
 
-            def send_body():
-                set_send_state(row["agent"], row["target"], SENDING)
-                # Prefer staged send so "pasted" alone is not treated as success.
-                staged = send_prompt_staged(row["target"], text, press_enter=True)
-                if not staged.get("ok"):
-                    set_send_state(
-                        row["agent"],
-                        row["target"],
-                        SEND_FAILED,
-                        error=str(staged.get("error") or "send failed"),
-                        evidence={"stages": staged.get("stages")},
-                    )
-                    return ("failed", staged.get("error") or "send failed", staged)
-                completed = staged.get("completedStages") or []
-                if "paste_buffer" not in completed or "enter" not in completed:
-                    set_send_state(
-                        row["agent"],
-                        row["target"],
-                        SEND_FAILED,
-                        error="paste/enter evidence missing",
-                        evidence={"stages": staged.get("stages")},
-                    )
-                    return ("failed", "paste/enter evidence missing", staged)
-                set_send_state(
-                    row["agent"],
-                    row["target"],
-                    SUBMITTED,
-                    evidence={"stages": staged.get("stages"), "disposition": staged.get("deliveryDisposition")},
-                )
-                # Evidence that runtime moved into processing / changed state.
+            def _ack_from_activity(evidence: dict):
                 activity, detail = observe_activity(row["target"])
                 if activity == "RUNNING":
                     set_send_state(
                         row["agent"],
                         row["target"],
                         START_ACKNOWLEDGED,
-                        evidence={"activity": activity, "detail": detail},
+                        evidence={**evidence, "activity": activity, "detail": detail},
                     )
-                    return ("acked", activity, staged)
-                # Brief bounded recheck — do not invent success without evidence.
+                    return ("acked", activity, evidence)
                 import time as _time
 
                 for _ in range(3):
@@ -1443,11 +1414,64 @@ class Board:
                             row["agent"],
                             row["target"],
                             START_ACKNOWLEDGED,
-                            evidence={"activity": activity, "detail": detail},
+                            evidence={**evidence, "activity": activity, "detail": detail},
                         )
-                        return ("acked", activity, staged)
-                # Submitted with enter evidence but start not yet observed.
-                return ("submitted", activity, staged)
+                        return ("acked", activity, evidence)
+                return ("submitted", activity, evidence)
+
+            def send_body():
+                set_send_state(row["agent"], row["target"], SENDING)
+                # Preserve Stable remote managed-send semantics when available.
+                if is_remote():
+                    try:
+                        managed_target = remote_managed_send(row["agent"], row["target"], text)
+                        evidence = {
+                            "path": "managed",
+                            "managedTarget": managed_target,
+                            "disposition": "TRANSPORT_SENT",
+                        }
+                        set_send_state(
+                            row["agent"],
+                            row["target"],
+                            SUBMITTED,
+                            evidence=evidence,
+                        )
+                        return _ack_from_activity(evidence)
+                    except ManagedUnsupported:
+                        pass
+                # Fallback / local: staged paste+Enter evidence (V2 send truth).
+                staged = send_prompt_staged(row["target"], text, press_enter=True)
+                if not staged.get("ok"):
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error=str(staged.get("error") or "send failed"),
+                        evidence={"stages": staged.get("stages"), "path": "staged"},
+                    )
+                    return ("failed", staged.get("error") or "send failed", staged)
+                completed = staged.get("completedStages") or []
+                if "paste_buffer" not in completed or "enter" not in completed:
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error="paste/enter evidence missing",
+                        evidence={"stages": staged.get("stages"), "path": "staged"},
+                    )
+                    return ("failed", "paste/enter evidence missing", staged)
+                evidence = {
+                    "path": "staged",
+                    "stages": staged.get("stages"),
+                    "disposition": staged.get("deliveryDisposition"),
+                }
+                set_send_state(
+                    row["agent"],
+                    row["target"],
+                    SUBMITTED,
+                    evidence=evidence,
+                )
+                return _ack_from_activity(evidence)
 
             try:
                 if target_host:
