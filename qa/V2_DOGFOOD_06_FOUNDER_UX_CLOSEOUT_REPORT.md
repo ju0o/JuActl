@@ -11,7 +11,7 @@ Date: 2026-09-22
 ```text
 BASE_SHA=0ca82b9eb47e66a03726a9051fe7229b5f605790
 STABLE=7f1d6c4e05b90a8b417c3952207027c4b77b1a69
-NEW_CANDIDATE_SHA=PENDING_COMMIT
+NEW_CANDIDATE_SHA=dd3f9b3448e7b45d422855d874e4e524b7ba5520
 branch=feat/v2-founder-ux-closeout-dogfood-06
 worktree=C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-06
 ```
@@ -56,3 +56,4 @@ portable Board SHA256=0A5D9EBA5B93CFC86E552CC9E4BB66FB63132ADA20C312732B234C90A6
 portable CLI path=C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-06\qa\artifacts\portable\JuActl.exe
 portable CLI SHA256=4D1E5619DB47F3D98E67AA3FFEEA6FC69CFD24F504FE9A7E92893A4553C3E20E
 ```
+
