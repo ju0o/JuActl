@@ -11,7 +11,7 @@ Date: 2026-09-22
 ```text
 BASE_SHA=eedb2a81e96fdcb1d930630262ad6eca4f4a486c
 STABLE=7f1d6c4e05b90a8b417c3952207027c4b77b1a69
-NEW_CANDIDATE_SHA=(git tip after commit)
+NEW_CANDIDATE_SHA=f612849a435b8db2bc3b30fe9b4dc1a602a0e1bb
 branch=feat/v2-send-commit-copy-truth-dogfood-05
 worktree=C:\Users\user\Desktop\4_Projects_Ju\juactl-v2-dogfood-05
 ```
