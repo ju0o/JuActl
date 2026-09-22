@@ -262,7 +262,7 @@ def test_target_validation_valid_includes_transport_busy():
 
 def test_korean_founder_labels_exist():
     assert send_truth.SEND_STATE_KO[send_truth.SENDING] == "전송 중"
-    assert send_truth.SEND_STATE_KO[send_truth.START_ACKNOWLEDGED] == "Agent 작업 시작 확인"
+    assert send_truth.SEND_STATE_KO[send_truth.START_ACKNOWLEDGED] == "작업 중"
     assert send_truth.RESULT_CLASS_KO[send_truth.NEW_RESULT] == "새 결과 있음"
     assert send_truth.RESULT_CLASS_KO[send_truth.STALE_RESULT] == "이전 작업 결과"
     assert send_truth.RESULT_CLASS_KO[send_truth.RESULT_PENDING] == "새 결과 기다리는 중"

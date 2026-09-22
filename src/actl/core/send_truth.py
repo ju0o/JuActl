@@ -39,9 +39,26 @@ SEND_STATE_KO = {
     CLEARING_BACKGROUND: "백그라운드 작업 정리 중",
     SENDING: "전송 중",
     SUBMITTED: "제출 완료",
-    START_ACKNOWLEDGED: "Agent 작업 시작 확인",
+    START_ACKNOWLEDGED: "작업 중",
     SEND_FAILED: "전송 실패",
     FOREGROUND_ACQUIRE_TIMEOUT: "전송 지연: 백그라운드 정리 초과",
+}
+
+# Founder-facing loop phases (selected-runtime interaction).
+LOOP_READY = "READY"
+LOOP_SENDING = "SENDING"
+LOOP_SUBMITTED = "SUBMITTED"
+LOOP_WORKING = "WORKING"
+LOOP_RESULT_READY = "RESULT_READY"
+LOOP_COPIED = "COPIED"
+
+LOOP_STATE_KO = {
+    LOOP_READY: "준비",
+    LOOP_SENDING: "전송 중",
+    LOOP_SUBMITTED: "제출 완료",
+    LOOP_WORKING: "작업 중",
+    LOOP_RESULT_READY: "결과 준비됨",
+    LOOP_COPIED: "복사 완료",
 }
 
 COPY_STATE_KO = {

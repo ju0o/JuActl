@@ -84,7 +84,9 @@ def test_persona_preview_preserves_last_good_on_failure():
     from actl.gui import _preview_text
 
     text, fresh = _preview_text("last pane", "(미리보기 불가: timeout)")
-    assert "last pane" in text and "STALE" in text and not fresh
+    # Founder UX: keep last-good pane; do not paint a timeout wall over it.
+    assert "last pane" in text and not fresh
+    assert "timeout" not in text.lower()
 
 
 def test_persona_send_failure_is_visible_in_monitor_surface():

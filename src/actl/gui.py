@@ -53,11 +53,21 @@ STATUS_GLYPH = {
 
 
 def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
+    """Return (display_text, is_fresh). Never wipe last-good pane with a timeout wall."""
     text = result if isinstance(result, str) else f"실패: {result}"
-    failed = text.startswith("(미리보기 불가:") or text.startswith("실패:")
+    lower = text.lower()
+    failed = (
+        text.startswith("(미리보기 불가:")
+        or text.startswith("실패:")
+        or "timed out" in lower
+        or "미리보기 보류" in text
+    )
     if failed and previous:
-        return previous + "\n\n[STALE — PREVIEW UNAVAILABLE]\n" + text, False
-    return text, not failed
+        # Keep last known-good content; soft degrade only.
+        return previous, False
+    if failed and not previous:
+        return "(pane 읽는 중… 잠시 후 자동 갱신)", False
+    return text, True
 
 
 def inspector_truth(row: dict) -> dict[str, str]:
@@ -120,7 +130,14 @@ class Board:
         self.hydrating = False
         self.preview_inflight: set[str] = set()
         self.last_previews: dict[str, str] = {}
+        self.preview_degraded: set[str] = set()
+        self.send_inflight = False
+        self.last_submitted_prompt: str | None = None
+        self.loop_phase = "READY"
+        self.follow_preview_key: str | None = None
+        self.follow_preview_until = 0.0
         self.refresh_interval_ms = 12000
+        self.live_preview_interval_ms = 1800
         self.event_refresh_scheduled = False
         self.last_event_refresh = 0.0
         self.pending_event_panes: set[str] = set()
@@ -134,6 +151,7 @@ class Board:
         self.refresh()
         self.root.after(100, self._drain)
         self.root.after(180, self._motion_tick)
+        self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
         if self.ssh_target:
             self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
             self.root.after(250, self._event_tick)
@@ -482,59 +500,97 @@ class Board:
         target = row["target"]
         self._request_preview(row)
 
-    def _request_preview(self, row: dict) -> None:
+    def _request_preview(self, row: dict, *, force: bool = False) -> None:
         key = row["runtime_key"]
-        if key in self.preview_inflight:
+        if key in self.preview_inflight and not force:
             return
-        if self.ssh_target:
-            from actl.core.remote_scheduler import scheduler_for
-
-            if scheduler_for(self.ssh_target).user_action_inflight():
-                return
+        # Live preview uses one-shot SSH capture and must not wait on / block P0.
+        # Still skip starting new polls while a user action owns the scheduler intent.
+        if self.ssh_target and self.send_inflight:
+            return
         self.preview_inflight.add(key)
         target = row["target"]
 
         def work():
-            from actl.core.remote_scheduler import (
-                KIND_PREVIEW,
-                P2_BACKGROUND,
-                RemoteOpCancelled,
-                scheduler_for,
-            )
-
-            try:
-                if self.ssh_target:
-                    return scheduler_for(self.ssh_target).submit(
-                        lambda: _pane_preview(target, lines=12),
-                        priority=P2_BACKGROUND,
-                        kind=KIND_PREVIEW,
-                        coalesce_key=f"preview:{key}",
-                        replaceable=True,
-                        timeout=60.0,
-                    )
-                return _pane_preview(target, lines=12)
-            except RemoteOpCancelled:
-                return self.last_previews.get(key) or "(미리보기 보류: 사용자 작업 우선)"
+            # Remote Board: do NOT queue through RemoteOpScheduler — oneshot live
+            # capture keeps SEND/COPY free and still yields to send_inflight above.
+            return _pane_preview(target, lines=14)
 
         def done(result) -> None:
             self.preview_inflight.discard(key)
             if self.selected != key:
                 return
-            # Re-resolve the same runtime_key so title cannot lag a newer selection.
             live = next((r for r in self.rows if r.get("runtime_key") == key), None)
             if live is None:
                 return
             truth = inspector_truth(live)
-            text, fresh = _preview_text(self.last_previews.get(key), result)
+            previous = self.last_previews.get(key)
+            text, fresh = _preview_text(previous, result)
+            degraded = not fresh
             if fresh:
                 self.last_previews[key] = text
+                self.preview_degraded.discard(key)
+            elif degraded:
+                self.preview_degraded.add(key)
+            header = "LIVE PANE PREVIEW"
+            if key in self.preview_degraded and previous:
+                header = "LIVE PANE PREVIEW · 갱신 지연"
+            # Preserve scroll context: only rewrite body; never replace with raw timeout.
+            body = self.last_previews.get(key) or text
             self.preview.delete("1.0", "end")
-            self.preview.insert("end", "LIVE PANE PREVIEW\n" + text)
+            self.preview.insert("end", f"{header}\n{body}")
             self.pane_title.set(truth["title"])
             self.detail_var.set(truth["detail"])
-            self.set_status("준비")
+            # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
+            if self.loop_phase in {"READY"} and not self.send_inflight:
+                self.set_status("준비")
 
         self._bg(work, done)
+
+    def _live_preview_tick(self) -> None:
+        """Periodic live-ish refresh for the selected runtime while Board is open."""
+        try:
+            row = self.current()
+            if row and row.get("target") not in (None, "-", "") and not str(row.get("target")).endswith("?"):
+                follow = self.follow_preview_key == row.get("runtime_key")
+                import time as _time
+
+                if follow and _time.monotonic() > self.follow_preview_until:
+                    self.follow_preview_key = None
+                if follow or self.auto_refresh:
+                    self._request_preview(row)
+        finally:
+            self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
+
+    def _start_follow_preview(self, runtime_key: str, *, seconds: float = 90.0) -> None:
+        import time as _time
+
+        self.follow_preview_key = runtime_key
+        self.follow_preview_until = _time.monotonic() + seconds
+        row = next((r for r in self.rows if r.get("runtime_key") == runtime_key), None)
+        if row:
+            self._request_preview(row, force=True)
+
+    def _set_loop_phase(self, phase: str, *, status: str | None = None) -> None:
+        from actl.core.send_truth import LOOP_STATE_KO
+
+        self.loop_phase = phase
+        if status is not None:
+            self.set_status(status)
+        else:
+            self.set_status(LOOP_STATE_KO.get(phase, phase))
+
+    def _clear_prompt_at_submitted(self, submitted_text: str) -> None:
+        """Clear composer at authoritative SUBMITTED; keep receipt for history."""
+        self.last_submitted_prompt = submitted_text
+        try:
+            self.msg.delete("1.0", "end")
+        except Exception:
+            pass
+
+    def _set_send_inflight(self, active: bool) -> None:
+        self.send_inflight = active
+        self._update_action_state()
 
     def _health_tick(self) -> None:
         if self.auto_refresh:
@@ -802,10 +858,14 @@ class Board:
 
     def _update_action_state(self) -> None:
         row = self.current()
-        enabled = bool(row and row.get("control_ready"))
+        enabled = bool(row and row.get("control_ready")) and not self.send_inflight
         self.send_btn.configure(state="normal" if enabled else "disabled")
         for label in ("SEND PROMPT", "COPY RESULT", "FOCUS"):
-            self.action_buttons[label].configure(state="normal" if enabled else "disabled")
+            if label == "SEND PROMPT":
+                self.action_buttons[label].configure(state="normal" if enabled else "disabled")
+            else:
+                ready = bool(row and row.get("control_ready"))
+                self.action_buttons[label].configure(state="normal" if ready else "disabled")
 
     def select_agent(self, agent: str) -> None:
         self.selected = agent
@@ -1005,8 +1065,10 @@ class Board:
                     scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
-            self.set_status("준비")
+            from actl.core.send_truth import LOOP_COPIED, LOOP_RESULT_READY, LOOP_STATE_KO, LOOP_WORKING
+
             if isinstance(result, Exception):
+                self.set_status("복사 실패")
                 self.log(f"COPY failed: {result}")
                 return
             if result[0] == "ok":
@@ -1016,9 +1078,16 @@ class Board:
                 label = RESULT_CLASS_KO.get(result_class, result_class)
                 if result_class == "NEW_RESULT":
                     acknowledge(row["agent"], result[3])
+                    self._set_loop_phase(LOOP_COPIED, status=LOOP_STATE_KO[LOOP_COPIED])
                     self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
+                    # Keep live pane visible; append concise confirmation above last preview.
+                    prior = self.last_previews.get(row["runtime_key"]) or ""
                     self.preview.delete("1.0", "end")
-                    self.preview.insert("end", f"✓ {label}\n\n{result[6][:4000]}")
+                    self.preview.insert(
+                        "end",
+                        f"✓ {LOOP_STATE_KO[LOOP_COPIED]} · {label}\n\n"
+                        f"{result[6][:4000]}\n\n--- LIVE PANE ---\n{prior}",
+                    )
                 else:
                     self.log(f"{row['display']} · {label} (unexpected ok path)")
             elif result[0] == "no-clip":
@@ -1026,30 +1095,30 @@ class Board:
                 label = RESULT_CLASS_KO.get(result_class, result_class)
                 text = result[4] if len(result) > 4 else ""
                 if result_class == "RESULT_PENDING":
+                    self._set_loop_phase(LOOP_WORKING, status=LOOP_STATE_KO[LOOP_WORKING])
                     self.log(f"{row['display']} · {label} — 아직 새 결과가 없습니다 (이전 텍스트는 복사하지 않음)")
-                    self.preview.delete("1.0", "end")
-                    self.preview.insert("end", f"⏳ {label}\n\n전송 후 Agent 결과가 아직 바뀌지 않았습니다.")
                 elif result_class == "STALE_RESULT":
-                    self.log(f"{row['display']} · {label} — 이전 작업 결과입니다 (새 작업 결과 아님)")
+                    self.set_status(label)
+                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
+                elif result_class == "NEW_RESULT":
+                    self._set_loop_phase(LOOP_RESULT_READY, status=LOOP_STATE_KO[LOOP_RESULT_READY])
+                    self.log(f"{row['display']} · {label}")
+                else:
+                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
+                # Do not overwrite live pane with diagnostic walls.
+                if result_class == "STALE_RESULT" and text:
+                    prior = self.last_previews.get(row["runtime_key"]) or text
                     self.preview.delete("1.0", "end")
                     self.preview.insert(
                         "end",
-                        f"⚠ {label}\n\n이 텍스트는 이전 작업의 결과입니다.\n"
-                        f"최근 전송이 실패했거나 새 결과가 아직 없습니다.\n\n"
-                        f"(참고용 이전 결과 {result[2]}자 — 클립보드에는 넣지 않음)\n\n"
-                        f"{text[:2000]}",
+                        f"⚠ {label} — 클립보드 미변경\n\n--- LIVE PANE ---\n{prior[:4000]}",
                     )
-                else:
-                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
-                    self.preview.delete("1.0", "end")
-                    self.preview.insert("end", f"· {label}\n\n클립보드를 변경하지 않았습니다.")
             elif result[0] == "empty":
                 label = RESULT_CLASS_KO.get(result[2], result[2])
                 self.log(f"응답 없음 · {label} ({result[1] or '비어 있음'})")
             else:
-                self.resp.delete("1.0", "end")
-                self.resp.insert("end", f"클립보드 실패: {result[1]}\n--- 수동 복사 ---\n{result[2]}")
-                self.log("클립보드 실패 — 응답을 화면에 출력")
+                self.log(f"클립보드 실패: {result[1]}")
+                # Keep Founder able to see pane; show error in diagnostics log only.
 
         self._bg(work, done)
 
@@ -1459,6 +1528,9 @@ class Board:
         if not row or not row.get("control_ready"):
             self.log("SEND PROMPT disabled: validated mapping required")
             return
+        if self.send_inflight:
+            self.log("이미 전송 중 — 완료될 때까지 대기")
+            return
         text = self.msg.get("1.0", "end").strip()
         if not text:
             self.log("빈 메시지 — 전송 안 함")
@@ -1474,6 +1546,9 @@ class Board:
         from actl.core.send_truth import (
             CLEARING_BACKGROUND,
             FOREGROUND_ACQUIRE_TIMEOUT,
+            LOOP_SENDING,
+            LOOP_SUBMITTED,
+            LOOP_WORKING,
             SEND_FAILED,
             SEND_QUEUED,
             SENDING,
@@ -1487,7 +1562,8 @@ class Board:
         previous_hash = row.get("result_hash") or None
         begin_send(row["agent"], row["target"], previous_result_hash=previous_hash)
         set_send_state(row["agent"], row["target"], SEND_QUEUED)
-        self.set_status(SEND_STATE_KO[SEND_QUEUED])
+        self._set_send_inflight(True)
+        self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SEND_QUEUED])
         self.log(f"{row['display']} · {SEND_STATE_KO[SEND_QUEUED]}")
         target_host = self.ssh_target
         if target_host:
@@ -1531,18 +1607,15 @@ class Board:
 
             def send_body():
                 owned.set()
-                # Do not claim "전송 중" until P0 actually owns the transport.
                 set_send_state(row["agent"], row["target"], SENDING)
 
                 def mark_sending():
-                    self.set_status(SEND_STATE_KO[SENDING])
+                    self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SENDING])
 
                 try:
                     self.root.after(0, mark_sending)
                 except Exception:
                     pass
-                # Preserve Stable remote managed-send semantics when available.
-                # SUBMITTED commits at authoritative managed send response — not after cleanup.
                 if is_remote():
                     try:
                         from actl.core.remote import ManagedSendDelivery
@@ -1559,7 +1632,12 @@ class Board:
                             committed.set()
 
                             def mark_submitted():
-                                self.set_status(SEND_STATE_KO[SUBMITTED])
+                                # Authoritative SUBMITTED: clear Prompt immediately.
+                                self._clear_prompt_at_submitted(text)
+                                self._set_loop_phase(
+                                    LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED]
+                                )
+                                self._start_follow_preview(row["runtime_key"])
 
                             try:
                                 self.root.after(0, mark_submitted)
@@ -1574,14 +1652,25 @@ class Board:
                             auto_cleanup=False,
                         )
                         if not committed.is_set():
-                            # Defensive: commit callback is the contract; ensure state.
                             set_send_state(
                                 row["agent"],
                                 row["target"],
                                 SUBMITTED,
                                 evidence=dict(delivery.evidence),
                             )
-                        # Post-send release/reconcile is bounded cleanup off the P0 path.
+
+                            def mark_submitted_fallback():
+                                self._clear_prompt_at_submitted(text)
+                                self._set_loop_phase(
+                                    LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED]
+                                )
+                                self._start_follow_preview(row["runtime_key"])
+
+                            try:
+                                self.root.after(0, mark_submitted_fallback)
+                            except Exception:
+                                pass
+
                         def _cleanup_lease() -> None:
                             ok = delivery.cleanup()
                             if not ok and delivery.cleanup_error:
@@ -1604,7 +1693,6 @@ class Board:
                         return _ack_from_activity(dict(delivery.evidence))
                     except ManagedUnsupported:
                         pass
-                # Fallback / local: staged paste+Enter evidence (V2 send truth).
                 staged = send_prompt_staged(row["target"], text, press_enter=True)
                 if not staged.get("ok"):
                     set_send_state(
@@ -1636,6 +1724,16 @@ class Board:
                     SUBMITTED,
                     evidence=evidence,
                 )
+
+                def mark_staged_submitted():
+                    self._clear_prompt_at_submitted(text)
+                    self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
+                    self._start_follow_preview(row["runtime_key"])
+
+                try:
+                    self.root.after(0, mark_staged_submitted)
+                except Exception:
+                    pass
                 return _ack_from_activity(evidence)
 
             try:
@@ -1674,61 +1772,35 @@ class Board:
                     scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
+            self._set_send_inflight(False)
             if isinstance(result, Exception):
                 set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(result))
                 self.set_status(SEND_STATE_KO[SEND_FAILED])
-                self.preview.delete("1.0", "end")
+                self.loop_phase = "READY"
+                # Pre-commit failure: Prompt text is preserved for retry.
                 detail = str(result) or type(result).__name__
                 from actl.core.remote_scheduler import is_transport_contention
 
                 if is_transport_contention(result):
-                    self.preview.insert(
-                        "end",
-                        f"✗ {row['display']} 전송 실패\n\n원격 통신 대기 중\n\n"
-                        "매핑이 죽은 것이 아닙니다. 잠시 후 다시 전송하세요.\n"
-                        "재매핑은 필요 없습니다.",
-                    )
                     self.log(f"{row['display']} · 원격 통신 대기 중 (매핑 DOWN 아님): {detail}")
                 else:
-                    self.preview.insert(
-                        "end",
-                        f"✗ {row['display']} 전송 실패\n\n{detail}\n\n"
-                        "작업이 시작되지 않았습니다. 이전 결과는 새 결과가 아닙니다.",
-                    )
                     self.log(f"{row['display']} 전송 실패: {detail}")
                 return
             status, detail, staged = result
             if status == "acked":
-                self.set_status(SEND_STATE_KO[START_ACKNOWLEDGED])
+                self._set_loop_phase(LOOP_WORKING, status=SEND_STATE_KO[START_ACKNOWLEDGED])
                 self.log(f"{row['display']} · {SEND_STATE_KO[START_ACKNOWLEDGED]}")
-                self.msg.delete("1.0", "end")
-                self.preview.delete("1.0", "end")
-                self.preview.insert(
-                    "end",
-                    f"✓ {SEND_STATE_KO[SUBMITTED]} → {SEND_STATE_KO[START_ACKNOWLEDGED]}\n\n"
-                    "새 결과 기다리는 중…",
-                )
+                self._start_follow_preview(row["runtime_key"])
             elif status == "submitted":
-                self.set_status(SEND_STATE_KO[SUBMITTED])
+                self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
                 self.log(f"{row['display']} · {SEND_STATE_KO[SUBMITTED]} (시작 확인 대기)")
-                self.msg.delete("1.0", "end")
-                self.preview.delete("1.0", "end")
-                self.preview.insert(
-                    "end",
-                    f"✓ {SEND_STATE_KO[SUBMITTED]}\n\n"
-                    "Enter 제출 증거는 확인됨. Agent 작업 시작 확인은 아직입니다.\n"
-                    "새 결과 기다리는 중…",
-                )
+                self._start_follow_preview(row["runtime_key"])
             else:
                 self.set_status(SEND_STATE_KO[SEND_FAILED])
-                self.preview.delete("1.0", "end")
-                self.preview.insert(
-                    "end",
-                    f"✗ {SEND_STATE_KO[SEND_FAILED]}\n\n{detail}\n\n"
-                    "Task/결과 상관관계가 갱신되지 않았습니다.\n"
-                    "COPY RESULT는 이전 작업 결과로 표시됩니다.",
-                )
+                self.loop_phase = "READY"
                 self.log(f"{row['display']} · {SEND_STATE_KO[SEND_FAILED]}: {detail}")
+                # Failed after possible commit: do not restore Prompt (avoid duplicate).
+                # Failed before commit: Prompt was never cleared.
 
         self._bg(work, done)
 

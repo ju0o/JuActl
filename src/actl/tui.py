@@ -351,12 +351,16 @@ def _pane_preview(target: str, lines: int = 0) -> str:
     기존 textwrap 재포장은 TUI 레이아웃을 깨뜨려 제거. tmux가 이미 pane
     너비에 맞춰 줄바꿈한 화면을 그대로 보여줌 (tail = 현재 화면).
     """
-    from actl.core.tmux import capture_pane as _cap
+    from actl.core.tmux import REMOTE_SSH_TARGET, capture_pane as _cap, capture_pane_live
 
     if lines <= 0:
         lines = 12
     try:
-        text = _cap(target, history=lines)
+        # Remote Board: bounded one-shot capture so preview never occupies P0 transport.
+        if REMOTE_SSH_TARGET:
+            text = capture_pane_live(target, history=max(lines, 16), timeout=3.0)
+        else:
+            text = _cap(target, history=lines)
     except Exception as exc:
         return f"(미리보기 불가: {exc})"
     rows = text.splitlines()[-lines:]

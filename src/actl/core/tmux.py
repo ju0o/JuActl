@@ -721,6 +721,53 @@ def capture_pane(target: str, history: int = 500, socket_path: str | None = None
     ).stdout
 
 
+def capture_pane_live(
+    target: str,
+    history: int = 16,
+    *,
+    timeout: float = 3.0,
+    socket_path: str | None = None,
+) -> str:
+    """Cheap bounded pane capture for Board live preview.
+
+    Uses a one-shot SSH/tmux invocation (not the exclusive control-mode
+    transport) so Founder preview polling cannot occupy the P0 SEND/COPY slot.
+    """
+    args = [
+        *_tmux_base(socket_path),
+        "capture-pane",
+        "-p",
+        "-J",
+        "-S",
+        f"-{history}",
+        "-t",
+        target,
+    ]
+    if not REMOTE_SSH_TARGET:
+        return capture_pane(target, history=history, socket_path=socket_path)
+    command = _remote_args(args)
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            shell=False,
+            **_no_window(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TmuxError(f"live pane capture timed out after {timeout:.0f}s") from exc
+    except OSError as exc:
+        raise TmuxError(f"live pane capture failed: {exc}") from exc
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        raise TmuxError(detail[-300:] or "live pane capture failed")
+    return proc.stdout
+
+
 def list_panes(socket_path: str | None = None) -> list[PaneInfo]:
     fmt = "#{pane_id}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}\t#{pane_pid}"
     out = _run([*_tmux_base(socket_path), "list-panes", "-a", "-F", fmt]).stdout
