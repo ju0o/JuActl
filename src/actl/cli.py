@@ -310,7 +310,8 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
                 from actl.core.remote import ManagedUnsupported, remote_managed_send
 
                 try:
-                    return remote_managed_send(agent, target, prompt)
+                    delivery = remote_managed_send(agent, target, prompt)
+                    return str(delivery)
                 except ManagedUnsupported:
                     pass
             send_prompt(target, prompt)

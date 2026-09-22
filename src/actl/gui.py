@@ -943,6 +943,22 @@ class Board:
                            source=result.source, confidence=result.confidence,
                            result_class=result_class)
                     return ("empty", result.detail, result_class, corr)
+                # Clipboard write only after classification authorizes NEW_RESULT.
+                from actl.core.send_truth import clipboard_write_allowed
+
+                if not clipboard_write_allowed(result_class):
+                    record(
+                        "copy",
+                        agent=row["agent"],
+                        target=tgt,
+                        ok=False,
+                        source=result.source,
+                        confidence=result.confidence,
+                        chars=len(result.text),
+                        result_class=result_class,
+                        clipboard="skipped",
+                    )
+                    return ("no-clip", result_class, len(result.text), corr, result.text)
                 try:
                     import sys
 
@@ -990,6 +1006,9 @@ class Board:
 
         def done(result) -> None:
             self.set_status("준비")
+            if isinstance(result, Exception):
+                self.log(f"COPY failed: {result}")
+                return
             if result[0] == "ok":
                 from actl.core.state import acknowledge
 
@@ -1000,7 +1019,13 @@ class Board:
                     self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
                     self.preview.delete("1.0", "end")
                     self.preview.insert("end", f"✓ {label}\n\n{result[6][:4000]}")
-                elif result_class == "RESULT_PENDING":
+                else:
+                    self.log(f"{row['display']} · {label} (unexpected ok path)")
+            elif result[0] == "no-clip":
+                result_class = result[1]
+                label = RESULT_CLASS_KO.get(result_class, result_class)
+                text = result[4] if len(result) > 4 else ""
+                if result_class == "RESULT_PENDING":
                     self.log(f"{row['display']} · {label} — 아직 새 결과가 없습니다 (이전 텍스트는 복사하지 않음)")
                     self.preview.delete("1.0", "end")
                     self.preview.insert("end", f"⏳ {label}\n\n전송 후 Agent 결과가 아직 바뀌지 않았습니다.")
@@ -1012,11 +1037,12 @@ class Board:
                         f"⚠ {label}\n\n이 텍스트는 이전 작업의 결과입니다.\n"
                         f"최근 전송이 실패했거나 새 결과가 아직 없습니다.\n\n"
                         f"(참고용 이전 결과 {result[2]}자 — 클립보드에는 넣지 않음)\n\n"
-                        f"{result[6][:2000]}",
+                        f"{text[:2000]}",
                     )
                 else:
-                    acknowledge(row["agent"], result[3])
-                    self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
+                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert("end", f"· {label}\n\n클립보드를 변경하지 않았습니다.")
             elif result[0] == "empty":
                 label = RESULT_CLASS_KO.get(result[2], result[2])
                 self.log(f"응답 없음 · {label} ({result[1] or '비어 있음'})")
@@ -1516,21 +1542,66 @@ class Board:
                 except Exception:
                     pass
                 # Preserve Stable remote managed-send semantics when available.
+                # SUBMITTED commits at authoritative managed send response — not after cleanup.
                 if is_remote():
                     try:
-                        managed_target = remote_managed_send(row["agent"], row["target"], text)
-                        evidence = {
-                            "path": "managed",
-                            "managedTarget": managed_target,
-                            "disposition": "TRANSPORT_SENT",
-                        }
-                        set_send_state(
+                        from actl.core.remote import ManagedSendDelivery
+
+                        committed = threading.Event()
+
+                        def on_committed(delivery: ManagedSendDelivery) -> None:
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                SUBMITTED,
+                                evidence=dict(delivery.evidence),
+                            )
+                            committed.set()
+
+                            def mark_submitted():
+                                self.set_status(SEND_STATE_KO[SUBMITTED])
+
+                            try:
+                                self.root.after(0, mark_submitted)
+                            except Exception:
+                                pass
+
+                        delivery = remote_managed_send(
                             row["agent"],
                             row["target"],
-                            SUBMITTED,
-                            evidence=evidence,
+                            text,
+                            on_committed=on_committed,
+                            auto_cleanup=False,
                         )
-                        return _ack_from_activity(evidence)
+                        if not committed.is_set():
+                            # Defensive: commit callback is the contract; ensure state.
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                SUBMITTED,
+                                evidence=dict(delivery.evidence),
+                            )
+                        # Post-send release/reconcile is bounded cleanup off the P0 path.
+                        def _cleanup_lease() -> None:
+                            ok = delivery.cleanup()
+                            if not ok and delivery.cleanup_error:
+                                from actl.core.audit import record
+
+                                record(
+                                    "managed_cleanup",
+                                    agent=row["agent"],
+                                    target=row["target"],
+                                    ok=False,
+                                    error=delivery.cleanup_error[:300],
+                                    command_id=delivery.command_id,
+                                )
+
+                        threading.Thread(
+                            target=_cleanup_lease,
+                            name="actl-managed-cleanup",
+                            daemon=True,
+                        ).start()
+                        return _ack_from_activity(dict(delivery.evidence))
                     except ManagedUnsupported:
                         pass
                 # Fallback / local: staged paste+Enter evidence (V2 send truth).

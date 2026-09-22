@@ -58,6 +58,12 @@ RESULT_CLASS_KO = {
     RESULT_PENDING: "새 결과 기다리는 중",
 }
 
+
+def clipboard_write_allowed(result_class: str) -> bool:
+    """Clipboard mutation is authorized only for NEW_RESULT."""
+    return result_class == NEW_RESULT
+
+
 TRANSPORT_STATE_KO = {
     "UP": "정상",
     "WORKING": "작업 중",
@@ -191,6 +197,10 @@ def classify_result(
         if not current_hash:
             corr.result_class = NO_RESULT
             return NO_RESULT, SendCorrelation(**corr.__dict__)
+        # Already observed/copied as NEW for this send — duplicate COPY is not NEW.
+        if corr.result_hash_after is not None and current_hash == corr.result_hash_after:
+            corr.result_class = STALE_RESULT
+            return STALE_RESULT, SendCorrelation(**corr.__dict__)
         if corr.previous_result_hash and current_hash == corr.previous_result_hash:
             corr.result_class = RESULT_PENDING
             return RESULT_PENDING, SendCorrelation(**corr.__dict__)
