@@ -317,6 +317,118 @@ def test_remote_transport_timeout_invalidates_owned_process(monkeypatch):
     assert transport.state == "DEGRADED"
 
 
+def test_remote_transport_recovers_after_eof_or_timeout_backoff(monkeypatch):
+    import threading
+
+    class Pipe:
+        def __init__(self, rows=(), *, eof_on_write=False):
+            self.rows = list(rows)
+            self.eof_on_write = eof_on_write
+            self.closed = False
+            self.wrote = threading.Event()
+
+        def write(self, value):
+            if self.eof_on_write:
+                self.wrote.set()
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            while not self.rows:
+                if self.closed or (self.eof_on_write and self.wrote.is_set()):
+                    return ""
+                self.wrote.wait(0.01)
+            return self.rows.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        def __init__(self, mode, index):
+            startup = ["%begin 1 0 0\n", "%end 1 0 0\n"]
+            self.stdout = Pipe(startup + ([""] if mode == "eof" and index == 1 else []))
+            self.stdin = Pipe()
+            self.returncode = None
+            self.killed = False
+            self.index = index
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            self.stdout.close()
+            return 0
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+            self.stdout.close()
+
+    for mode in ("eof", "timeout"):
+        now = [0.0]
+        processes = []
+
+        def fake_popen(*args, **kwargs):
+            process = Process(mode, 2)
+            process.command = args[0]
+            if process.index == 2:
+                def respond(_value):
+                    process.stdout.rows.extend([
+                        "%begin 1 1 1\n", "recovered\n", "%end 1 1 1\n",
+                    ])
+                process.stdin.write = respond
+            processes.append(process)
+            return process
+
+        if mode == "timeout":
+            clock = iter((11.0, 22.0, 22.0))
+            monkeypatch.setattr(tmux.time, "monotonic", lambda: next(clock, now[0]))
+        else:
+            monkeypatch.setattr(tmux.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(
+            tmux.subprocess,
+            "run",
+            lambda *args, **kwargs: type(
+                "Result", (), {"returncode": 0, "stdout": "$0\tmain\t1\n"}
+            )(),
+        )
+        monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
+        transport = tmux.RemoteTransport("asus")
+        try:
+            first = Process(mode, 1)
+            first.command = ["ssh", "asus", "tmux", "-C", "attach-session"]
+            processes.append(first)
+            transport._process = first
+            if mode == "eof":
+                transport._read_loop()
+            else:
+                try:
+                    transport._execute_tmux_exclusive(["tmux", "list-panes"])
+                except tmux.TmuxError:
+                    pass
+                else:
+                    raise AssertionError("timeout must invalidate the first process")
+            assert first.killed is True
+
+            now[0] = 21.5 if mode == "timeout" else 0.5
+            try:
+                transport._execute_tmux_exclusive(["tmux", "list-panes"])
+            except tmux.TmuxError as exc:
+                assert "backoff active" in str(exc)
+            else:
+                raise AssertionError("reconnect must wait for backoff")
+
+            now[0] = 23.0 if mode == "timeout" else 1.0
+            result = transport._execute_tmux_exclusive(["tmux", "list-panes"])
+            assert result.stdout == "recovered\n"
+            assert len(processes) == 2
+            assert all("new-session" not in process.command for process in processes)
+        finally:
+            transport.close(aggressive=True)
+
+
 def test_socket_path_passed_as_dash_s(monkeypatch):
     calls = []
 
