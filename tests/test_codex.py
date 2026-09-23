@@ -270,6 +270,33 @@ def test_managed_refuses_adoption_when_fd_closed(monkeypatch, tmp_path):
     assert "adoption" in managed.detail.lower() or "refuses" in managed.detail.lower() or "No exact" in managed.detail
 
 
+def test_managed_dynamic_panes_recreated_concurrent_and_stale_rollouts(monkeypatch, tmp_path):
+    cwd = tmp_path / "JuTell"
+    cwd.mkdir()
+    stale = _rollout(tmp_path / "sessions" / "rollout-stale.jsonl", "stale", cwd, [_agent("STALE")])
+    current = _rollout(tmp_path / "sessions" / "rollout-current.jsonl", "current", cwd, [_agent("CURRENT")])
+    recreated = _rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", "recreated", cwd, [_agent("RECREATED")])
+
+    monkeypatch.setattr(codex, "_codex_process", lambda _pid, _target: _pid)
+    monkeypatch.setattr(codex, "_open_rollouts", lambda pid, _root: [current] if pid == 71 else [recreated])
+    monkeypatch.setattr(codex, "_open_thread_locks", lambda pid, _root: ["current"] if pid == 71 else ["recreated"])
+
+    first = codex.resolve_codex_managed(tmp_path, "%17", 71)
+    assert first.code == "OK" and first.session_id == "current"
+    assert first.rollout_path == current and stale not in [first.rollout_path]
+
+    # The pane is recreated and the process/session identity changes; stale data
+    # remains present but cannot be selected by an unrelated live process.
+    second = codex.resolve_codex_managed(tmp_path, "%23", 72)
+    assert second.code == "OK" and second.session_id == "recreated"
+    assert second.rollout_path == recreated
+
+    concurrent = _rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", "concurrent", cwd, [_agent("OTHER")])
+    monkeypatch.setattr(codex, "_open_rollouts", lambda *_: [current, concurrent])
+    ambiguous = codex.resolve_codex_managed(tmp_path, "%31", 73)
+    assert ambiguous.code == "AMBIGUOUS_SESSION"
+
+
 def test_managed_jsonl_incomplete_tail_and_malformed_and_inode(tmp_path):
     path = tmp_path / "rollout.jsonl"
     path.write_text('{"type":"ok"}\n{"type":"partial"', encoding="utf-8")

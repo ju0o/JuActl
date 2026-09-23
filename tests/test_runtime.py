@@ -693,9 +693,9 @@ def _permit(command_id: str, runtime_id: str, fence: str, *, confirmed_at=None, 
     }
 
 
-def _acquire_managed(monkeypatch, tmp_path, runtime_id="rt1_send"):
+def _acquire_managed(monkeypatch, tmp_path, runtime_id="rt1_send", pane_id="%1"):
     _patch_journal_root(monkeypatch, tmp_path)
-    ctx = {"agentKind": "codex", "workspaceRoot": str(tmp_path / "ws"), "paneId": "%1"}
+    ctx = {"agentKind": "codex", "workspaceRoot": str(tmp_path / "ws"), "paneId": pane_id}
     acquired, code = runtime.handle_runtime_request(
         _acquire_req(tmp_path, runtime_id=runtime_id, expectedContext=ctx)
     )
@@ -1066,8 +1066,11 @@ def _task_complete(text: str, turn_id: str):
     }
 
 
-def _prepare_sent_command(monkeypatch, tmp_path, *, command_id: str, prompt: str, rollout: Path, runtime_id="rt1_collect"):
-    grant, ctx = _acquire_managed(monkeypatch, tmp_path, runtime_id)
+def _prepare_sent_command(
+    monkeypatch, tmp_path, *, command_id: str, prompt: str, rollout: Path,
+    runtime_id="rt1_collect", pane_id="%1"
+):
+    grant, ctx = _acquire_managed(monkeypatch, tmp_path, runtime_id, pane_id=pane_id)
     monkeypatch.setattr(runtime, "transport_send_prompt", _ok_send_transport)
     cursor = _cursor_for(rollout, 0)
     req = _send_req(
@@ -1175,6 +1178,66 @@ def test_collect_duplicate_user_turns_ambiguous(monkeypatch, tmp_path):
     })
     assert code == 2
     assert resp["error"]["code"] == "AMBIGUOUS_SESSION"
+
+
+def test_collect_dynamic_pane_recreated_concurrent_and_stale_rollouts(monkeypatch, tmp_path):
+    def collect(grant, ctx, command_id):
+        response, code = runtime.handle_runtime_request({
+            "contractVersion": 1,
+            "requestId": str(uuid.uuid4()),
+            "operation": "collect",
+            "commandId": command_id,
+            "runtimeId": grant["runtimeId"],
+            "expectedContext": ctx,
+            "serverScope": _scope(tmp_path),
+        })
+        assert code == 0 and response["ok"] is True, response
+        return response["data"]["final"]
+
+    # A stale rollout with the same workspace must not affect the selected path.
+    stale = _write_rollout(tmp_path / "sessions" / "rollout-stale.jsonl", [
+        {"type": "session_meta", "payload": {"session_id": "stale", "id": "stale"}},
+        _user_msg("stale-prompt", "stale-turn", "stale"),
+        _final_msg("STALE", "stale-turn"),
+        _task_complete("STALE", "stale-turn"),
+    ])
+    prompt_a = "[ACTL_MANAGED_V1 commandId=cmd-dyn-a]\nalpha"
+    current = _write_rollout(tmp_path / "sessions" / "rollout-current.jsonl", [
+        {"type": "session_meta", "payload": {"session_id": "current", "id": "current"}},
+        _user_msg(prompt_a, "turn-a", "current"),
+        _final_msg("CURRENT", "turn-a"),
+        _task_complete("CURRENT", "turn-a"),
+    ])
+    grant_a, ctx_a, _ = _prepare_sent_command(
+        monkeypatch, tmp_path, command_id="cmd-dyn-a", prompt=prompt_a, rollout=current,
+        runtime_id="rt1_dyn_a", pane_id="%17")
+    assert collect(grant_a, ctx_a, "cmd-dyn-a")["rawFinalText"] == "CURRENT"
+    assert stale != current
+
+    # Recreated pane/session and two concurrent rollouts remain isolated by path.
+    prompt_b = "[ACTL_MANAGED_V1 commandId=cmd-dyn-b]\nbeta"
+    recreated = _write_rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", [
+        {"type": "session_meta", "payload": {"session_id": "recreated", "id": "recreated"}},
+        _user_msg(prompt_b, "turn-b", "recreated"),
+        _final_msg("RECREATED", "turn-b"),
+        _task_complete("RECREATED", "turn-b"),
+    ])
+    grant_b, ctx_b, _ = _prepare_sent_command(
+        monkeypatch, tmp_path, command_id="cmd-dyn-b", prompt=prompt_b, rollout=recreated,
+        runtime_id="rt1_dyn_b", pane_id="%23")
+    assert collect(grant_b, ctx_b, "cmd-dyn-b")["rawFinalText"] == "RECREATED"
+
+    prompt_c = "[ACTL_MANAGED_V1 commandId=cmd-dyn-c]\ngamma"
+    concurrent = _write_rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", [
+        {"type": "session_meta", "payload": {"session_id": "concurrent", "id": "concurrent"}},
+        _user_msg(prompt_c, "turn-c", "concurrent"),
+        _final_msg("CONCURRENT", "turn-c"),
+        _task_complete("CONCURRENT", "turn-c"),
+    ])
+    grant_c, ctx_c, _ = _prepare_sent_command(
+        monkeypatch, tmp_path, command_id="cmd-dyn-c", prompt=prompt_c, rollout=concurrent,
+        runtime_id="rt1_dyn_c", pane_id="%31")
+    assert collect(grant_c, ctx_c, "cmd-dyn-c")["rawFinalText"] == "CONCURRENT"
 
 
 def test_collect_non_codex_unsupported(monkeypatch, tmp_path):
