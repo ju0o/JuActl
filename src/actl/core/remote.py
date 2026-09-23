@@ -123,10 +123,25 @@ def _runtime_request(target: str, operation: str, body: dict, timeout: float = 3
     except (json.JSONDecodeError, TypeError) as exc:
         detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
         raise RuntimeError(f"managed runtime invalid response: {detail[-300:]}") from exc
-    if proc.returncode or not response.get("ok"):
-        error = response.get("error") or {}
-        raise RuntimeError(f"{error.get('code', 'REMOTE_RUNTIME')}: {error.get('detail', 'request failed')}")
+    if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
+        raise RuntimeError("managed runtime invalid response: malformed envelope")
+    if proc.returncode or not response["ok"]:
+        error = response.get("error")
+        if not isinstance(error, dict):
+            raise RuntimeError("managed runtime invalid response: malformed error")
+        code = error.get("code")
+        detail = error.get("detail")
+        if not isinstance(code, str) or not code or not isinstance(detail, str) or not detail:
+            raise RuntimeError("managed runtime invalid response: malformed error")
+        raise RuntimeError(f"{code}: {detail}")
     return response
+
+
+def _runtime_data(response: dict, operation: str) -> dict:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError(f"managed runtime invalid response: {operation} data is not an object")
+    return data
 
 
 def remote_managed_send(
@@ -149,22 +164,27 @@ def remote_managed_send(
 
     if not REMOTE_SSH_TARGET:
         raise ManagedUnsupported("managed remote send requires an SSH target")
-    socket_probe = subprocess.run(
-        ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET,
-         "tmux display-message -p '#{socket_path}'"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=10, check=False, **_no_window(),
-    )
+    try:
+        socket_probe = subprocess.run(
+            ["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET,
+             "tmux display-message -p '#{socket_path}'"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, check=False, **_no_window(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("MANAGED_SOCKET_PROBE_TIMEOUT: retry discovery") from exc
+    except Exception as exc:
+        raise RuntimeError("MANAGED_SOCKET_PROBE_FAILED: retry discovery") from exc
     socket_path = socket_probe.stdout.strip()
     if socket_probe.returncode or not socket_path.startswith("/"):
-        raise RuntimeError("managed runtime socket path unavailable")
+        raise RuntimeError("MANAGED_SOCKET_PROBE_FAILED: retry discovery")
     discovered = _runtime_request(
         REMOTE_SSH_TARGET,
         "discover",
         {"socketPath": socket_path},
         min(timeout, MANAGED_DISCOVERY_TIMEOUT),
     )
-    candidates = [candidate for candidate in discovered.get("data", {}).get("candidates", [])
+    candidates = [candidate for candidate in _runtime_data(discovered, "discover").get("candidates", [])
                   if candidate.get("agentKind") == agent
                   and (candidate.get("identityEvidence") or {}).get("paneId") == target_pane]
     if len(candidates) != 1:
@@ -183,7 +203,7 @@ def remote_managed_send(
         **scope, "action": "acquire", "runtimeId": candidate["runtimeId"],
         "mode": "MANAGED", "ownerRef": "actl-gui", "expectedContext": expected,
     }, timeout)
-    grant = grant_envelope.get("data") or {}
+    grant = _runtime_data(grant_envelope, "reserve")
     # Permit freshness must use the same ASUS/server observation as the snapshot.
     # MainPC wall clock is not an authority for inputPermit.confirmedAt.
     observed_at = grant_envelope.get("observedAt")
@@ -211,7 +231,7 @@ def remote_managed_send(
                 "snapshotHash": snapshot_hash,
             },
         }, timeout)
-        target = str(response.get("data", {}).get("command", {}).get("target") or target_pane)
+        target = str(_runtime_data(response, "send").get("command", {}).get("target") or target_pane)
         delivery = ManagedSendDelivery(
             target=target,
             command_id=command_id,

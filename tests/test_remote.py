@@ -1,4 +1,5 @@
 import subprocess
+import json
 
 from actl.core import remote, tmux
 
@@ -38,3 +39,48 @@ def test_managed_discovery_is_bounded_and_retryable(monkeypatch):
     else:
         raise AssertionError("managed discovery must fail closed")
     assert calls == ["socket", 10.0]
+
+
+def test_managed_socket_probe_failures_are_normalized(monkeypatch):
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+
+    def fail(*args, **kwargs):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(remote.subprocess, "run", fail)
+    try:
+        remote.remote_managed_send("codex", "%0", "prompt")
+    except RuntimeError as exc:
+        assert str(exc) == "MANAGED_SOCKET_PROBE_FAILED: retry discovery"
+    else:
+        raise AssertionError("socket probe failure must fail closed")
+
+
+def test_malformed_runtime_reply_is_normalized(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps([])
+        stderr = ""
+
+    monkeypatch.setattr(remote.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        remote._runtime_request("asus", "discover", {})
+    except RuntimeError as exc:
+        assert str(exc) == "managed runtime invalid response: malformed envelope"
+    else:
+        raise AssertionError("malformed runtime envelope must fail closed")
+
+
+def test_malformed_runtime_data_is_normalized(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = json.dumps({"ok": True, "data": []})
+        stderr = ""
+
+    monkeypatch.setattr(remote.subprocess, "run", lambda *args, **kwargs: Result())
+    try:
+        remote._runtime_data(remote._runtime_request("asus", "discover", {}), "discover")
+    except RuntimeError as exc:
+        assert str(exc) == "managed runtime invalid response: discover data is not an object"
+    else:
+        raise AssertionError("malformed runtime data must fail closed")
