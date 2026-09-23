@@ -75,6 +75,14 @@ def test_cursor_detection(monkeypatch):
     assert _detect(monkeypatch, [ProcessInfo(11, 10, "/x/cursor-agent/index.js")]).agent == "cursor"
 
 
+def test_batched_pane_pid_skips_remote_field_read(monkeypatch):
+    pane = PaneInfo("%3", "work:0.3", "bash", "/project", "", pane_pid=10)
+    monkeypatch.setattr(discovery, "pane_field", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(discovery, "pane_processes", lambda _: [ProcessInfo(11, 10, "/x/cursor-agent/index.js")])
+    result = detect_pane(pane)
+    assert (result.agent, result.confidence) == ("cursor", "exact")
+
+
 def test_unknown_pane_is_ignored(monkeypatch):
     result = _detect(monkeypatch, [ProcessInfo(11, 10, "/bin/bash")])
     assert result.agent is None and result.confidence == "unknown"

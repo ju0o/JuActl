@@ -1,4 +1,5 @@
 from actl.core import validation
+from actl.core.models import PaneInfo
 from actl.core.validation import ProcessInfo
 
 
@@ -11,6 +12,15 @@ def test_configured_cursor_target_with_cursor_process_is_up(monkeypatch):
     monkeypatch.setattr(validation, "pane_field", _pane_fields)
     monkeypatch.setattr(validation, "pane_processes", lambda _: [ProcessInfo(11, 10, "/x/cursor-agent/index.js")])
     assert validation.validate_target("cursor", "0:0.3").state == "UP"
+
+
+def test_batched_pane_metadata_skips_remote_field_reads(monkeypatch):
+    pane = PaneInfo("%1", "0:0.3", "cursor", "/project", "", pane_pid=10)
+    monkeypatch.setattr(validation, "target_exists", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(validation, "pane_field", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(validation, "pane_processes", lambda _: [ProcessInfo(11, 10, "/x/cursor-agent/index.js")])
+    result = validation.validate_target("cursor", "0:0.3", pane=pane)
+    assert (result.state, result.pane_id, result.pane_pid) == ("UP", "%1", 10)
 
 
 def test_configured_codex_target_with_cursor_process_is_mismatch(monkeypatch):

@@ -33,6 +33,15 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
+def _validate_live_pane(agent: str, target: str, pane) -> object:
+    try:
+        return validate_target(agent, target, pane=pane)
+    except TypeError as exc:
+        if "unexpected keyword argument 'pane'" not in str(exc):
+            raise
+        return validate_target(agent, target)
+
+
 def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrate: bool = True) -> list[dict]:
     """Project each verified live detection as its own runtime row."""
     from actl.core.discovery import discover as _disc
@@ -122,7 +131,7 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
             pane_path = det.pane.current_path
             # Validate the selected live pane itself. Another pane using the
             # same Agent family does not make this instance ambiguous.
-            validation = validate_target(name, target)
+            validation = _validate_live_pane(name, target, det.pane)
             state = validation.state
             control_ready = validation.valid
             if state == "UP":
