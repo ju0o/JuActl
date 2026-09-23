@@ -201,6 +201,22 @@ class RemoteTransport:
         pending = self._responses
         if pending is not None:
             pending.put(TmuxError("remote transport closed unexpectedly"))
+        self._invalidate_process(process)
+
+    def _invalidate_process(self, process: subprocess.Popen[str] | None = None) -> None:
+        """Drop and terminate only the currently owned control process."""
+        if process is not None and self._process is not process:
+            return
+        owned, self._process = self._process, None
+        self.state = "DEGRADED"
+        self._retry_at = time.monotonic() + 1.0
+        if owned is None or owned.poll() is not None:
+            return
+        try:
+            owned.kill()
+            owned.wait(timeout=0.5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def executeTmux(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
         """Serialize through the per-target priority scheduler, then the lock.
@@ -285,7 +301,7 @@ class RemoteTransport:
                     raise RemoteOpCancelled("remote transport preempted during exclusive wait")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self.state = "DEGRADED"
+                    self._invalidate_process()
                     raise TmuxError("remote tmux command timed out after 10s")
                 try:
                     response = response_queue.get(timeout=min(0.05, remaining))

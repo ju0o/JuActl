@@ -204,6 +204,75 @@ def test_remote_transport_rejects_invalid_or_empty_session_identity(monkeypatch)
     assert spawned == []
 
 
+def test_remote_transport_reader_eof_invalidates_owned_process():
+    class Pipe:
+        def readline(self):
+            return ""
+
+    class Process:
+        stdout = Pipe()
+        returncode = None
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    transport = tmux.RemoteTransport("asus")
+    process = Process()
+    transport._process = process
+    transport._read_loop()
+    assert transport._process is None
+    assert process.killed is True
+    assert transport.state == "DEGRADED"
+
+
+def test_remote_transport_timeout_invalidates_owned_process(monkeypatch):
+    class Pipe:
+        def write(self, value):
+            pass
+
+        def flush(self):
+            pass
+
+    class Process:
+        stdin = Pipe()
+        returncode = None
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    transport = tmux.RemoteTransport("asus")
+    process = Process()
+    transport._process = process
+    transport.connect = lambda: None
+    clock = iter((0.0, 11.0, 11.0))
+    monkeypatch.setattr(tmux.time, "monotonic", lambda: next(clock))
+    try:
+        transport._execute_tmux_exclusive(["tmux", "list-panes"])
+    except tmux.TmuxError as exc:
+        assert "timed out after 10s" in str(exc)
+    else:
+        raise AssertionError("timed out remote tmux command must fail")
+    assert transport._process is None
+    assert process.killed is True
+    assert transport.state == "DEGRADED"
+
+
 def test_socket_path_passed_as_dash_s(monkeypatch):
     calls = []
 
