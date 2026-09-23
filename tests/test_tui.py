@@ -3,6 +3,10 @@ import io
 from actl import tui
 from actl.core.activity import classify_activity
 from actl.core import discovery
+from actl.core import validation
+from actl.core.discovery import Detection
+from actl.core.models import PaneInfo
+from actl.core.validation import ProcessInfo
 
 
 def test_activity_classification_fails_closed_on_missing_or_unknown_tail():
@@ -60,3 +64,16 @@ def test_event_scope_separates_topology_and_pane_local_events():
 
 def test_event_scope_ignores_non_refresh_notifications():
     assert tui._event_scope(["%client-session-changed $1", "plain output"]) == (False, set())
+
+
+def test_rows_passes_batched_pane_metadata_to_real_validator(monkeypatch):
+    pane = PaneInfo("%1", "0:0.0", "codex", "/project", "", pane_pid=10)
+    detection = Detection(pane, "codex", "high", "pid 11: codex")
+    monkeypatch.setattr(validation, "target_exists", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(validation, "pane_field", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(validation, "pane_processes", lambda _: [ProcessInfo(11, 10, "/bin/codex")])
+
+    rows = tui._rows({}, detections=[detection], hydrate=False)
+
+    assert rows[0]["state"] == "UP"
+    assert rows[0]["control_ready"] is True
