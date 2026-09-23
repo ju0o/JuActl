@@ -50,6 +50,26 @@ STATUS_GLYPH = {
     "DEGRADED": "◈", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○",
     "DETECTED": "◉", "UNKNOWN": "·",
 }
+PANE_BOARD_LABELS_KEY = "pane_board_labels"
+
+
+def _pane_board_label(config: dict, pane_id: str, fallback: str) -> str:
+    labels = config.get(PANE_BOARD_LABELS_KEY, {})
+    label = labels.get(pane_id) if isinstance(labels, dict) else None
+    return str(label) if label else fallback
+
+
+def _save_pane_board_label(config: dict, pane_id: str, label: str) -> None:
+    if not label or "\n" in label or "\r" in label:
+        raise ValueError("pane 별칭은 한 줄의 비어 있지 않은 이름이어야 합니다")
+    label = label.strip()
+    if not label:
+        raise ValueError("pane 별칭은 한 줄의 비어 있지 않은 이름이어야 합니다")
+    labels = config.setdefault(PANE_BOARD_LABELS_KEY, {})
+    if not isinstance(labels, dict):
+        labels = config[PANE_BOARD_LABELS_KEY] = {}
+    labels[pane_id] = label
+    save_config(config)
 
 
 def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
@@ -1297,7 +1317,7 @@ class Board:
                         detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
                         mapped = mapped_by_pane.get(pane.pane_id, "미매핑")
                         pid = tree.insert(
-                            wid, "end", text=f"{pane.pane_id}  {pane.title or '(untitled)'}",
+                            wid, "end", text=f"{pane.pane_id}  {_pane_board_label(self.config, pane.pane_id, pane.title or '(untitled)')}",
                             values=("pane", pane.current_command, pane.current_path, detected, mapped),
                         )
                         pane_by_item[pid] = (pane, det)
@@ -1330,8 +1350,19 @@ class Board:
             item, kind = picked
             if kind == "pane":
                 pane, _ = pane_by_item[item]
-                target, initial, rename = node_targets[item], pane.title, tmux.rename_pane
-                prompt = f"{pane.pane_id} pane 이름"
+                initial = _pane_board_label(self.config, pane.pane_id, pane.title or "(untitled)")
+                name = simpledialog.askstring("pane 별칭 변경", f"{pane.pane_id} 표시 이름", initialvalue=initial, parent=top)
+                if name is None:
+                    return
+                try:
+                    _save_pane_board_label(self.config, pane.pane_id, name)
+                except ValueError as exc:
+                    messagebox.showerror("pane 별칭 실패", str(exc), parent=top)
+                    return
+                top.destroy()
+                self.board_opened = False
+                self.refresh()
+                return
             elif kind == "window":
                 target = node_targets[item]
                 initial, rename, prompt = tree.item(item, "text"), tmux.rename_window, "window 이름"
