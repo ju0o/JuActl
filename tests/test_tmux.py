@@ -141,7 +141,9 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$0\t0\t5\n"})(),
+        lambda *args, **kwargs: type(
+            "Result", (), {"returncode": 0, "stdout": "$0\t123\t5\n$1\tmain\t5\n"}
+        )(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
     tmux.set_remote_ssh("asus")
@@ -150,7 +152,7 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
         assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
         assert len(processes) == 1
         assert "attach-session" in " ".join(processes[0].command)
-        assert "$0" in " ".join(processes[0].command)
+        assert "$1" in " ".join(processes[0].command)
         assert "new-session" not in processes[0].command
         assert processes[0].stdin.writes == [
             '"list-panes" "-F" "#{pane_id}"\n',
@@ -184,7 +186,7 @@ def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
 def test_remote_transport_rejects_invalid_or_empty_session_identity(monkeypatch):
     spawned = []
     monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
-    for stdout in ("", "0\t0\t1\n", "$\t0\t1\n", "$abc\t0\t1\n", "$0\t\t1\n", "$0\t0\t0\n"):
+    for stdout in ("", "0\t0\t1\n", "$\t0\t1\n", "$abc\t0\t1\n", "$0\t\t1\n", "$0\t0\t0\n", "$0\t123\t1\n"):
         monkeypatch.setattr(
             tmux.subprocess,
             "run",

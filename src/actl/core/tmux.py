@@ -109,7 +109,7 @@ class RemoteTransport:
             name, _, windows = rest.partition("\t")
             try:
                 valid_session_id = re.fullmatch(r"\$\d+", candidate.strip())
-                if valid_session_id and name.strip() and int(windows) > 0:
+                if valid_session_id and name.strip() and not re.fullmatch(r"\d+", name.strip()) and int(windows) > 0:
                     session_id = candidate.strip()
                     break
             except ValueError:
