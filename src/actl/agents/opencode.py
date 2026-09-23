@@ -479,3 +479,4 @@ def create_session(cwd: str | Path, *, timeout: float = 30.0) -> str:
             proc.terminate()
         except OSError:
             pass
+        proc.wait()
