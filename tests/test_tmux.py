@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 from actl.core import tmux
 
@@ -231,6 +232,47 @@ def test_remote_transport_reader_eof_invalidates_owned_process():
     assert transport._process is None
     assert process.killed is True
     assert transport.state == "DEGRADED"
+
+
+def test_remote_transport_error_frame_fails_only_its_request():
+    import queue
+
+    class Pipe:
+        def __init__(self, rows):
+            self.rows = iter(rows)
+
+        def readline(self):
+            return next(self.rows, "")
+
+    class Process:
+        def __init__(self):
+            self.stdout = Pipe([
+                "%begin 1 1 1\n", "request failed\n", "%error 1 1 1\n",
+                "%begin 1 2 1\n", "next response\n", "%end 1 2 1\n",
+            ])
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    transport = tmux.RemoteTransport("asus")
+    transport._process = Process()
+    transport._responses = queue.Queue()
+    transport._read_loop()
+
+    first = transport._responses.get_nowait()
+    second = transport._responses.get_nowait()
+    assert isinstance(first, tmux.TmuxError)
+    assert str(first) == "request failed"
+    assert isinstance(second, subprocess.CompletedProcess)
+    assert second.stdout == "next response\n"
 
 
 def test_remote_transport_timeout_invalidates_owned_process(monkeypatch):

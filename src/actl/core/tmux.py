@@ -172,19 +172,21 @@ class RemoteTransport:
         if process is None or process.stdout is None:
             return
         frame: list[str] | None = None
-        failed = False
         for raw in iter(process.stdout.readline, ""):
             row = raw.rstrip("\r\n")
             if row.startswith("%begin "):
                 frame = []
-                failed = False
                 continue
             if frame is not None and row.startswith("%error "):
-                failed = True
+                output = "\n".join(frame) + ("\n" if frame else "")
+                pending = self._responses
+                if pending is not None:
+                    pending.put(TmuxError(output.strip() or "remote tmux command failed"))
+                frame = None
                 continue
             if frame is not None and row.startswith("%end "):
                 output = "\n".join(frame) + ("\n" if frame else "")
-                response = TmuxError(output.strip() or "remote tmux command failed") if failed else subprocess.CompletedProcess(
+                response = subprocess.CompletedProcess(
                     ["ssh", self.target, "tmux", "-C"], 0, output, ""
                 )
                 pending = self._responses
