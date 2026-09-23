@@ -68,17 +68,17 @@ if [[ -n $ssh_host ]]; then
     remote mkdir -p "$remote_home/.commandcode/e2e" "$remote_config_dir"
     base64 <"$root/tests/fixtures/stub_agent.py" | remote "base64 -d > '$remote_stub'"
     remote "printf '%s\\n' '{\"clipboard_backend\":\"auto\",\"agents\":{\"commandcode\":{\"target\":\"$session:0.0\"}}}' > '$remote_config_dir/config.json'"
-    remote tmux new-session -d -s "$session" -c "$remote_home" -- bash -lc "exec -a commandcode python3 '$remote_stub' --session-file '$remote_session_file'"
+    remote "tmux new-session -d -s '$session' -c '$remote_home' -- bash -lc 'exec -a commandcode python3 \"$remote_stub\" --session-file \"$remote_session_file\"'"
     created=1
     remote "for i in $(seq 1 100); do tmux capture-pane -p -t '$session:0.0' 2>/dev/null | grep -q 'STUB_PROMPT>' && exit 0; sleep .1; done; exit 1"
-    send_output=$(printf '%s\n' "$probe" | remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl send commandcode")
+    send_output=$(printf '%s' "$probe" | remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl send commandcode")
     result=$(remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl copy commandcode --print")
 else
     session_file="$run_home/.commandcode/e2e/session.jsonl"
     tmux new-session -d -s "$session" -c "$root" -- bash -lc "exec -a commandcode python3 '$root/tests/fixtures/stub_agent.py' --session-file '$session_file'"
     created=1
     wait_for_prompt "$session:0.0"
-    send_output=$(printf '%s\n' "$probe" | ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" send commandcode)
+    send_output=$(printf '%s' "$probe" | ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" send commandcode)
     result=$(ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" copy commandcode --print)
 fi
 
