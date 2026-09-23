@@ -1225,9 +1225,10 @@ def test_collect_dynamic_pane_recreated_concurrent_and_stale_rollouts(monkeypatc
     pane_pids = {"%17": 71, "%23": 72, "%31": 73}
     locks = tmp_path / "thread-writer-locks"
     locks.mkdir()
-    for session_id in ("current", "recreated", "concurrent"):
+    for session_id in ("stale", "current", "recreated", "concurrent"):
         (locks / f"{session_id}.lock").touch()
     owned = {
+        70: [stale, locks / "stale.lock"],
         71: [current, locks / "current.lock"],
         72: [recreated, locks / "recreated.lock"],
         73: [concurrent, locks / "concurrent.lock"],
@@ -1249,7 +1250,8 @@ def test_collect_dynamic_pane_recreated_concurrent_and_stale_rollouts(monkeypatc
 
     grant_a, ctx_a = prepare("cmd-dyn-a", prompt_a, "rt1_dyn_a", "%17")
     assert collect(grant_a, ctx_a, "cmd-dyn-a")["rawFinalText"] == "CURRENT"
-    assert Path(stale).read_text(encoding="utf-8") != Path(current).read_text(encoding="utf-8")
+    assert "STALE" in Path(stale).read_text(encoding="utf-8")
+    assert "CURRENT" in Path(current).read_text(encoding="utf-8")
 
     prompt_b = "[ACTL_MANAGED_V1 commandId=cmd-dyn-b]\nbeta"
     grant_b, ctx_b = prepare("cmd-dyn-b", prompt_b, "rt1_dyn_b", "%23")

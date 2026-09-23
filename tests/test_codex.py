@@ -293,8 +293,15 @@ def test_managed_dynamic_panes_recreated_concurrent_and_stale_rollouts(monkeypat
     for session_id in ("current", "recreated", "concurrent"):
         (locks / f"{session_id}.lock").touch()
 
-    pane_pids = {"%17": 71, "%23": 72, "%31": 73}
-    owned = {71: [current, locks / "current.lock"], 72: [recreated, locks / "recreated.lock"], 73: [concurrent, locks / "concurrent.lock"]}
+    pane_pids = {"%09": 70, "%17": 71, "%23": 72, "%31": 73}
+    # The filesystem contains a stale rollout and all three live sessions;
+    # only the selected pane's process-owned FD set may choose a rollout.
+    owned = {
+        70: [stale, locks / "stale.lock"],
+        71: [current, locks / "current.lock"],
+        72: [recreated, locks / "recreated.lock"],
+        73: [concurrent, locks / "concurrent.lock"],
+    }
     monkeypatch.setattr(codex, "pane_field", lambda pane, field: str(pane_pids[pane]) if field == "#{pane_pid}" else str(cwd))
     monkeypatch.setattr(codex, "pane_processes", lambda pid: [type("Process", (), {"pid": pid, "args": "/usr/bin/codex"})()])
     monkeypatch.setattr(codex, "_open_paths", lambda pid: owned[pid])
@@ -314,6 +321,7 @@ def test_managed_dynamic_panes_recreated_concurrent_and_stale_rollouts(monkeypat
         assert result.code == "FINAL"
         return result.packet["rawFinalText"]
 
+    assert "STALE" in stale.read_text(encoding="utf-8")
     assert collect("%17", "", "current") == "CURRENT"
     assert collect("%23", "", "recreated") == "RECREATED"
     assert collect("%31", "", "concurrent") == "CONCURRENT"
