@@ -12,7 +12,7 @@ esac
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 config_dir=$(mktemp -d "${TMPDIR:-/tmp}/actl-e2e-config.XXXXXX")
 start_ns=$(date +%s%N)
-session="actl-e2e-$(basename "$config_dir")"
+session="actl-e2e-$(basename "$config_dir" | tr '.' '_')"
 config="$config_dir/config.json"
 run_home="$config_dir/home"
 mkdir -p "$run_home/.commandcode/e2e"

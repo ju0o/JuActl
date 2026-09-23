@@ -98,12 +98,21 @@ def test_cleanup_trap_kills_created_session(tmp_path):
 
 def test_concurrent_runs_use_unique_sessions_with_same_second(tmp_path):
     sessions = tmp_path / "sessions"
+    sessions.mkdir()
     tmux = tmp_path / "tmux"
     tmux.write_text(
         "#!/bin/sh\n"
+        "state=\"$FAKE_TMUX_SESSIONS\"\n"
+        "name() {\n"
+        "  case \"$1\" in\n"
+        "    has-session|kill-session) printf '%s' \"$3\" ;;\n"
+        "    new-session) printf '%s' \"$4\" ;;\n"
+        "  esac | tr '.' '_'\n"
+        "}\n"
         "case \"$1\" in\n"
-        "  has-session) exit 1 ;;\n"
-        "  new-session) echo \"$4\" >> \"$FAKE_TMUX_SESSIONS\"; exit 1 ;;\n"
+        "  has-session) test -e \"$state/$(name \"$@\")\" ;;\n"
+        "  new-session) mkdir \"$state/$(name \"$@\")\" || exit 2; echo \"$(name \"$@\")\" >> \"$state.log\"; exit 1 ;;\n"
+        "  kill-session) rm -f \"$state/$(name \"$@\")\" ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
         encoding="utf-8",
@@ -128,9 +137,10 @@ def test_concurrent_runs_use_unique_sessions_with_same_second(tmp_path):
     results = [run.communicate() for run in runs]
 
     assert all(run.returncode != 0 for run in runs)
-    names = sessions.read_text(encoding="utf-8").splitlines()
+    names = (tmp_path / "sessions.log").read_text(encoding="utf-8").splitlines()
     assert len(names) == 2
     assert len(set(names)) == 2
+    assert all("." not in name for name in names)
 
 
 def test_ssh_reaches_send_and_copy_with_remote_bash(tmp_path):
