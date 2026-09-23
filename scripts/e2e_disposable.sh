@@ -70,7 +70,14 @@ if [[ -n $ssh_host ]]; then
     remote "printf '%s\\n' '{\"clipboard_backend\":\"auto\",\"agents\":{\"commandcode\":{\"target\":\"$session:0.0\"}}}' > '$remote_config_dir/config.json'"
     remote "tmux new-session -d -s '$session' -c '$remote_home' -- bash -lc 'exec -a commandcode python3 \"$remote_stub\" --session-file \"$remote_session_file\"'"
     created=1
-    remote "for i in $(seq 1 100); do tmux capture-pane -p -t '$session:0.0' 2>/dev/null | grep -q 'STUB_PROMPT>' && exit 0; sleep .1; done; exit 1"
+    remote bash -s -- "$session" <<'REMOTE_WAIT'
+session=$1
+for i in $(seq 1 100); do
+    tmux capture-pane -p -t "$session:0.0" 2>/dev/null | grep -q 'STUB_PROMPT>' && exit 0
+    sleep .1
+done
+exit 1
+REMOTE_WAIT
     send_output=$(printf '%s' "$probe" | remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl send commandcode")
     result=$(remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl copy commandcode --print")
 else
