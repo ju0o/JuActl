@@ -144,6 +144,13 @@ def _runtime_data(response: dict, operation: str) -> dict:
     return data
 
 
+def _runtime_candidates(data: dict, operation: str) -> list[dict]:
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list) or any(not isinstance(candidate, dict) for candidate in candidates):
+        raise RuntimeError(f"managed runtime invalid response: {operation} candidates is not an array of objects")
+    return candidates
+
+
 def remote_managed_send(
     agent: str,
     target_pane: str,
@@ -184,15 +191,22 @@ def remote_managed_send(
         {"socketPath": socket_path},
         min(timeout, MANAGED_DISCOVERY_TIMEOUT),
     )
-    candidates = [candidate for candidate in _runtime_data(discovered, "discover").get("candidates", [])
-                  if candidate.get("agentKind") == agent
-                  and (candidate.get("identityEvidence") or {}).get("paneId") == target_pane]
+    candidates = []
+    for candidate in _runtime_candidates(_runtime_data(discovered, "discover"), "discover"):
+        identity = candidate.get("identityEvidence", {})
+        if identity is not None and not isinstance(identity, dict):
+            raise RuntimeError("managed runtime invalid response: discover identityEvidence is not an object")
+        if candidate.get("agentKind") == agent and (identity or {}).get("paneId") == target_pane:
+            candidates.append(candidate)
     if len(candidates) != 1:
         raise RuntimeError("AMBIGUOUS_INSTANCE: selected pane has no unique managed runtime")
     candidate = candidates[0]
     if not candidate.get("issuable") or candidate.get("processState") != "UP":
         raise RuntimeError("STALE: selected managed runtime is not UP")
-    if not (candidate.get("capabilities") or {}).get("managed.send"):
+    capabilities = candidate.get("capabilities", {})
+    if capabilities is not None and not isinstance(capabilities, dict):
+        raise RuntimeError("managed runtime invalid response: discover capabilities is not an object")
+    if not (capabilities or {}).get("managed.send"):
         raise ManagedUnsupported(f"UNSUPPORTED: managed.send is unavailable for {agent}")
     expected = {key: candidate.get(key) for key in
                 ("agentKind", "profileRoot", "workspaceRoot", "expectedSession")
@@ -231,7 +245,11 @@ def remote_managed_send(
                 "snapshotHash": snapshot_hash,
             },
         }, timeout)
-        target = str(_runtime_data(response, "send").get("command", {}).get("target") or target_pane)
+        send_data = _runtime_data(response, "send")
+        command = send_data.get("command", {})
+        if not isinstance(command, dict):
+            raise RuntimeError("managed runtime invalid response: send command is not an object")
+        target = str(command.get("target") or target_pane)
         delivery = ManagedSendDelivery(
             target=target,
             command_id=command_id,
