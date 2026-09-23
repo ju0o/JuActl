@@ -142,6 +142,21 @@ real Windows desktop input channel.
 NOT_PROVEN in this run. A real interactive terminal capture was not available
 without changing the user's active terminal state.
 
+## Bounded SSH disconnect diagnosis matrix
+
+This matrix records only what the existing measurements establish. It does not
+convert transport evidence into a Founder-only interactive-session result.
+
+| Diagnosis question | Existing evidence | Outcome | Boundary |
+|---|---|---|---|
+| Did the old Windows pane-discovery path fail? | Installed build returned `command list-panes: -F expects an argument`; the ASUS tmux sessions still existed. | **OBSERVED** | Confirms the discovery transport defect, not disconnect causality. |
+| Was SSH/session churn observed during the invalidated coexistence run? | ASUS journal recorded 210 accepted and 210 disconnected sessions from MainPC `100.86.210.95` between 00:28 and 00:47. | **OBSERVED** | The concurrent old MainPC client was not isolated from the run. |
+| Did tmux topology change while that churn was active? | The prior `$1 jucontrol 5` inventory was replaced by `$0 0 1` after a new tmux server started. | **OBSERVED** | The readable journal slice had no tmux crash/OOM record. |
+| Did MainPC SSH churn directly cause the tmux restart or disconnects? | Churn and topology change were concurrent, but no causal crash/OOM or packet-loss evidence was available. | **UNKNOWN** | Do not label the Founder interactive disconnect root cause. |
+| Did the short process sample prove unbounded SSH amplification? | GUI-on sampling saw SSH count baseline 1, maximum 2; short-lived child totals were not observable at 500 ms. | **UNKNOWN** | The 19-operation refresh fan-out is an amplification factor, not a measured disconnect cause. |
+| Was a long-duration before/after interactive A/B run completed? | The coexistence harness was invalidated by the tmux restart; the GUI-off, TUI, and real interactive cases were not driven. | **NOT_PROVEN** | No post-fix disconnect rate or absence may be claimed. |
+| Was the Founder-only interactive SSH gate closed? | No valid Founder interactive SSH + tmux coexistence evidence is present in this report. | **NOT_PROVEN** | Remains an independent gate; this task does not run or claim it. |
+
 ## DA / escape response matrix
 
 Bounded SSH/PTY captures were run against ASUS.
