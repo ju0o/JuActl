@@ -161,7 +161,6 @@ class Board:
         self.last_event_refresh = 0.0
         self.pending_event_panes: set[str] = set()
         self.pending_topology_refresh = False
-        self.board_opened = False
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
         self.previous_rows: dict[str, dict] = {}
@@ -293,7 +292,8 @@ class Board:
         cmdbar.grid(row=3, column=0, sticky="ew", pady=8, padx=14)
         self.action_buttons = {}
         for label, fn, primary in [("SEND PROMPT", self.on_send, True), ("COPY RESULT", self.on_copy, False),
-                                   ("COLLECT RESULT", self.on_collect, False), ("FOCUS", self.on_focus, False)]:
+                                   ("COLLECT RESULT", self.on_collect, False), ("FOCUS", self.on_focus, False),
+                                   ("PANE BOARD", self.on_board, False)]:
             button = self._btn(cmdbar, label, fn, primary=primary)
             button.pack(side="left", padx=2)
             self.action_buttons[label] = button
@@ -755,9 +755,6 @@ class Board:
             self._update_action_state()
             self.on_select()
         self._start_hydration()
-        if self.ssh_target and not self.board_opened:
-            self.board_opened = True
-            self.root.after(80, self.on_board)
         self.refreshing = False
 
     def _render_projects(self) -> None:
@@ -1359,7 +1356,6 @@ class Board:
                     messagebox.showerror("pane 별칭 실패", str(exc), parent=top)
                     return
                 top.destroy()
-                self.board_opened = False
                 self.refresh()
                 return
             elif kind == "window":
@@ -1380,7 +1376,6 @@ class Board:
                     self.set_status("이름 변경 실패")
                     return
                 top.destroy()
-                self.board_opened = False
                 self.refresh()
 
             self._bg(lambda: rename(target, name), done)
@@ -1488,7 +1483,6 @@ class Board:
                     return
                 self.log(f"{pane.pane_id} → {destination} 이동됨")
                 top.destroy()
-                self.board_opened = False
                 self.refresh()
 
             self._bg(lambda: tmux.move_pane(pane.pane_id, destination), done)

@@ -44,3 +44,11 @@ def test_pane_board_rename_keeps_tmux_names_and_uses_display_aliases():
     assert 'tmux.rename_window' in rename
     assert 'tmux.rename_session' in rename
     assert 'text=f"{pane.pane_id}  {_pane_board_label(self.config, pane.pane_id, pane.title or \'(untitled)\')}"' in source
+
+
+def test_ssh_refresh_does_not_open_pane_board_without_user_action():
+    source = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    refresh_done = source.split("    def _refresh_done", 1)[1].split("    def _render_projects", 1)[0]
+    assert "self.on_board" not in refresh_done
+    action_buttons = source.split("        self.action_buttons = {}", 1)[1].split("        from tkinter import scrolledtext", 1)[0]
+    assert '("PANE BOARD", self.on_board, False)' in action_buttons
