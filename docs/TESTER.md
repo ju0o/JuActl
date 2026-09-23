@@ -7,7 +7,10 @@ deletes tmux sessions.
 
 Run one isolated local or SSH-backed send/copy check. It creates only the
 timestamped `actl-e2e-*` session and removes it, plus its temporary ACTL
-configuration, on exit:
+configuration, HOME, and remote stub (when `--ssh` is used), on exit. The
+stub's `STUB_PROMPT>` marker is observed before the real `actl send`; copy
+uses the same temporary config and HOME, so it cannot read or write the user's
+mapping:
 
 ```bash
 bash scripts/e2e_disposable.sh

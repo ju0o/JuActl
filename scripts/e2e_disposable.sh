@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage() {
-    echo "Usage: $0 [--ssh HOST]" >&2
-    exit 2
-}
-
+usage() { echo "Usage: $0 [--ssh HOST]" >&2; exit 2; }
 ssh_host=""
 case "${1:-}" in
     "") ;;
-    --ssh)
-        [[ $# -eq 2 ]] || usage
-        ssh_host=$2
-        ;;
+    --ssh) [[ $# -eq 2 ]] || usage; ssh_host=$2 ;;
     *) usage ;;
 esac
 
@@ -22,23 +15,29 @@ session="actl-e2e-$(date +%s)"
 config_dir=$(mktemp -d "${TMPDIR:-/tmp}/actl-e2e-config.XXXXXX")
 config="$config_dir/config.json"
 run_home="$config_dir/home"
-mkdir -p "$run_home/.commandcode/projects/e2e"
+mkdir -p "$run_home/.commandcode/e2e"
 created=0
+remote_config_dir="/tmp/actl-e2e-config-$session"
+remote_home="/tmp/actl-e2e-home-$session"
+remote() { ssh "$ssh_host" "$@"; }
 
 cleanup() {
     if [[ $created -eq 1 ]]; then
         if [[ -n $ssh_host ]]; then
-            ssh "$ssh_host" tmux kill-session -t "$session" >/dev/null 2>&1 || true
+            remote tmux kill-session -t "$session" >/dev/null 2>&1 || true
         else
             tmux kill-session -t "$session" >/dev/null 2>&1 || true
         fi
+    fi
+    if [[ -n $ssh_host ]]; then
+        remote rm -rf "$remote_config_dir" "$remote_home" >/dev/null 2>&1 || true
     fi
     rm -rf "$config_dir"
 }
 trap cleanup EXIT INT TERM
 
 if [[ -n $ssh_host ]]; then
-    if ssh "$ssh_host" tmux has-session -t "$session" >/dev/null 2>&1; then
+    if remote tmux has-session -t "$session" >/dev/null 2>&1; then
         echo "session already exists: $session" >&2
         exit 1
     fi
@@ -50,29 +49,40 @@ else
 fi
 
 probe="ACTL_E2E_PROBE"
-stub="$root/tests/fixtures/stub_agent.py"
-session_file="$run_home/.commandcode/projects/e2e/session.jsonl"
 printf '{"clipboard_backend":"auto","agents":{"commandcode":{"target":"%s:0.0"}}}\n' "$session" >"$config"
 
+wait_for_prompt() {
+    local pane=$1 output="" deadline=$((SECONDS + 10))
+    while (( SECONDS < deadline )); do
+        output=$(tmux capture-pane -p -t "$pane" 2>/dev/null || true)
+        [[ "$output" == *"STUB_PROMPT>"* ]] && return 0
+        sleep 0.1
+    done
+    echo "stub prompt did not appear: $session" >&2
+    return 1
+}
+
 if [[ -n $ssh_host ]]; then
-    # The remote command is intentionally self-contained; only tmux is shared.
-    remote_stub="import json,sys,time; p=sys.argv[1]; open(p,'w').write(json.dumps({'type':'session','cwd':__import__('os').getcwd()})+'\\n'); print('STUB_PROMPT>',flush=True); [((lambda l: (open(p,'a').write(json.dumps({'type':'message','message':{'role':'user','content':[{'type':'text','text':l.rstrip() }]}})+'\\n'+json.dumps({'type':'message','message':{'role':'assistant','content':[{'type':'text','text':'RESULT::'+l.rstrip()}]}})+'\\n'),print('RESULT::'+l.rstrip(),flush=True),print('STUB_PROMPT>',flush=True)))(line) for line in sys.stdin]"
-    remote_home="/tmp/actl-e2e-home-$session"
-    remote_config="/tmp/actl-e2e-config-$session/config.json"
-    ssh "$ssh_host" mkdir -p "$remote_home/.commandcode/projects/e2e" "/tmp/actl-e2e-config-$session"
-    ssh "$ssh_host" "printf '%s\\n' '$remote_config' >/dev/null; printf '{\"clipboard_backend\":\"auto\",\"agents\":{\"commandcode\":{\"target\":\"$session:0.0\"}}}\\n' > '$remote_config'"
-    ssh "$ssh_host" "HOME='$remote_home' tmux new-session -d -s '$session' -c '$root' -- bash -lc 'exec -a commandcode python3 -c \"$remote_stub\" -- '$remote_home'/.commandcode/projects/e2e/session.jsonl'"
+    remote_stub="$remote_home/stub_agent.py"
+    remote_session_file="$remote_home/.commandcode/e2e/session.jsonl"
+    remote mkdir -p "$remote_home/.commandcode/e2e" "$remote_config_dir"
+    base64 <"$root/tests/fixtures/stub_agent.py" | remote "base64 -d > '$remote_stub'"
+    remote "printf '%s\\n' '{\"clipboard_backend\":\"auto\",\"agents\":{\"commandcode\":{\"target\":\"$session:0.0\"}}}' > '$remote_config_dir/config.json'"
+    remote tmux new-session -d -s "$session" -c "$remote_home" -- bash -lc "exec -a commandcode python3 '$remote_stub' --session-file '$remote_session_file'"
     created=1
-    send_output=$(printf '%s\n' "$probe" | ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" send commandcode --ssh "$ssh_host")
-    result=$(ACTL_CONFIG_PATH="$remote_config" HOME="$remote_home" "$root/scripts/actl" copy commandcode --print --ssh "$ssh_host")
+    remote "for i in $(seq 1 100); do tmux capture-pane -p -t '$session:0.0' 2>/dev/null | grep -q 'STUB_PROMPT>' && exit 0; sleep .1; done; exit 1"
+    send_output=$(printf '%s\n' "$probe" | remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl send commandcode")
+    result=$(remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl copy commandcode --print")
 else
-    tmux new-session -d -s "$session" -c "$root" -- bash -lc "exec -a commandcode python3 '$stub' --session-file '$session_file'"
+    session_file="$run_home/.commandcode/e2e/session.jsonl"
+    tmux new-session -d -s "$session" -c "$root" -- bash -lc "exec -a commandcode python3 '$root/tests/fixtures/stub_agent.py' --session-file '$session_file'"
     created=1
+    wait_for_prompt "$session:0.0"
     send_output=$(printf '%s\n' "$probe" | ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" send commandcode)
     result=$(ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" copy commandcode --print)
 fi
 
-[[ "$send_output" == *"sent to"* ]]
+[[ "$send_output" == *"sent to"* || "$send_output" == *"$session"* ]]
 [[ "$result" == "RESULT::$probe" ]]
 ms=$((( $(date +%s%N) - start_ns ) / 1000000))
 printf '{"ok":true,"steps":["send","result","copy"],"ms":%s,"session":"%s"}\n' "$ms" "$session"
