@@ -107,7 +107,7 @@ def test_concurrent_runs_use_unique_sessions_with_same_second(tmp_path):
         "  case \"$1\" in\n"
         "    has-session|kill-session) printf '%s' \"$3\" ;;\n"
         "    new-session) printf '%s' \"$4\" ;;\n"
-        "  esac | tr '.' '_'\n"
+        "  esac\n"
         "}\n"
         "case \"$1\" in\n"
         "  has-session) test -e \"$state/$(name \"$@\")\" ;;\n"
