@@ -96,6 +96,43 @@ def test_cleanup_trap_kills_created_session(tmp_path):
     assert (tmp_path / "session.log").read_text(encoding="utf-8").splitlines() == ["kill"]
 
 
+def test_concurrent_runs_use_unique_sessions_with_same_second(tmp_path):
+    sessions = tmp_path / "sessions"
+    tmux = tmp_path / "tmux"
+    tmux.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  has-session) exit 1 ;;\n"
+        "  new-session) echo \"$4\" >> \"$FAKE_TMUX_SESSIONS\"; exit 1 ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    tmux.chmod(0o755)
+    date = tmp_path / "date"
+    date.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n"
+        "  +%s|+%s%N) echo 1700000000000000000 ;;\n"
+        "  *) /bin/date \"$@\" ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    date.chmod(0o755)
+    env = os.environ.copy()
+    env.update(PATH=f"{tmp_path}:{env['PATH']}", FAKE_TMUX_SESSIONS=str(sessions))
+    runs = [
+        subprocess.Popen(["bash", str(SCRIPT)], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE),
+        subprocess.Popen(["bash", str(SCRIPT)], cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE),
+    ]
+    results = [run.communicate() for run in runs]
+
+    assert all(run.returncode != 0 for run in runs)
+    names = sessions.read_text(encoding="utf-8").splitlines()
+    assert len(names) == 2
+    assert len(set(names)) == 2
+
+
 def test_ssh_reaches_send_and_copy_with_remote_bash(tmp_path):
     state, log = fake_ssh(tmp_path)
     env = os.environ.copy()
