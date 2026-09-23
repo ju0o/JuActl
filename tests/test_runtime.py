@@ -1194,7 +1194,9 @@ def test_collect_dynamic_pane_recreated_concurrent_and_stale_rollouts(monkeypatc
         assert code == 0 and response["ok"] is True, response
         return response["data"]["final"]
 
-    # A stale rollout with the same workspace must not affect the selected path.
+    # All rollouts are real inputs; only the live pane/process ownership map is
+    # allowed to select one.  Collect starts from BOOTSTRAP, so runtime must
+    # resolve the path from that identity instead of using a pinned cursor.
     stale = _write_rollout(tmp_path / "sessions" / "rollout-stale.jsonl", [
         {"type": "session_meta", "payload": {"session_id": "stale", "id": "stale"}},
         _user_msg("stale-prompt", "stale-turn", "stale"),
@@ -1208,35 +1210,53 @@ def test_collect_dynamic_pane_recreated_concurrent_and_stale_rollouts(monkeypatc
         _final_msg("CURRENT", "turn-a"),
         _task_complete("CURRENT", "turn-a"),
     ])
-    grant_a, ctx_a, _ = _prepare_sent_command(
-        monkeypatch, tmp_path, command_id="cmd-dyn-a", prompt=prompt_a, rollout=current,
-        runtime_id="rt1_dyn_a", pane_id="%17")
-    assert collect(grant_a, ctx_a, "cmd-dyn-a")["rawFinalText"] == "CURRENT"
-    assert stale != current
-
-    # Recreated pane/session and two concurrent rollouts remain isolated by path.
-    prompt_b = "[ACTL_MANAGED_V1 commandId=cmd-dyn-b]\nbeta"
     recreated = _write_rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", [
         {"type": "session_meta", "payload": {"session_id": "recreated", "id": "recreated"}},
-        _user_msg(prompt_b, "turn-b", "recreated"),
+        _user_msg("[ACTL_MANAGED_V1 commandId=cmd-dyn-b]\nbeta", "turn-b", "recreated"),
         _final_msg("RECREATED", "turn-b"),
         _task_complete("RECREATED", "turn-b"),
     ])
-    grant_b, ctx_b, _ = _prepare_sent_command(
-        monkeypatch, tmp_path, command_id="cmd-dyn-b", prompt=prompt_b, rollout=recreated,
-        runtime_id="rt1_dyn_b", pane_id="%23")
-    assert collect(grant_b, ctx_b, "cmd-dyn-b")["rawFinalText"] == "RECREATED"
-
-    prompt_c = "[ACTL_MANAGED_V1 commandId=cmd-dyn-c]\ngamma"
     concurrent = _write_rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", [
         {"type": "session_meta", "payload": {"session_id": "concurrent", "id": "concurrent"}},
-        _user_msg(prompt_c, "turn-c", "concurrent"),
+        _user_msg("[ACTL_MANAGED_V1 commandId=cmd-dyn-c]\ngamma", "turn-c", "concurrent"),
         _final_msg("CONCURRENT", "turn-c"),
         _task_complete("CONCURRENT", "turn-c"),
     ])
-    grant_c, ctx_c, _ = _prepare_sent_command(
-        monkeypatch, tmp_path, command_id="cmd-dyn-c", prompt=prompt_c, rollout=concurrent,
-        runtime_id="rt1_dyn_c", pane_id="%31")
+    pane_pids = {"%17": 71, "%23": 72, "%31": 73}
+    locks = tmp_path / "thread-writer-locks"
+    locks.mkdir()
+    for session_id in ("current", "recreated", "concurrent"):
+        (locks / f"{session_id}.lock").touch()
+    owned = {
+        71: [current, locks / "current.lock"],
+        72: [recreated, locks / "recreated.lock"],
+        73: [concurrent, locks / "concurrent.lock"],
+    }
+    from actl.agents import codex as codex_agent
+    monkeypatch.setattr(codex_agent, "_codex_process", lambda pid, _target: pid)
+    monkeypatch.setattr(codex_agent, "_open_paths", lambda pid: owned[pid])
+    monkeypatch.setattr(codex_agent, "pane_field", lambda _pane, field: str(tmp_path) if field == "#{pane_current_path}" else "")
+
+    def prepare(command_id, prompt, runtime_id, pane_id):
+        grant, ctx = _acquire_managed(monkeypatch, tmp_path, runtime_id=runtime_id, pane_id=pane_id)
+        ctx = {**ctx, "profileRoot": str(tmp_path), "agentPid": pane_pids[pane_id]}
+        monkeypatch.setattr(runtime, "transport_send_prompt", _ok_send_transport)
+        sent, code = runtime.handle_runtime_request(
+            _send_req(tmp_path, grant, ctx, command_id=command_id, prompt=prompt)
+        )
+        assert code == 0, sent
+        return grant, ctx
+
+    grant_a, ctx_a = prepare("cmd-dyn-a", prompt_a, "rt1_dyn_a", "%17")
+    assert collect(grant_a, ctx_a, "cmd-dyn-a")["rawFinalText"] == "CURRENT"
+    assert Path(stale).read_text(encoding="utf-8") != Path(current).read_text(encoding="utf-8")
+
+    prompt_b = "[ACTL_MANAGED_V1 commandId=cmd-dyn-b]\nbeta"
+    grant_b, ctx_b = prepare("cmd-dyn-b", prompt_b, "rt1_dyn_b", "%23")
+    assert collect(grant_b, ctx_b, "cmd-dyn-b")["rawFinalText"] == "RECREATED"
+
+    prompt_c = "[ACTL_MANAGED_V1 commandId=cmd-dyn-c]\ngamma"
+    grant_c, ctx_c = prepare("cmd-dyn-c", prompt_c, "rt1_dyn_c", "%31")
     assert collect(grant_c, ctx_c, "cmd-dyn-c")["rawFinalText"] == "CONCURRENT"
 
 

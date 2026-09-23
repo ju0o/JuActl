@@ -26,6 +26,10 @@ def _agent(text, phase="final_answer"):
     return _completed("AgentMessage", phase=phase, content=[{"type": "Text", "text": text}])
 
 
+def _task_complete(text, turn_id):
+    return {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn_id, "last_agent_message": text}}
+
+
 def _active(monkeypatch, root, rollout, cwd, session_id="active", locks=None):
     monkeypatch.setattr(codex, "_codex_process", lambda *_: 55)
     monkeypatch.setattr(codex, "_open_rollouts", lambda *_: [rollout])
@@ -274,27 +278,45 @@ def test_managed_dynamic_panes_recreated_concurrent_and_stale_rollouts(monkeypat
     cwd = tmp_path / "JuTell"
     cwd.mkdir()
     stale = _rollout(tmp_path / "sessions" / "rollout-stale.jsonl", "stale", cwd, [_agent("STALE")])
-    current = _rollout(tmp_path / "sessions" / "rollout-current.jsonl", "current", cwd, [_agent("CURRENT")])
-    recreated = _rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", "recreated", cwd, [_agent("RECREATED")])
+    def events(text, turn):
+        return [
+            _completed("UserMessage", turn_id=turn, content=[{"type": "text", "text": "wire"}]),
+            _completed("AgentMessage", phase="final_answer", turn_id=turn, content=[{"type": "Text", "text": text}]),
+            _task_complete(text, turn),
+        ]
 
-    monkeypatch.setattr(codex, "_codex_process", lambda _pid, _target: _pid)
-    monkeypatch.setattr(codex, "_open_rollouts", lambda pid, _root: [current] if pid == 71 else [recreated])
-    monkeypatch.setattr(codex, "_open_thread_locks", lambda pid, _root: ["current"] if pid == 71 else ["recreated"])
+    current = _rollout(tmp_path / "sessions" / "rollout-current.jsonl", "current", cwd, events("CURRENT", "turn-current"))
+    recreated = _rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", "recreated", cwd, events("RECREATED", "turn-recreated"))
+    concurrent = _rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", "concurrent", cwd, events("CONCURRENT", "turn-concurrent"))
+    locks = tmp_path / "thread-writer-locks"
+    locks.mkdir()
+    for session_id in ("current", "recreated", "concurrent"):
+        (locks / f"{session_id}.lock").touch()
 
-    first = codex.resolve_codex_managed(tmp_path, "%17", 71)
-    assert first.code == "OK" and first.session_id == "current"
-    assert first.rollout_path == current and stale not in [first.rollout_path]
+    pane_pids = {"%17": 71, "%23": 72, "%31": 73}
+    owned = {71: [current, locks / "current.lock"], 72: [recreated, locks / "recreated.lock"], 73: [concurrent, locks / "concurrent.lock"]}
+    monkeypatch.setattr(codex, "pane_field", lambda pane, field: str(pane_pids[pane]) if field == "#{pane_pid}" else str(cwd))
+    monkeypatch.setattr(codex, "pane_processes", lambda pid: [type("Process", (), {"pid": pid, "args": "/usr/bin/codex"})()])
+    monkeypatch.setattr(codex, "_open_paths", lambda pid: owned[pid])
 
-    # The pane is recreated and the process/session identity changes; stale data
-    # remains present but cannot be selected by an unrelated live process.
-    second = codex.resolve_codex_managed(tmp_path, "%23", 72)
-    assert second.code == "OK" and second.session_id == "recreated"
-    assert second.rollout_path == recreated
+    def collect(pane, prompt, expected):
+        resolution = codex.resolve_codex_managed(tmp_path, pane)
+        assert resolution.code == "OK" and resolution.session_id == expected
+        assert resolution.rollout_path != stale
+        result = codex.collect_codex_final(
+            path=resolution.rollout_path,
+            cursor={"path": str(resolution.rollout_path), "byteOffset": 0},
+            wire_prompt=prompt or "wire",
+            command_id=f"cmd-{expected}",
+            runtime_id=f"runtime-{expected}",
+            prompt_sha256="prompt-sha",
+        )
+        assert result.code == "FINAL"
+        return result.packet["rawFinalText"]
 
-    concurrent = _rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", "concurrent", cwd, [_agent("OTHER")])
-    monkeypatch.setattr(codex, "_open_rollouts", lambda *_: [current, concurrent])
-    ambiguous = codex.resolve_codex_managed(tmp_path, "%31", 73)
-    assert ambiguous.code == "AMBIGUOUS_SESSION"
+    assert collect("%17", "", "current") == "CURRENT"
+    assert collect("%23", "", "recreated") == "RECREATED"
+    assert collect("%31", "", "concurrent") == "CONCURRENT"
 
 
 def test_managed_jsonl_incomplete_tail_and_malformed_and_inode(tmp_path):
