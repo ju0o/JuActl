@@ -16,7 +16,7 @@ from actl.core.registry import AGENTS, resolve_agent
 from actl.core.probe import probe_agent
 from actl.core.status import agent_status
 from actl.core.runtime import WriterDenied
-from actl.core.tmux import pane_field, send_keys, send_prompt, target_exists
+from actl.core.tmux import capture_pane, pane_field, send_keys, send_prompt, target_exists
 from actl.core.validation import pane_processes, require_valid_target, validate_target
 from actl.utils.clipboard import copy_text, osc52_guidance
 
@@ -629,6 +629,31 @@ def _discover(config: dict, detections: list[Detection] | None = None) -> list[D
     return detections
 
 
+def _discover_json(config: dict, detections: list[Detection] | None = None) -> list[Detection]:
+    detections = detections if detections is not None else discover()
+    panes = []
+    for detection in detections:
+        pane = detection.pane
+        try:
+            tail = [line.strip() for line in capture_pane(pane.pane_id, history=50).splitlines() if line.strip()][-3:]
+        except Exception:
+            tail = []
+        panes.append(
+            {
+                "paneId": pane.pane_id,
+                "cwd": pane.current_path,
+                "command": pane.current_command,
+                "detected": detection.agent,
+                "confidence": detection.confidence,
+                "mapping": mapping_state(config, detection),
+                "evidence": detection.evidence,
+                "tail": tail,
+            }
+        )
+    print(json.dumps({"panes": panes}, ensure_ascii=False))
+    return detections
+
+
 def _apply_discovery(config: dict, detections: list[Detection] | None = None) -> dict:
     detections = detections if detections is not None else discover()
     backup = backup_config()
@@ -1123,7 +1148,7 @@ def _print_cli_help() -> None:
         "  actl audit [N]            본문 없는 로컬 감사 로그\n"
         "  actl history [AGENT] [N]  결과 hash/source 이력 (본문 없음)\n"
         "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
-        "  actl discover [--apply]     List (or apply) live pane detections\n"
+        "  actl discover [--json] [--apply]  List (or apply) live pane detections\n"
         "  actl status [AGENT] Probe-free mapping + liveness table\n"
         "  actl bind opencode  One-command OpenCode session bind\n"
         "  --ssh TARGET        Route tmux via ssh (MainPC board: actl tui --ssh asus)\n"
@@ -1334,7 +1359,7 @@ def main() -> None:
     parser.add_argument("--bind", action="store_true", help="Bind an OpenCode session id (opencode-session)")
     parser.add_argument("--opencode-session", nargs="?", const="status", help="Session-aware OpenCode setup: --new | --bind --session ID | --status")
     parser.add_argument("--print", action="store_true", help="With copy: print the result instead of copying")
-    parser.add_argument("--json", action="store_true", help="With doctor: emit one machine-readable JSON object")
+    parser.add_argument("--json", action="store_true", help="With discover or doctor: emit one machine-readable JSON object")
     parser.add_argument(
         "--request-stdin",
         action="store_true",
@@ -1355,6 +1380,9 @@ def main() -> None:
     parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
     args = parser.parse_args()
 
+    if args.json and args.apply and (args.command == "discover" or args.discover):
+        raise SystemExit("--json cannot be combined with --apply")
+
     if args.ssh:
         from actl.core.tmux import set_remote_ssh
 
@@ -1372,6 +1400,13 @@ def main() -> None:
             )
             raise SystemExit(3)
         raise SystemExit(run_runtime_request_stdin(args.command_agent))
+
+    if args.json and not args.apply and (
+        (args.command == "discover" and not args.command_agent) or args.discover
+    ):
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {"agents": {}}
+        _discover_json(config)
+        return
 
     ensure_config()
     if args.init:
