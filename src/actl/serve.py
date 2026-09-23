@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import STRONG_CONFIDENCE, discover, manual_map
+from actl.core.projection import board_counts
 from actl.core.registry import AGENTS, resolve_agent
 from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _pane_board, _pane_preview, _unmapped_panes, _verify_row
@@ -132,7 +133,7 @@ let SEL = null, AUTO = true, ROWS = [], PREV = {}, NEXT_MS = 12000, REFRESHING =
 let FILTER = 'ALL';
 if(TOKEN) { sessionStorage.setItem('actl-token', TOKEN); history.replaceState(null, '', location.pathname); }
 const KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
-const CLS = {"UP":"up","DOWN":"bad","MISMATCH":"warn","UNMAPPED":"dim","DETECTED":"acc"};
+const CLS = {"UP":"up","WORKING":"up","IDLE":"up","DONE":"up","DOWN":"bad","BLOCKED":"bad","MISMATCH":"warn","UNMAPPED":"dim","DETECTED":"acc","UNKNOWN":"dim"};
 function log(m){ const el=document.getElementById('log'); el.innerHTML=`<div>[${new Date().toLocaleTimeString()}] ${m}</div>`+el.innerHTML; }
 function tick(){ document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tick,1000); tick();
@@ -163,8 +164,8 @@ async function refresh(quiet){
     if(Object.keys(PREV).length) ROWS.forEach(a=>{ const old=PREV[a.agent]||{}; if(old.activity_state==='RUNNING'&&a.activity_state==='IDLE') log(`◆ ${a.display} · 유휴 상태 전환`); if(a.result_hash&&a.result_hash!==old.result_hash) log(`◆ ${a.display} · 새 결과 준비`); });
     PREV = Object.fromEntries(ROWS.map(a=>[a.agent,a]));
     NEXT_MS = d.nextRefreshMs || (ROWS.some(a=>a.activity_state==='RUNNING') ? 3000 : 12000);
-    const good=ROWS.filter(a=>a.state==='UP').length;
-    const problem=ROWS.filter(a=>['DOWN','MISMATCH'].includes(a.state)).length;
+    const problem=ROWS.filter(a=>['DOWN','MISMATCH'].includes(a.state)||a.runtime_state==='BLOCKED').length;
+    const good=ROWS.filter(a=>!(['DOWN','MISMATCH'].includes(a.state)||a.runtime_state==='BLOCKED') && (['UP','WORKING','IDLE'].includes(a.state)||['WORKING','IDLE','DONE'].includes(a.runtime_state))).length;
     const unknown=ROWS.length-good-problem;
     document.getElementById('conn').innerHTML = `<span class="live">● 정상 ${good}</span> · 문제 ${problem} · 미확인 ${unknown} · asus ${d.time}`;
     const box = document.getElementById('agents');
@@ -278,7 +279,7 @@ def _board_data(*, reconcile: bool = False) -> dict:
     from actl.tui import _rows
 
     rows = _rows(config)
-    live = sum(1 for r in rows if r["state"] == "UP")
+    live = board_counts(rows)["healthy"]
     from actl.tui import _pane_board
 
     board = _pane_board(config)

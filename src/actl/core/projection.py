@@ -7,6 +7,8 @@ from typing import Any
 
 UNKNOWN = "UNKNOWN"
 RUNTIME_STATES = ("WORKING", "IDLE", "BLOCKED", "DONE", UNKNOWN)
+HEALTHY_STATES = frozenset(("UP", "WORKING", "IDLE"))
+ERROR_STATES = frozenset(("DOWN", "MISMATCH", "BLOCKED"))
 
 
 def _string(value: Any) -> str:
@@ -91,6 +93,18 @@ def project_metadata(config: dict, agent: str, pane_path: str = "-",
 def runtime_counts(rows: list[dict]) -> dict[str, int]:
     """Count projected runtime instances, never canonical Agent types."""
     return {state: sum(row.get("runtime_state") == state for row in rows) for state in RUNTIME_STATES}
+
+
+def board_counts(rows: list[dict]) -> dict[str, int]:
+    """Classify board rows using the shared TUI/GUI healthy state mapping."""
+    def is_error(row: dict) -> bool:
+        return row.get("state") in ERROR_STATES or row.get("runtime_state") == "BLOCKED"
+
+    error = sum(is_error(row) for row in rows)
+    healthy = sum(not is_error(row) and
+                  (row.get("state") in HEALTHY_STATES or
+                   row.get("runtime_state") in {"WORKING", "IDLE", "DONE"}) for row in rows)
+    return {"healthy": healthy, "error": error, "unknown": len(rows) - healthy - error}
 
 
 def project_groups(rows: list[dict]) -> dict[str, list[dict]]:
