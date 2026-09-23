@@ -149,6 +149,14 @@ def test_canonical_json_and_sha256_helpers():
     assert runtime.sha256_hex(raw) == runtime.sha256_hex(b'{"a":2,"b":1}')
 
 
+def test_boot_time_ns_falls_back_when_boottime_is_unavailable(monkeypatch):
+    class WindowsClock:
+        monotonic_ns = staticmethod(lambda: 123456789)
+
+    monkeypatch.setattr(runtime, "time", WindowsClock)
+    assert runtime.boot_time_ns() == 123456789
+
+
 # --- V05-ish: concurrent acquire → BUSY ---
 
 

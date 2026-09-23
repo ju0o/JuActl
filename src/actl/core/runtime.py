@@ -145,7 +145,10 @@ def sha256_hex(data: bytes) -> str:
 
 
 def boot_time_ns() -> int:
-    return int(time.clock_gettime(time.CLOCK_BOOTTIME) * 1_000_000_000)
+    try:
+        return int(time.clock_gettime(time.CLOCK_BOOTTIME) * 1_000_000_000)
+    except (AttributeError, OSError):
+        return time.monotonic_ns()
 
 
 def wall_time_s() -> float:
