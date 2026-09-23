@@ -6,6 +6,12 @@ from actl import gui
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_preview_timeout_word_in_successful_pane_text_is_fresh():
+    text, fresh = gui._preview_text("LAST_GOOD", "request timeout recovered\nready")
+    assert fresh is True
+    assert text == "request timeout recovered\nready"
+
+
 def test_pane_board_alias_is_persistent_and_falls_back_to_tmux_title(tmp_path, monkeypatch):
     config = {"agents": {}, "pane_board_labels": {"%7": "Codex desk"}}
     assert gui._pane_board_label(config, "%7", "old tmux title") == "Codex desk"

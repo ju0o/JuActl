@@ -75,11 +75,10 @@ def _save_pane_board_label(config: dict, pane_id: str, label: str) -> None:
 def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
     """Return (display_text, is_fresh). Never wipe last-good pane with a timeout wall."""
     text = result if isinstance(result, str) else f"실패: {result}"
-    lower = text.lower()
     failed = (
         text.startswith("(미리보기 불가:")
         or text.startswith("실패:")
-        or "timed out" in lower
+        or text.startswith("remote tmux command timed out")
         or "미리보기 보류" in text
     )
     if failed and previous:
