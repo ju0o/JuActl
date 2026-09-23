@@ -45,3 +45,18 @@ def test_pane_board_uses_selectable_row_keys_for_large_pane_ids(monkeypatch):
 
     assert "[1] %12" in text
     assert tui._pane_board_cache({})[0][0] == "1"
+
+
+def test_event_scope_separates_topology_and_pane_local_events():
+    topology, pane_ids = tui._event_scope([
+        "%output %12 text",
+        "%pane-mode-changed %13",
+        "%layout-change @1",
+    ])
+
+    assert topology is True
+    assert pane_ids == {"%12", "%13"}
+
+
+def test_event_scope_ignores_non_refresh_notifications():
+    assert tui._event_scope(["%client-session-changed $1", "plain output"]) == (False, set())

@@ -474,6 +474,23 @@ def _pane_board(config: dict) -> str:
 _BOARD: list = []
 
 
+def _event_scope(events: list[str]) -> tuple[bool, set[str]]:
+    """Classify remote tmux notifications without turning output into a scan."""
+    topology = any(
+        event.startswith(("%sessions-changed", "%window-", "%layout-change", "%session-"))
+        for event in events
+    )
+    pane_events = ("%output", "%pane-mode-changed", "%pause", "%continue")
+    pane_ids = {
+        parts[1]
+        for event in events
+        if event.startswith(pane_events)
+        for parts in [event.split(maxsplit=2)]
+        if len(parts) > 1 and parts[1].startswith("%")
+    }
+    return topology, pane_ids
+
+
 def _pane_board_cache(config: dict, board: list | None = None) -> list:
     global _BOARD
     if board is not None:
@@ -594,15 +611,21 @@ def run_tui() -> int:
 
         next_refresh = time.monotonic() + 12.0
         next_health = time.monotonic() + 60.0
+        next_event_refresh = 0.0
+        pending_event_panes: set[str] = set()
         while True:
             ch = cb.read_key(timeout=0.5)
             if ch is None:
                 from actl.core.tmux import REMOTE_SSH_TARGET, remote_events
 
                 event_mode = bool(REMOTE_SSH_TARGET)
-                event_ready = bool(remote_events()) if event_mode else False
-                due = time.monotonic() >= (next_health if event_mode else next_refresh)
-                if event_ready or due:
+                now = time.monotonic()
+                events = remote_events() if event_mode else []
+                topology, pane_ids = _event_scope(events)
+                pending_event_panes.update(pane_ids)
+                local_due = pending_event_panes and now >= next_event_refresh
+                due = now >= (next_health if event_mode else next_refresh)
+                if topology or due:
                     config = load_config()
                     try:
                         from actl.cli import _auto_reconcile
@@ -614,7 +637,15 @@ def run_tui() -> int:
                     interval = 3.0 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12.0
                     next_refresh = time.monotonic() + interval
                     next_health = time.monotonic() + 60.0
+                    pending_event_panes.clear()
                     _render(rows, selected, "자동 새로고침 완료")
+                elif local_due:
+                    target = rows[selected].get("target") if rows else None
+                    if target in pending_event_panes:
+                        message = f"자동 pane 갱신\n{_pane_preview(target)}"
+                        _render(rows, selected, message)
+                    pending_event_panes.clear()
+                    next_event_refresh = now + 1.0
                 continue
             if ch in {"q", "\x03"}:
                 sys.stdout.write("\n")
