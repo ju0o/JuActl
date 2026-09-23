@@ -3,6 +3,20 @@
 The tester separates deterministic QA from live evidence. It never creates or
 deletes tmux sessions.
 
+## Offline Board harness
+
+Run the disposable Windows Board flow without SSH, real tmux, or a real agent
+pane:
+
+```bash
+bash scripts/tester.sh --offline
+```
+
+The harness invokes the Board handlers in memory, sends a prompt to a temporary
+stub-agent, observes its deterministic RESULT, fetches it through `/api/copy`,
+and removes the disposable session directory in all cases. It must not be used
+as evidence of live Windows or ASUS transport behavior.
+
 ## Run
 
 ```bash
