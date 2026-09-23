@@ -25,6 +25,9 @@ class ManagedUnsupported(RuntimeError):
     """The selected remote runtime has no managed send capability."""
 
 
+MANAGED_DISCOVERY_TIMEOUT = 10.0
+
+
 @dataclass
 class ManagedSendDelivery:
     """Authoritative managed-send receipt; cleanup is separate from commit.
@@ -109,6 +112,10 @@ def _runtime_request(target: str, operation: str, body: dict, timeout: float = 3
             text=True, encoding="utf-8", errors="replace", timeout=timeout,
             check=False, **_no_window(),
         )
+    except subprocess.TimeoutExpired as exc:
+        if operation == "discover":
+            raise RuntimeError("DISCOVERY_TIMEOUT: retry discovery") from exc
+        raise RuntimeError(f"managed runtime {operation} timed out") from exc
     except Exception as exc:
         raise RuntimeError(f"managed runtime ssh failed: {exc}") from exc
     try:
@@ -151,7 +158,12 @@ def remote_managed_send(
     socket_path = socket_probe.stdout.strip()
     if socket_probe.returncode or not socket_path.startswith("/"):
         raise RuntimeError("managed runtime socket path unavailable")
-    discovered = _runtime_request(REMOTE_SSH_TARGET, "discover", {"socketPath": socket_path}, timeout)
+    discovered = _runtime_request(
+        REMOTE_SSH_TARGET,
+        "discover",
+        {"socketPath": socket_path},
+        min(timeout, MANAGED_DISCOVERY_TIMEOUT),
+    )
     candidates = [candidate for candidate in discovered.get("data", {}).get("candidates", [])
                   if candidate.get("agentKind") == agent
                   and (candidate.get("identityEvidence") or {}).get("paneId") == target_pane]
