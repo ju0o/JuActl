@@ -51,6 +51,7 @@ STATUS_GLYPH = {
     "DETECTED": "◉", "UNKNOWN": "·",
 }
 PANE_BOARD_LABELS_KEY = "pane_board_labels"
+PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"
 
 
 def _state_message(kind: str, detail: str = "") -> str:
@@ -192,7 +193,7 @@ class Board:
         self.root.after(180, self._motion_tick)
         self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
+            self.auto_var.set("● 자동 갱신 켜짐")
             self.root.after(250, self._event_tick)
             self.root.after(60000, self._health_tick)
         else:
@@ -259,21 +260,21 @@ class Board:
 
         sidebar = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        tk.Label(sidebar, text="PROJECTS", bg=PANEL, fg=TXT, font=FONT_BIG).pack(anchor="w", padx=12, pady=(14, 8))
+        tk.Label(sidebar, text="프로젝트", bg=PANEL, fg=TXT, font=FONT_BIG).pack(anchor="w", padx=12, pady=(14, 8))
         self.project_filter: str | None = None
         self.project_buttons = tk.Frame(sidebar, bg=PANEL)
         self.project_buttons.pack(fill="x", padx=8)
         self.project_counts = tk.StringVar(value=_state_message("loading"))
         tk.Label(sidebar, textvariable=self.project_counts, bg=PANEL, fg=DIM,
                  font=("Segoe UI", 9), justify="left", anchor="w").pack(fill="x", padx=12, pady=10)
-        tk.Label(sidebar, text="NEEDS ATTENTION", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
+        tk.Label(sidebar, text="확인 필요", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
         self.attention_frame = tk.Frame(sidebar, bg=PANEL)
         self.attention_frame.pack(fill="x", padx=8)
 
         center = tk.Frame(main, bg=BG)
         center.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
         center.rowconfigure(2, weight=1)
-        tk.Label(center, text="LIVE RUNTIME INSTANCES", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        tk.Label(center, text="에이전트", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", pady=(0, 10))
         tools = tk.Frame(center, bg=BG)
         tools.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         self.filter_var = tk.StringVar()
@@ -299,7 +300,7 @@ class Board:
         right = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
         right.grid(row=0, column=2, sticky="nsew")
         right.rowconfigure(2, weight=1)
-        self.pane_title = tk.StringVar(value="RUNTIME INSPECTOR — select a runtime")
+        self.pane_title = tk.StringVar(value="에이전트를 선택하세요")
         tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG,
                  wraplength=330, justify="left").grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
         self.detail_var = tk.StringVar(value="Machine · Project · Agent · Role · State · Result")
@@ -312,13 +313,12 @@ class Board:
         cmdbar = tk.Frame(right, bg=PANEL)
         cmdbar.grid(row=3, column=0, sticky="ew", pady=8, padx=14)
         self.action_buttons = {}
-        for label, fn, primary in [("SEND PROMPT", self.on_send, True), ("COPY RESULT", self.on_copy, False),
-                                   ("COLLECT RESULT", self.on_collect, False), ("FOCUS", self.on_focus, False),
+        for label, fn, primary in [("COPY RESULT", self.on_copy, False), ("FOCUS", self.on_focus, False),
                                    ("PANE BOARD", self.on_board, False)]:
-            button = self._btn(cmdbar, label, fn, primary=primary)
+            button = self._btn(cmdbar, {"COPY RESULT": "결과 복사", "FOCUS": "ASUS 화면 전환",
+                                        "PANE BOARD": "pane 관리(고급)"}[label], fn, primary=primary)
             button.pack(side="left", padx=2)
             self.action_buttons[label] = button
-        self.action_buttons["COLLECT RESULT"].configure(state="disabled")
         from tkinter import scrolledtext
 
         self.notice_var = tk.StringVar(value="")
@@ -326,15 +326,19 @@ class Board:
                                      font=FONT_HDR, justify="left", anchor="w", wraplength=330)
         self.notice_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
         tk.Label(right, text="Prompt · Ctrl+Enter", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
-        self.msg = scrolledtext.ScrolledText(right, height=2, font=FONT, bg="#fafafa", fg=TXT,
+        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg="#fafafa", fg=DIM,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.msg.grid(row=6, column=0, sticky="ew", padx=14, pady=2)
+        self.msg.insert("1.0", PROMPT_PLACEHOLDER)
+        self.msg.bind("<FocusIn>", lambda _e: self._clear_prompt_placeholder())
+        self.msg.bind("<FocusOut>", lambda _e: self._restore_prompt_placeholder())
         sendrow = tk.Frame(right, bg=PANEL)
         sendrow.grid(row=7, column=0, sticky="ew", pady=2, padx=14)
-        self.send_btn = tk.Button(sendrow, text="SEND PROMPT", command=self.on_send, bg=ACC, fg="white",
+        self.send_btn = tk.Button(sendrow, text="보내기", command=self.on_send, bg=ACC, fg="white",
                                   relief="flat", padx=12, pady=6)
         self.send_btn.pack(side="left")
-        self.log_toggle = tk.Button(sendrow, text="▸ diagnostics", command=self.toggle_log,
+        self.action_buttons["SEND PROMPT"] = self.send_btn
+        self.log_toggle = tk.Button(sendrow, text="▸ 자세한 기록", command=self.toggle_log,
                                     bg=PANEL, fg=DIM, activebackground=PANEL2, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
         tk.Button(sendrow, text="다시 시도", command=self.refresh,
@@ -351,11 +355,21 @@ class Board:
     def toggle_log(self) -> None:
         if self.log_visible:
             self.logw.grid_forget()
-            self.log_toggle.configure(text="▸ 로그")
+            self.log_toggle.configure(text="▸ 자세한 기록")
         else:
             self.logw.grid(row=8, column=0, sticky="nsew", pady=2)
-            self.log_toggle.configure(text="▾ 로그")
+            self.log_toggle.configure(text="▾ 자세한 기록")
         self.log_visible = not self.log_visible
+
+    def _clear_prompt_placeholder(self) -> None:
+        if self.msg.get("1.0", "end-1c") == PROMPT_PLACEHOLDER:
+            self.msg.delete("1.0", "end")
+            self.msg.configure(fg=TXT)
+
+    def _restore_prompt_placeholder(self) -> None:
+        if not self.msg.get("1.0", "end-1c").strip():
+            self.msg.configure(fg=DIM)
+            self.msg.insert("1.0", PROMPT_PLACEHOLDER)
 
     def command_palette(self) -> None:
         import tkinter as tk
@@ -418,7 +432,7 @@ class Board:
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+            self.auto_var.set("● 자동 갱신 켜짐" if self.auto_refresh else "○ 자동 갱신 꺼짐")
         else:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self.log(f"{'이벤트 감시' if self.ssh_target else '자동새로고침'} {'켬' if self.auto_refresh else '끔'}")
@@ -642,6 +656,7 @@ class Board:
         self.last_submitted_prompt = submitted_text
         try:
             self.msg.delete("1.0", "end")
+            self._restore_prompt_placeholder()
         except Exception:
             pass
 
@@ -784,7 +799,7 @@ class Board:
         self.previous_rows = {r["runtime_key"]: r for r in self.rows}
         self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+            self.auto_var.set("● 자동 갱신 켜짐" if self.auto_refresh else "○ 자동 갱신 꺼짐")
         else:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
@@ -825,6 +840,8 @@ class Board:
         names = (["ALL PROJECTS"] if names else []) + names
         for name in names:
             label = name
+            if name == "ALL PROJECTS":
+                label = "전체"
             if name != "ALL PROJECTS":
                 total, working, attention = counts[name]
                 label = f"{name}\n  {total} runtime · {working} working · {attention} attention"
@@ -932,11 +949,8 @@ class Board:
         enabled = bool(row and row.get("control_ready")) and not self.send_inflight
         self.send_btn.configure(state="normal" if enabled else "disabled")
         for label in ("SEND PROMPT", "COPY RESULT", "FOCUS"):
-            if label == "SEND PROMPT":
-                self.action_buttons[label].configure(state="normal" if enabled else "disabled")
-            else:
-                ready = bool(row is not None and row.get("control_ready"))
-                self.action_buttons[label].configure(state="normal" if ready else "disabled")
+            ready = bool(row is not None and row.get("control_ready"))
+            self.action_buttons[label].configure(state="normal" if ready else "disabled")
 
     def select_agent(self, agent: str) -> None:
         self.selected = agent
@@ -1012,12 +1026,6 @@ class Board:
                 self.log(f"FOCUS failed: {result}")
 
         self._bg(work, done)
-
-    def on_collect(self) -> None:
-        row = self.current()
-        if not row:
-            return
-        self.log("COLLECT RESULT disabled: no managed Task/Run command is bound to this runtime")
 
     def on_copy(self) -> None:
         row = self.current()
@@ -1609,10 +1617,10 @@ class Board:
             self.notify("이미 전송 중 — 완료될 때까지 대기", "warn")
             return
         text = self.msg.get("1.0", "end").strip()
-        if not text:
+        if not text or text == PROMPT_PLACEHOLDER:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
-        if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+        if not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
         from actl.core.remote_scheduler import (
             KIND_SEND,
