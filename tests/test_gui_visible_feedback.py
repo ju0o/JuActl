@@ -53,6 +53,7 @@ def _board():
     board._render_cards = lambda _selected=None: None
     board._result_ready_keys = set()
     board._post_send_running_keys = set()
+    board._copied_result_keys = set()
     return board
 
 
@@ -81,7 +82,8 @@ def test_on_copy_done_paths_are_visible(monkeypatch):
         monkeypatch.setattr(gui, "extract_last_response", lambda *_args: SimpleNamespace(
             text=text, source="stub", confidence="high", detail="none"
         ))
-        monkeypatch.setattr(send_truth, "classify_result", lambda *_args, **_kwargs: (result_class, None))
+        corr = None if result_class == send_truth.NEW_RESULT else SimpleNamespace(result_hash_after=None)
+        monkeypatch.setattr(send_truth, "classify_result", lambda *_args, **_kwargs: (result_class, corr))
         monkeypatch.setattr(gui, "copy_text", lambda *_args, **_kwargs: "stub")
         board.on_copy()
         assert board.notice_var.value == expected
@@ -100,22 +102,39 @@ def test_on_copy_clipboard_failure_is_visible(monkeypatch):
     assert board.notice_var.value == "클립보드 복사 실패"
 
 
-def test_result_ready_waits_for_real_post_send_change():
+def test_result_ready_waits_for_real_post_send_change(monkeypatch):
     send_truth.reset_all_correlations()
-    send_truth.begin_send("codex", "%1", previous_result_hash="old")
-    send_truth.set_send_state("codex", "%1", send_truth.SUBMITTED)
-    board = _board()
-    board._update_result_ready(
-        [{"runtime_key": "rk", "agent": "codex", "target": "%1",
-          "activity_state": "IDLE", "result_hash": "old"}],
-        {"rk": {"activity_state": "RUNNING", "result_hash": "old"}},
-    )
-    assert "rk" not in board._result_ready_keys
-    rows = [{"runtime_key": "rk", "agent": "codex", "target": "%1",
-             "activity_state": "IDLE", "result_hash": "new"}]
-    board._update_result_ready(rows, {"rk": {"activity_state": "IDLE", "result_hash": "old"}})
-    assert rows[0]["_result_ready"]
-    send_truth.reset_all_correlations()
+    try:
+        send_truth.begin_send("codex", "%1", previous_result_hash="old")
+        send_truth.set_send_state("codex", "%1", send_truth.SUBMITTED)
+        board = _board()
+        unchanged = [{"runtime_key": "rk", "agent": "codex", "target": "%1",
+                      "activity_state": "RUNNING", "result_hash": "old"}]
+        board._update_result_ready(unchanged, {})
+        assert "rk" not in board._result_ready_keys
+        assert not gui._card_line(unchanged[0]).startswith("답이 왔어요")
+
+        rows = [{"runtime_key": "rk", "agent": "codex", "target": "%1",
+                 "activity_state": "IDLE", "result_hash": "new"}]
+        board._update_result_ready(rows, {"rk": {"activity_state": "IDLE", "result_hash": "old"}})
+        assert rows[0]["_result_ready"]
+        assert gui._card_line(rows[0]).startswith("답이 왔어요")
+        board.rows = rows
+        board._update_action_state()
+        assert board.status_var.value == "답이 왔어요"
+
+        copied = _board()
+        copied._copied_result_keys.add(("codex", "%1", send_truth.result_hash("answer")))
+        monkeypatch.setattr(gui, "extract_last_response", lambda *_args: SimpleNamespace(
+            text="answer", source="stub", confidence="high", detail="none"
+        ))
+        monkeypatch.setattr(send_truth, "classify_result", lambda *_args, **_kwargs: (
+            send_truth.STALE_RESULT, SimpleNamespace(result_hash_after=send_truth.result_hash("answer"))
+        ))
+        copied.on_copy()
+        assert copied.notice_var.value == "이미 복사한 결과예요"
+    finally:
+        send_truth.reset_all_correlations()
 
 
 def test_request_preview_does_not_rewrite_during_copy_hold(monkeypatch):

@@ -245,6 +245,7 @@ class Board:
         self.previous_rows: dict[str, dict] = {}
         self._result_ready_keys: set[str] = set()
         self._post_send_running_keys: set[str] = set()
+        self._copied_result_keys: set[tuple[str, str, str]] = set()
         self.log_visible = False
         self._build()
         self.refresh()
@@ -871,11 +872,13 @@ class Board:
     def _update_result_ready(self, rows: list[dict], before_rows: dict[str, dict]) -> None:
         from actl.core.send_truth import get_correlation
 
+        ready_keys = getattr(self, "_result_ready_keys", set())
+        copied_result_keys = getattr(self, "_copied_result_keys", set())
         for row in rows:
             key = row.get("runtime_key")
             corr = get_correlation(row.get("agent", ""), row.get("target", ""))
             if not key or not corr or not corr.send_succeeded:
-                row["_result_ready"] = key in self._result_ready_keys
+                row["_result_ready"] = key in ready_keys
                 continue
             if row.get("activity_state") == "RUNNING":
                 self._post_send_running_keys.add(key)
@@ -891,8 +894,10 @@ class Board:
                 and row.get("activity_state") == "IDLE"
             )
             if changed or completed:
-                self._result_ready_keys.add(key)
-            row["_result_ready"] = key in self._result_ready_keys
+                copied_key = (row.get("agent", ""), row.get("target", ""), row.get("result_hash", ""))
+                if copied_key not in copied_result_keys:
+                    ready_keys.add(key)
+            row["_result_ready"] = key in ready_keys
 
     def _hydration_done(self, result) -> None:
         self.hydrating = False
@@ -1213,6 +1218,7 @@ class Board:
             COPY_QUEUED,
             COPY_READING,
             COPY_STATE_KO,
+            NEW_RESULT,
             RESULT_CLASS_KO,
             classify_result,
             result_hash as hash_result,
@@ -1247,6 +1253,8 @@ class Board:
                 result = extract_last_response(row["agent"], tgt, self.config)
                 current_hash = hash_result(result.text)
                 result_class, corr = classify_result(row["agent"], tgt, current_hash, text=result.text)
+                if corr is None and result.text:
+                    result_class = NEW_RESULT
                 if not result.text:
                     record("copy", agent=row["agent"], target=tgt, ok=False,
                            source=result.source, confidence=result.confidence,
@@ -1326,6 +1334,7 @@ class Board:
                 label = RESULT_CLASS_KO.get(result_class, result_class)
                 if result_class == "NEW_RESULT":
                     acknowledge(row["agent"], result[3])
+                    self._copied_result_keys.add((row["agent"], tgt, result[3]))
                     self._result_ready_keys.discard(row["runtime_key"])
                     row["_result_ready"] = False
                     self._render_cards(self.selected)
@@ -1342,7 +1351,7 @@ class Board:
                         f"{result[6][:4000]}\n\n--- LIVE PANE ---\n{prior}",
                     )
                 else:
-                    copied = result[5] and result[5].result_hash_after == result[3]
+                    copied = (row["agent"], tgt, result[3]) in self._copied_result_keys
                     self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
             elif result[0] == "no-clip":
                 result_class = result[1]
@@ -1352,7 +1361,7 @@ class Board:
                     self._set_loop_phase(LOOP_WORKING, status=LOOP_STATE_KO[LOOP_WORKING])
                     self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
                 elif result_class == "STALE_RESULT":
-                    copied = result[3] and result[3].result_hash_after == send_truth.result_hash(text)
+                    copied = text and (row["agent"], tgt, hash_result(text)) in self._copied_result_keys
                     self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
                 elif result_class == "NEW_RESULT":
                     self._set_loop_phase(LOOP_RESULT_READY, status=LOOP_STATE_KO[LOOP_RESULT_READY])
