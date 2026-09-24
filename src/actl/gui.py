@@ -1995,6 +1995,17 @@ class Board:
                     )
                 return send_body()
             except Exception as exc:
+                if delivery_ambiguous(exc):
+                    set_send_state(
+                        row["agent"], row["target"], SEND_FAILED,
+                        error=str(exc),
+                        evidence={
+                            "path": "managed",
+                            "disposition": "DELIVERY_AMBIGUOUS",
+                            "sideEffect": "POSSIBLE_INPUT",
+                        },
+                    )
+                    return ("ambiguous", str(exc), None)
                 set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(exc))
                 return ("failed", str(exc), None)
             finally:

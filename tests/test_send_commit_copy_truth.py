@@ -294,6 +294,13 @@ def test_delivery_ambiguous_message_mapping_requires_possible_side_effect():
     assert send_truth.DELIVERY_AMBIGUOUS_MESSAGE == "보냈는지 확실하지 않아요 — ASUS 화면 전환으로 확인하세요"
 
 
+def test_managed_ambiguous_error_reaches_board_ambiguous_completion_path():
+    assert send_truth.delivery_ambiguous(RuntimeError("DELIVERY_AMBIGUOUS: SSH dropped")) is True
+    source = (Path(__file__).parents[1] / "src" / "actl" / "gui.py").read_text()
+    assert 'if delivery_ambiguous(exc):' in source
+    assert 'return ("ambiguous", str(exc), None)' in source
+
+
 def test_gui_ambiguous_retry_guard_is_inline_and_once_confirmed():
     source = (Path(__file__).parents[1] / "src/actl/gui.py").read_text()
     assert "같은 내용을 다시 보낼까요?" in source

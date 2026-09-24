@@ -83,8 +83,10 @@ def clipboard_write_allowed(result_class: str) -> bool:
     return result_class == NEW_RESULT
 
 
-def delivery_ambiguous(evidence: dict[str, Any] | None) -> bool:
+def delivery_ambiguous(evidence: dict[str, Any] | BaseException | None) -> bool:
     """Return true only when input may already have reached the target."""
+    if isinstance(evidence, BaseException):
+        return str(evidence).startswith(f"{DELIVERY_AMBIGUOUS}:")
     if not evidence:
         return False
     disposition = evidence.get("deliveryDisposition") or evidence.get("disposition")
