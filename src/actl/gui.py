@@ -162,6 +162,7 @@ class Board:
         self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
+        self.connection_error: str | None = None
         self.jobs: queue.Queue = queue.Queue()
         self.auto_refresh = True
         self.refreshing = False
@@ -760,11 +761,12 @@ class Board:
             self.rows = []
             self.selected = None
             message = _state_message("unreachable", str(result))
+            self.connection_error = message
             self.preview.delete("1.0", "end")
             self.preview.insert("end", message)
-            self.project_counts.set(message)
             self._render_cards()
             self._render_projects()
+            self.project_counts.set(message)
             self.set_status("ASUS 연결 안 됨")
             self.log(f"새로고침 실패: {result}")
             self._update_action_state()
@@ -773,6 +775,7 @@ class Board:
         from actl.core.events import detect_events
 
         payload = result if isinstance(result, dict) else {"rows": result, "detections": []}
+        self.connection_error = None
         self.rows = payload["rows"]
         self._snapshot_detections = payload["detections"]
         if self.previous_rows:
@@ -909,7 +912,9 @@ class Board:
                 w.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
             self.cards[r["runtime_key"]] = card
         if not visible:
-            no_match = _state_message("empty") if not self.project_filter and not query and mode == "전체" else "조건에 맞는 에이전트 없음"
+            no_match = (self.connection_error or _state_message("empty")
+                        if not self.project_filter and not query and mode == "전체"
+                        else "조건에 맞는 에이전트 없음")
             tk.Label(self.agent_cards, text=no_match, bg=BG, fg=DIM,
                      font=FONT).pack(anchor="w", padx=8, pady=8)
 

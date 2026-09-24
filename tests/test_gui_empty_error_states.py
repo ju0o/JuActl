@@ -45,7 +45,7 @@ def _board():
     board.send_inflight = False
     board.current = lambda: None
     board._render_cards = lambda *_args: None
-    board._render_projects = lambda: None
+    board._render_projects = lambda: board.project_counts.set(gui._state_message("empty"))
     board._start_hydration = lambda: None
     board.set_status = lambda value: board.status_var.set(value)
     board.log = lambda _message: None
