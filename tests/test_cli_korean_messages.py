@@ -63,8 +63,8 @@ def test_status_activity_column_uses_observe_activity(monkeypatch):
     monkeypatch.setattr(cli, "AGENTS", {"codex": cli.AGENTS["codex"]})
     monkeypatch.setattr(cli, "agent_status", lambda *_: {
         "agent": "Codex", "target": "%0", "pane": "UP", "command": "codex", "path": "/tmp",
+        "activity": "RUNNING",
     })
-    monkeypatch.setattr(cli, "observe_activity", lambda target: ("RUNNING", "cpu=8.0"))
     out = io.StringIO()
     with redirect_stdout(out):
         cli._print_status({}, "codex")

@@ -10,7 +10,6 @@ from pathlib import Path
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import CONFIG_PATH, backup_config, ensure_config, get_target, load_config, migration_warning, save_config
-from actl.core.activity import observe_activity
 from actl.core.input import read_event
 from actl.core.discovery import STRONG_CONFIDENCE, Detection, auto_bind_opencode_session, discover, manual_map, mapping_state, reconcile
 from actl.core.registry import AGENTS, resolve_agent
@@ -30,11 +29,7 @@ def _unknown_agent(value: str) -> str:
     return f"Unknown agent: {value} — 쓸 수 있는 이름: {', '.join(AGENTS)}"
 
 
-def _activity_label(target: str) -> str:
-    try:
-        state, _ = observe_activity(target)
-    except Exception:
-        state = "UNKNOWN"
+def _activity_label(state: str) -> str:
     return {"RUNNING": "작업 중", "IDLE": "대기"}.get(state, "미확인")
 
 
@@ -64,7 +59,7 @@ def _print_status(config: dict, agent: str | None = None, *, json_output: bool =
             s = agent_status(config, name)
             rows.append({"id": name, **s})
             if not json_output:
-                activity = _activity_label(s["target"]) if s.get("pane") == "UP" else "미확인"
+                activity = _activity_label(s.get("activity", "UNKNOWN")) if s.get("pane") == "UP" else "미확인"
                 print(f"{s['agent']:<12} {s['pane']:<4} {activity:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
         except Exception as exc:
             row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
