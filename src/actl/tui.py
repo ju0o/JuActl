@@ -171,11 +171,12 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
 
                     activity_state, _ = observe_activity(target)
                     busy = {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[activity_state]
-                    if state == "UP":
-                        if activity_state == "RUNNING":
-                            state = "WORKING"
-                        elif activity_state == "IDLE":
-                            state = "IDLE"
+                    if activity_state == "RUNNING":
+                        state = "WORKING"
+                    elif activity_state == "IDLE":
+                        state = "IDLE"
+                    elif activity_state == "WAITING_INPUT":
+                        state = "BLOCKED"
                 except Exception as exc:
                     from actl.core.remote_scheduler import is_transport_contention
 
@@ -191,12 +192,12 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                 if result.text:
                     first = result.text.strip().splitlines()[0] if result.text.strip() else ""
                     preview = first[:100]
-                    result_flag = f"●{len(result.text)}자"
+                    result_flag = f"답 {len(result.text)}자"
                     result_state = "READY"
                     result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
                 else:
                     detail = result.detail or "no text"
-                    result_flag = "○대기"
+                    result_flag = "답 없음"
                     result_state = "WAITING"
             except Exception as exc:
                 from actl.core.remote_scheduler import is_transport_contention
@@ -262,16 +263,17 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
 
 
 STATE_KO = {
-    "UP": "정상",
-    "WORKING": "작업 중",
-    "IDLE": "대기",
-    "TRANSPORT_BUSY": "원격 통신 대기 중",
-    "DEGRADED": "통신 저하",
-    "DOWN": "꺼짐",
+    "UP": "미확인",
+    "WORKING": "일하는 중",
+    "IDLE": "쉬는 중",
+    "BLOCKED": "승인 기다림",
+    "TRANSPORT_BUSY": "미확인",
+    "DEGRADED": "미확인",
+    "DOWN": "연결 끊김",
     "UNKNOWN": "미확인",
-    "MISMATCH": "불일치",
-    "UNMAPPED": "미매핑",
-    "DETECTED": "감지됨",
+    "MISMATCH": "미확인",
+    "UNMAPPED": "미확인",
+    "DETECTED": "미확인",
 }
 
 HELP_TEXT = """\
@@ -321,13 +323,13 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
     )
     for i, row in enumerate(rows):
         marker = ">" if i == selected else " "
-        state_color = "" if row["state"] == "UP" else DIM
+        state_color = "" if row["state"] in {"UP", "IDLE"} else DIM
         state_ko = STATE_KO.get(row["state"], row["state"])
         sys.stdout.write(
             f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} "
-            f"{state_ko:<9}{RESET} {row.get('busy', '미확인'):<4} "
+            f"{state_ko:<9}{RESET} "
             f"{row['result_flag']:<6} "
-            f"{row['preview'] or ('아직 답 없음' if row['result_flag'] == '○대기' else row['detail'])}\n"
+            f"{row['preview'] or ('답 없음' if row['result_flag'] == '답 없음' else row['detail'])}\n"
         )
     if message:
         sys.stdout.write(f"\n{message}\n")
