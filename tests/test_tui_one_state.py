@@ -47,3 +47,28 @@ def test_rows_turn_waiting_input_into_blocked(monkeypatch):
 
     assert row["state"] == "BLOCKED"
     assert row["result_flag"] == "답 없음"
+
+
+def test_rows_keep_non_up_validation_state_and_skip_busy_extraction(monkeypatch):
+    cases = {"DOWN": "IDLE", "DEGRADED": "WAITING_INPUT", "TRANSPORT_BUSY": "RUNNING"}
+    extracted = []
+    from actl.core import activity
+
+    monkeypatch.setattr(
+        tui,
+        "extract_last_response",
+        lambda *_args: (extracted.append(True) or SimpleNamespace(text="", detail="")),
+    )
+    for validation_state, observed_state in cases.items():
+        pane = PaneInfo("%1", "0:0.0", "codex", "-", "", pane_pid=10)
+        detection = Detection(pane, "codex", "high", "pid 10: codex")
+        monkeypatch.setattr(
+            tui, "_validate_live_pane",
+            lambda *_args, state=validation_state, **_kwargs: SimpleNamespace(
+                state=state, valid=True, detail=""
+            ),
+        )
+        monkeypatch.setattr(activity, "observe_activity", lambda _: (observed_state, "observed"))
+        row = tui._rows({}, detections=[detection])[0]
+        assert row["state"] == validation_state
+    assert len(extracted) == 2

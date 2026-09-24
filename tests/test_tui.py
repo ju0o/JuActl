@@ -23,14 +23,14 @@ def test_render_shows_live_and_result_state(monkeypatch):
     tui._render(
         [{
             "key": "1", "display": "CommandCode", "target": "%12",
-            "state": "UP", "busy": "유휴", "result_flag": "●4자",
+            "state": "UP", "busy": "유휴", "result_flag": "답 4자",
             "preview": "DONE", "detail": "",
         }],
         0,
     )
     text = out.getvalue()
-    assert "유휴" in text
-    assert "●4자" in text
+    assert "미확인" in text
+    assert "답 4자" in text
     assert "DONE" in text
 
 

@@ -171,12 +171,13 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
 
                     activity_state, _ = observe_activity(target)
                     busy = {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[activity_state]
-                    if activity_state == "RUNNING":
-                        state = "WORKING"
-                    elif activity_state == "IDLE":
-                        state = "IDLE"
-                    elif activity_state == "WAITING_INPUT":
-                        state = "BLOCKED"
+                    if state == "UP":
+                        if activity_state == "RUNNING":
+                            state = "WORKING"
+                        elif activity_state == "IDLE":
+                            state = "IDLE"
+                        elif activity_state == "WAITING_INPUT":
+                            state = "BLOCKED"
                 except Exception as exc:
                     from actl.core.remote_scheduler import is_transport_contention
 
