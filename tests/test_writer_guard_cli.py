@@ -156,7 +156,6 @@ def test_expired_lease_from_reused_pane_does_not_block_copied_fixture(
         tmp_path,
         runtime_id="rt_v11_stale_pane",
         pane_id="%9",
-        panePid="111",
     )
     source = runtime.journal_path_for_scope(
         runtime.scope_id_for_socket("hk-test", "1000", V11_SOCK)

@@ -343,11 +343,13 @@ def _freeze_context_from_live(
     pane_id = evidence.get("paneId")
     if not isinstance(pane_id, str) or not pane_id:
         raise ReserveInvalid("live paneId missing")
+    pane_pid = evidence.get("panePid")
     observed = {
         "agentKind": candidate.get("agentKind"),
         "profileRoot": candidate.get("profileRoot"),
         "workspaceRoot": candidate.get("workspaceRoot"),
         "expectedSession": candidate.get("expectedSession"),
+        "panePid": pane_pid,
     }
     mismatched = _context_mismatch(expected, observed)
     if mismatched:
@@ -356,6 +358,8 @@ def _freeze_context_from_live(
         raise ReserveInvalid("expectedContext.paneId does not match live paneId")
     frozen = dict(expected)
     frozen["paneId"] = pane_id
+    if pane_pid is not None:
+        frozen["panePid"] = pane_pid
     for key in ("agentKind", "profileRoot", "workspaceRoot", "expectedSession"):
         if frozen.get(key) is None and observed.get(key) is not None:
             frozen[key] = observed[key]
@@ -1348,18 +1352,16 @@ def guard_tmux_writer(*, target: str, socket_path: str | None = None, mode: str 
                     except (TypeError, json.JSONDecodeError):
                         context = None
                     if str(row["state"]) == "EXPIRED_HELD" and isinstance(context, dict):
-                        recorded_pane_pid = context.get("panePid")
-                        if recorded_pane_pid is not None:
-                            try:
-                                from actl.core import tmux
+                        try:
+                            from actl.core import tmux
 
-                                current_pane_pid = tmux.pane_field(
-                                    target, "#{pane_pid}", socket_path=resolved
-                                )
-                            except Exception:
-                                current_pane_pid = None
-                            if current_pane_pid and str(current_pane_pid) != str(recorded_pane_pid):
-                                continue
+                            current_pane_pid = tmux.pane_field(
+                                target, "#{pane_pid}", socket_path=resolved
+                            )
+                        except Exception:
+                            current_pane_pid = None
+                        if current_pane_pid and str(current_pane_pid) != str(context.get("panePid")):
+                            continue
                     if _context_blocks_direct_target(context, target):
                         blocked_by = (str(row["mode"]), str(row["runtime_id"]))
                         break
