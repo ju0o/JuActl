@@ -89,6 +89,15 @@ def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
     return text, True
 
 
+def _summary_text(rows: list[dict]) -> str:
+    from actl.core.projection import board_counts, runtime_counts
+
+    board = board_counts(rows)
+    runtime = runtime_counts(rows)
+    return (f"에이전트 {len(rows)} · 작업 중 {runtime['WORKING']} · 대기 {runtime['IDLE']} · "
+            f"문제 {board['error']} · 확인 중 {board['unknown']}")
+
+
 def inspector_truth(row: dict) -> dict[str, str]:
     """Derive all Founder-facing inspector fields from one runtime row.
 
@@ -222,7 +231,7 @@ class Board:
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
                   bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
                   activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
-        self.summary_var = tk.StringVar(value="Runtimes 0 · WORKING 0 · IDLE 0 · BLOCKED 0 · UNKNOWN 0")
+        self.summary_var = tk.StringVar(value="에이전트 0 · 작업 중 0 · 대기 0 · 문제 0 · 확인 중 0")
         tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg="#a1a1a6",
                  font=FONT_HDR).pack(side="left", padx=8)
         self.status_var = tk.StringVar(value="준비")
@@ -691,6 +700,8 @@ class Board:
             self.log(f"상세 hydration 실패 — 기존 inventory 유지: {result}")
             return
         self.rows = result
+        self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
+        self.summary_var.set(_summary_text(self.rows))
         self._render_projects()
         self._render_cards(self.selected)
         self._update_action_state()
@@ -739,11 +750,7 @@ class Board:
         else:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
-        from actl.core.projection import runtime_counts
-
-        counts = runtime_counts(self.rows)
-        self.summary_var.set(" · ".join([f"Runtimes {len(self.rows)}"] +
-                                        [f"{key} {value}" for key, value in counts.items()]))
+        self.summary_var.set(_summary_text(self.rows))
         self.set_status(f"ASUS ● CONNECTED · {len(self.rows)} runtimes" if self.ssh_target else f"{len(self.rows)} runtimes")
         self._render_projects()
         if not quiet:
