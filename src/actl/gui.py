@@ -23,23 +23,23 @@ from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
-BG = "#f5f5f7"
-PANEL = "#ffffff"
-PANEL2 = "#f2f2f7"
-LINE = "#d2d2d7"
-TXT = "#1d1d1f"
-DIM = "#6e6e73"
-NEON = "#0066cc"
-MAGENTA = "#1d1d1f"
-LIME = "#248a3d"
-OK = "#248a3d"
-WARN = "#b25000"
-BAD = "#c9342f"
+BG = "#0B0D10"
+PANEL = "#12151A"
+PANEL2 = "#161A20"
+LINE = "#262B33"
+TXT = "#E6E8EC"
+DIM = "#9AA3AE"
+NEON = "#7FD4C1"
+MAGENTA = "#7FD4C1"
+LIME = "#7FD4C1"
+OK = "#7FD4C1"
+WARN = "#E8C270"
+BAD = "#E0726C"
 ACC = NEON
 FONT = ("Segoe UI", 10)
-FONT_BIG = ("Segoe UI", 14, "bold")
-FONT_HDR = ("Segoe UI", 10, "bold")
-GLOBAL_NAV = "#000000"
+FONT_BIG = ("JetBrains Mono", 14, "bold")
+FONT_HDR = ("JetBrains Mono", 10, "bold")
+GLOBAL_NAV = PANEL2
 STATUS_COLOR = {
     "UP": OK, "WORKING": OK, "IDLE": OK, "TRANSPORT_BUSY": WARN,
     "DEGRADED": WARN, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM,
@@ -212,16 +212,16 @@ class Board:
         style.configure("TLabel", background=PANEL, foreground=TXT, font=FONT)
         style.configure("Title.TLabel", background=BG, foreground=TXT, font=FONT_HDR)
         style.configure("TButton", font=FONT, padding=4)
-        style.configure("Primary.TButton", background=ACC, foreground="white")
+        style.configure("Primary.TButton", background=ACC, foreground=BG)
 
     def _btn(self, parent, text: str, fn, primary: bool = False):
         import tkinter as tk
 
         bg = ACC if primary else PANEL
-        fg = "white" if primary else ACC
+        fg = BG if primary else ACC
         return tk.Button(parent, text=text, command=fn, bg=bg, fg=fg,
-                         activebackground="#005bb5" if primary else PANEL2,
-                         activeforeground="white" if primary else TXT,
+                         activebackground=ACC if primary else PANEL2,
+                         activeforeground=BG if primary else TXT,
                          relief="flat", borderwidth=0, padx=15 if primary else 12,
                          pady=8 if primary else 6, cursor="hand2", font=FONT)
 
@@ -233,22 +233,22 @@ class Board:
         top = tk.Frame(self.root, bg=GLOBAL_NAV)
         top.pack(fill="x")
         conn = f"SSH · {self.ssh_target}" if self.ssh_target else "LOCAL"
-        tk.Label(top, text="JUACTL", bg=GLOBAL_NAV, fg="white",
+        tk.Label(top, text="JUACTL", bg=GLOBAL_NAV, fg=TXT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
-        tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg="#a1a1a6",
-                 font=("Segoe UI", 9)).pack(side="left", pady=12)
+        tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg=DIM,
+                 font=FONT).pack(side="left", pady=12)
         tk.Button(top, text="업데이트", command=self.on_update,
                   bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
-                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
+                  activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
         self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
                   bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
-                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
+                  activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
         self.summary_var = tk.StringVar(value="에이전트 0 · 작업 중 0 · 대기 0 · 문제 0 · 확인 중 0")
-        tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg="#a1a1a6",
+        tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="left", padx=8)
         self.status_var = tk.StringVar(value="준비")
-        tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg="#a1a1a6",
+        tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="right", padx=10)
 
         main = ttk.Frame(self.root, padding=(16, 14, 16, 16))
@@ -266,7 +266,7 @@ class Board:
         self.project_buttons.pack(fill="x", padx=8)
         self.project_counts = tk.StringVar(value=_state_message("loading"))
         tk.Label(sidebar, textvariable=self.project_counts, bg=PANEL, fg=DIM,
-                 font=("Segoe UI", 9), justify="left", anchor="w").pack(fill="x", padx=12, pady=10)
+                 font=FONT, justify="left", anchor="w").pack(fill="x", padx=12, pady=10)
         tk.Label(sidebar, text="확인 필요", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
         self.attention_frame = tk.Frame(sidebar, bg=PANEL)
         self.attention_frame.pack(fill="x", padx=8)
@@ -289,9 +289,9 @@ class Board:
         self.filter_mode = tk.StringVar(value="전체")
         mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "결과 도착", "작업중", "Prompt 대기", "연결됨",
                                   command=lambda _v: self._render_cards(self.selected))
-        mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white",
+        mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground=BG,
                             relief="flat", highlightthickness=0)
-        mode_menu["menu"].configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white")
+        mode_menu["menu"].configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground=BG)
         mode_menu.pack(side="right")
         self.cards: dict[str, tk.Frame] = {}
         self.agent_cards = tk.Frame(center, bg=BG)
@@ -304,9 +304,9 @@ class Board:
         tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG,
                  wraplength=330, justify="left").grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
         self.detail_var = tk.StringVar(value="Machine · Project · Agent · Role · State · Result")
-        tk.Label(right, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=("Segoe UI", 9),
+        tk.Label(right, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=FONT,
                  anchor="w", justify="left", wraplength=330).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
-        self.preview = tk.Text(right, wrap="none", font=("Cascadia Mono", 10), bg=GLOBAL_NAV, fg="#f5f5f7",
+        self.preview = tk.Text(right, wrap="none", font=("Cascadia Mono", 10), bg=GLOBAL_NAV, fg=TXT,
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.preview.grid(row=2, column=0, sticky="nsew", padx=14)
         self.resp = self.preview
@@ -326,7 +326,7 @@ class Board:
                                      font=FONT_HDR, justify="left", anchor="w", wraplength=330)
         self.notice_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
         tk.Label(right, text="Prompt · Ctrl+Enter", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
-        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg="#fafafa", fg=DIM,
+        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL2, fg=DIM,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.msg.grid(row=6, column=0, sticky="ew", padx=14, pady=2)
         self.msg.insert("1.0", PROMPT_PLACEHOLDER)
@@ -334,7 +334,7 @@ class Board:
         self.msg.bind("<FocusOut>", lambda _e: self._restore_prompt_placeholder())
         sendrow = tk.Frame(right, bg=PANEL)
         sendrow.grid(row=7, column=0, sticky="ew", pady=2, padx=14)
-        self.send_btn = tk.Button(sendrow, text="보내기", command=self.on_send, bg=ACC, fg="white",
+        self.send_btn = tk.Button(sendrow, text="보내기", command=self.on_send, bg=ACC, fg=BG,
                                   relief="flat", padx=12, pady=6)
         self.send_btn.pack(side="left")
         self.action_buttons["SEND PROMPT"] = self.send_btn
@@ -344,7 +344,7 @@ class Board:
         tk.Button(sendrow, text="다시 시도", command=self.refresh,
                   bg=PANEL, fg=ACC, activebackground=PANEL2, relief="flat", cursor="hand2",
                   font=FONT).pack(side="left", padx=6)
-        self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=("Cascadia Mono", 9),
+        self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=("Cascadia Mono", 10),
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
         self.root.bind("<Control-k>", lambda _e: self.command_palette())
@@ -853,7 +853,7 @@ class Board:
             button = tk.Button(self.project_buttons, text=label, anchor="w", justify="left",
                                bg=ACC if ((name == "ALL PROJECTS" and self.project_filter is None) or
                                           name == self.project_filter) else PANEL,
-                               fg="white" if ((name == "ALL PROJECTS" and self.project_filter is None) or
+                               fg=BG if ((name == "ALL PROJECTS" and self.project_filter is None) or
                                                name == self.project_filter) else TXT,
                                relief="flat", padx=8, pady=6,
                                command=lambda value=name: self.select_project(value))
@@ -865,11 +865,11 @@ class Board:
         attention = attention_rows(self.rows)
         for row in attention[:8]:
             label = f"{row.get('project', 'UNASSIGNED')} · {row['display']} · {row.get('role', 'UNKNOWN')} · {row.get('control_reason') or row.get('runtime_state', row.get('state'))}\n  Reason: {row.get('control_detail', 'Founder action may be required')}"
-            tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg="#fff7ed", fg=WARN,
+            tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg=PANEL2, fg=WARN,
                       relief="flat", padx=6, pady=4,
                       command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)
         if not attention:
-            tk.Label(self.attention_frame, text="없음", bg=PANEL, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=6)
+            tk.Label(self.attention_frame, text="없음", bg=PANEL, fg=DIM, font=FONT).pack(anchor="w", padx=6)
 
     def select_project(self, project: str) -> None:
         self.project_filter = None if project == "ALL PROJECTS" else project
@@ -906,7 +906,7 @@ class Board:
             glyph = STATUS_GLYPH.get(r["state"], "·")
             color = STATUS_COLOR.get(r["state"], TXT)
             card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=ACC if r["runtime_key"] == selected else LINE,
-                            highlightthickness=2 if r["runtime_key"] == selected else 1,
+                            highlightthickness=1,
                             cursor="hand2")
             card.pack(fill="x", pady=4)
             top = tk.Frame(card, bg=PANEL)
@@ -924,7 +924,7 @@ class Board:
             if r.get("activity_state") == "RUNNING":
                 activity = "RUNNING ◐ · 작업중"
             phase_label = tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM,
-                                   font=("Segoe UI", 9), anchor="w", justify="left")
+                                   font=FONT, anchor="w", justify="left")
             phase_label.pack(fill="x", padx=8, pady=(0, 6))
             self.motion_labels[r["runtime_key"]] = phase_label
             card.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
@@ -947,7 +947,7 @@ class Board:
             row = next((r for r in self.rows if r["runtime_key"] == name), None)
             color = STATUS_COLOR.get(row["state"], TXT) if row else LINE
             card.configure(highlightbackground=color,
-                           highlightthickness=2 if name == agent else 0)
+                           highlightthickness=1)
 
     def _update_action_state(self) -> None:
         row = self.current()
@@ -1604,7 +1604,7 @@ class Board:
             dialog.destroy()
             board.destroy()
 
-        tk.Button(dialog, text="검증 후 매핑", command=apply, bg=ACC, fg="white",
+        tk.Button(dialog, text="검증 후 매핑", command=apply, bg=ACC, fg=BG,
                   relief="flat", padx=16, pady=8).pack(anchor="e", padx=16, pady=(4, 16))
         dialog.bind("<Return>", lambda _e: apply())
         dialog.bind("<Escape>", lambda _e: dialog.destroy())
