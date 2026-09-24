@@ -53,6 +53,16 @@ STATUS_GLYPH = {
 PANE_BOARD_LABELS_KEY = "pane_board_labels"
 
 
+def _state_message(kind: str, detail: str = "") -> str:
+    messages = {
+        "loading": "ASUS에서 에이전트를 찾는 중…",
+        "unreachable": "ASUS에 연결할 수 없습니다. ASUS 전원과 네트워크를 확인한 뒤 [다시 시도]를 누르세요.",
+        "empty": "ASUS에서 실행 중인 에이전트가 없습니다. ASUS tmux에서 에이전트를 시작하면 자동으로 나타납니다.",
+    }
+    message = messages[kind]
+    return f"{message} ({detail})" if kind == "unreachable" and detail else message
+
+
 def _pane_board_label(config: dict, pane_id: str, fallback: str) -> str:
     labels = config.get(PANE_BOARD_LABELS_KEY, {})
     label = labels.get(pane_id) if isinstance(labels, dict) else None
@@ -252,7 +262,7 @@ class Board:
         self.project_filter: str | None = None
         self.project_buttons = tk.Frame(sidebar, bg=PANEL)
         self.project_buttons.pack(fill="x", padx=8)
-        self.project_counts = tk.StringVar(value="프로젝트를 검색 중…")
+        self.project_counts = tk.StringVar(value=_state_message("loading"))
         tk.Label(sidebar, textvariable=self.project_counts, bg=PANEL, fg=DIM,
                  font=("Segoe UI", 9), justify="left", anchor="w").pack(fill="x", padx=12, pady=10)
         tk.Label(sidebar, text="NEEDS ATTENTION", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
@@ -326,6 +336,9 @@ class Board:
         self.log_toggle = tk.Button(sendrow, text="▸ diagnostics", command=self.toggle_log,
                                     bg=PANEL, fg=DIM, activebackground=PANEL2, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
+        tk.Button(sendrow, text="다시 시도", command=self.refresh,
+                  bg=PANEL, fg=ACC, activebackground=PANEL2, relief="flat", cursor="hand2",
+                  font=FONT).pack(side="left", padx=6)
         self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=("Cascadia Mono", 9),
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
@@ -736,18 +749,25 @@ class Board:
                 return
         self.refreshing = True
         self.set_status("새로고침 중…")
+        self.project_counts.set(_state_message("loading"))
         if not quiet:
             self.log("새로고침 중…")
         self._bg(self.rows_now, lambda r: self._refresh_done(r, quiet))
 
     def _refresh_done(self, result, quiet: bool = False) -> None:
-        import tkinter as tk
-        from tkinter import ttk
-
         if isinstance(result, Exception):
             self.refreshing = False
-            self.set_status("새로고침 실패")
+            self.rows = []
+            self.selected = None
+            message = _state_message("unreachable", str(result))
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", message)
+            self.project_counts.set(message)
+            self._render_cards()
+            self._render_projects()
+            self.set_status("ASUS 연결 안 됨")
             self.log(f"새로고침 실패: {result}")
+            self._update_action_state()
             return
         prev_sel = self.selected
         from actl.core.events import detect_events
@@ -766,16 +786,22 @@ class Board:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
         self.summary_var.set(_summary_text(self.rows))
-        self.set_status(f"ASUS ● CONNECTED · {len(self.rows)} runtimes" if self.ssh_target else f"{len(self.rows)} runtimes")
+        self.set_status("ASUS 연결됨 · 에이전트 0" if not self.rows else
+                        (f"ASUS ● CONNECTED · {len(self.rows)} runtimes" if self.ssh_target else f"{len(self.rows)} runtimes"))
         self._render_projects()
+        if not self.rows:
+            message = _state_message("empty")
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", message)
+            self.project_counts.set(message)
         if not quiet:
             self.log(f"새로고침 완료 ({len(self.rows)} runtime instances)")
         if self.rows:
             keep = prev_sel if any(r["runtime_key"] == prev_sel for r in self.rows) else self.rows[0]["runtime_key"]
             self.selected = keep
             self._highlight(keep)
-            self._update_action_state()
             self.on_select()
+        self._update_action_state()
         self._start_hydration()
         self.refreshing = False
 
@@ -807,7 +833,8 @@ class Board:
                                relief="flat", padx=8, pady=6,
                                command=lambda value=name: self.select_project(value))
             button.pack(fill="x", pady=2)
-        self.project_counts.set(f"{len(self.rows)} runtime instances · {len(counts)} projects")
+        self.project_counts.set(_state_message("empty") if not self.rows else
+                                f"{len(self.rows)} runtime instances · {len(counts)} projects")
         for child in self.attention_frame.winfo_children():
             child.destroy()
         attention = attention_rows(self.rows)
@@ -882,7 +909,8 @@ class Board:
                 w.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
             self.cards[r["runtime_key"]] = card
         if not visible:
-            tk.Label(self.agent_cards, text="조건에 맞는 에이전트 없음", bg=BG, fg=DIM,
+            no_match = _state_message("empty") if not self.project_filter and not query and mode == "전체" else "조건에 맞는 에이전트 없음"
+            tk.Label(self.agent_cards, text=no_match, bg=BG, fg=DIM,
                      font=FONT).pack(anchor="w", padx=8, pady=8)
 
     def _highlight(self, agent: str) -> None:
@@ -902,7 +930,7 @@ class Board:
             if label == "SEND PROMPT":
                 self.action_buttons[label].configure(state="normal" if enabled else "disabled")
             else:
-                ready = bool(row and row.get("control_ready"))
+                ready = bool(row is not None and row.get("control_ready"))
                 self.action_buttons[label].configure(state="normal" if ready else "disabled")
 
     def select_agent(self, agent: str) -> None:
