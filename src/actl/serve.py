@@ -68,6 +68,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
   button:hover { border-color:var(--neon); color:var(--neon); }
   button.primary { background:#003844; color:var(--neon); border-color:var(--neon); }
   button:disabled { opacity:.4; cursor:default; }
+  .send-confirm { border:1px solid var(--warn); border-radius:6px; padding:8px; color:var(--warn); font-size:12px; }
+  .send-confirm .btns { margin:8px 0 0; }
   .cards { display:flex; flex-direction:column; gap:8px; }
   .card { border:1px solid var(--line); border-radius:3px; padding:9px 10px; cursor:pointer; background:rgba(12,13,25,.82); position:relative; overflow:hidden; transition:border-color .12s, transform .12s, background .12s; }
   .card::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.1; background-image:radial-gradient(var(--neon) .6px, transparent .7px); background-size:6px 6px; transform:translateX(18px); }
@@ -120,6 +122,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
     <h2>메시지 전송</h2>
     <textarea id="msg" placeholder="선택한 에이전트 pane에 보낼 메시지… (Ctrl+Enter 전송)"></textarea>
     <div class="btns"><button class="primary" onclick="doSend()">➤ 전송</button></div>
+    <div class="send-confirm" id="sendConfirm" hidden role="alert" aria-live="polite">
+      <div id="sendConfirmText"></div>
+      <div class="btns"><button class="primary" id="sendConfirmButton" onclick="confirmSend()">보내기</button><button onclick="cancelSend()">취소</button></div>
+    </div>
     <h2>pane 보드</h2>
     <div class="log" id="board"></div>
     <h2>이벤트 로그</h2>
@@ -239,14 +245,25 @@ async function showBoard(){
   document.getElementById('preview').textContent = document.getElementById('board').innerText;
   log("pane 보드 표시 — 행 클릭으로 즉시 매핑");
 }
-async function doSend(){
+function cancelSend(){ document.getElementById('sendConfirm').hidden=true; }
+function doSend(){
   if(!SEL) return;
   const v = document.getElementById('msg').value.trim();
   if(!v){ log("빈 메시지"); return; }
-  if(!confirm(`${SEL}에 메시지를 전송할까요?\n\n${v.slice(0,160)}${v.length>160?'…':''}`)) return;
+  const busy = (ROWS.find(a=>a.agent===SEL)||{}).activity_state === 'RUNNING';
+  document.getElementById('sendConfirmText').textContent = busy
+    ? '작업 중이에요 — 지금 보내면 하던 일에 끼어들 수 있어요'
+    : `${SEL}에 메시지를 보내시겠어요?`;
+  document.getElementById('sendConfirmButton').textContent = busy ? '지금 보내기' : '보내기';
+  document.getElementById('sendConfirm').hidden = false;
+}
+async function confirmSend(){
+  const v = document.getElementById('msg').value.trim();
+  if(!SEL || !v){ cancelSend(); return; }
   try {
     const d = await api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:SEL,text:v})});
     document.getElementById('msg').value = "";
+    cancelSend();
     log(`${d.display}에 전송됨 (${d.target})`);
   } catch(e){ log("전송 실패: "+e.message); }
 }
