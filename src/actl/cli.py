@@ -251,7 +251,8 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     if not result.text:
         from actl.core.audit import record
 
-        record("copy", agent=agent, target=target, ok=False, source=result.source, confidence=result.confidence)
+        record("copy", agent=agent, target=target, ok=False, source=result.source,
+               confidence=result.confidence, detail=result.detail)
         print("아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요")
         return 1
     if print_only:

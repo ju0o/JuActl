@@ -21,6 +21,25 @@ def test_help_unknown_send_and_copy_messages_are_korean(monkeypatch):
     assert "No response text found" not in text
 
 
+def test_copy_no_result_keeps_reason_in_audit(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(cli, "_resolve_live_target", lambda *_: "%0")
+    monkeypatch.setattr(
+        cli,
+        "extract_last_response",
+        lambda *_: CopyResult(None, "codex-rollout", "none", "No completed assistant AgentMessage in matched Codex rollout"),
+    )
+    from actl.core import audit
+
+    monkeypatch.setattr(audit, "record", lambda event, **fields: captured.update(event=event, **fields))
+    out = io.StringIO()
+    with redirect_stdout(out):
+        cli._copy({}, "codex")
+    assert captured["detail"] == "No completed assistant AgentMessage in matched Codex rollout"
+    assert "아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요" in out.getvalue()
+    assert "No completed assistant AgentMessage" not in out.getvalue()
+
+
 def test_send_and_osc52_messages_use_korean(monkeypatch):
     monkeypatch.setattr(cli, "ensure_config", lambda: None)
     monkeypatch.setattr(cli, "load_config", lambda: {})
