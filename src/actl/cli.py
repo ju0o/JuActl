@@ -684,13 +684,14 @@ def _apply_discovery(config: dict, detections: list[Detection] | None = None) ->
     updated, changes = reconcile(config, detections)
     if changes:
         save_config(updated)
-    mappings = []
-    for agent in AGENTS:
-        target = updated.get("agents", {}).get(agent, {}).get("target")
-        previous = config.get("agents", {}).get(agent, {}).get("target")
-        if target and target != previous:
-            mappings.append(f"{AGENTS[agent].display_name} → {target}")
-    summary = ", ".join(mappings) or "변경 없음"
+    summary_parts = []
+    for change in changes:
+        agent, detail = change.split(": ", 1)
+        label = AGENTS[agent].display_name
+        summary_parts.append(
+            f"{label} → {detail}" if detail != "stale mapping removed" else f"{label} 연결 해제"
+        )
+    summary = ", ".join(summary_parts) or "변경 없음"
     print(f"연결했어요: {summary} (이전 설정은 백업해 뒀어요)")
     return updated if changes else config
 

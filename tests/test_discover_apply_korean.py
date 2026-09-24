@@ -36,6 +36,22 @@ def test_discover_apply_message_is_connected_and_not_read_only(monkeypatch):
     assert "Discovery is read-only" not in text
 
 
+def test_discover_apply_reports_stale_mapping_removal(monkeypatch):
+    monkeypatch.setattr(cli, "backup_config", lambda: "/tmp/backup.json")
+    monkeypatch.setattr(cli, "save_config", lambda _: None)
+    monkeypatch.setattr(
+        cli,
+        "reconcile",
+        lambda *_: ({"agents": {}}, ["codex: stale mapping removed"]),
+    )
+    output = io.StringIO()
+    with redirect_stdout(output):
+        cli._apply_discovery({"agents": {"codex": {"target": "%9"}}}, [])
+    text = output.getvalue()
+    assert "Codex 연결 해제" in text
+    assert "변경 없음" not in text
+
+
 def test_help_descriptions_are_korean():
     output = io.StringIO()
     with redirect_stdout(output):
