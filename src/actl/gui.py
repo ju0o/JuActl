@@ -104,6 +104,14 @@ def _state_message(kind: str, detail: str = "") -> str:
     return message
 
 
+def _send_failure_text(detail: str, contention: bool = False) -> str:
+    return (
+        "ASUS가 다른 작업 중이라 보내지 못했어요 — 잠시 후 다시 보내 주세요"
+        if contention
+        else "보내지 못했어요 — 잠시 후 다시 보내기를 눌러 주세요"
+    )
+
+
 def _pane_board_label(config: dict, pane_id: str, fallback: str) -> str:
     labels = config.get(PANE_BOARD_LABELS_KEY, {})
     label = labels.get(pane_id) if isinstance(labels, dict) else None
@@ -2104,10 +2112,9 @@ class Board:
                 detail = str(result) or type(result).__name__
                 from actl.core.remote_scheduler import is_transport_contention
 
-                if is_transport_contention(result):
-                    self.notify(f"전송 실패: 원격 통신 대기 중 (매핑 DOWN 아님): {detail[:120]}", "bad")
-                else:
-                    self.notify(f"전송 실패: {detail[:120]}", "bad")
+                contention = is_transport_contention(result)
+                self.log(f"전송 실패: {detail}" + (" (원격 통신 대기 중 · 매핑 DOWN 아님)" if contention else ""))
+                self.notify(_send_failure_text(detail, contention), "bad")
                 return
             status, detail, staged = result
             if status == "acked":
@@ -2128,7 +2135,8 @@ class Board:
             else:
                 self.set_status(SEND_STATE_KO[SEND_FAILED])
                 self.loop_phase = "READY"
-                self.notify(f"전송 실패: {str(detail)[:120]}", "bad")
+                self.log(f"전송 실패: {detail}")
+                self.notify(_send_failure_text(detail), "bad")
                 # Failed after possible commit: do not restore Prompt (avoid duplicate).
                 # Failed before commit: Prompt was never cleared.
 
