@@ -3,11 +3,13 @@ from __future__ import annotations
 import os
 import queue
 import re
+import select
 import subprocess
 import shlex
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +26,69 @@ enforce_direct_writer_guard: bool = True
 
 class TmuxError(RuntimeError):
     pass
+
+
+PANE_LOCK_ERROR = "다른 곳에서 보내는 중이에요. 잠시 뒤 다시 보내 주세요."
+
+
+def _pane_lock_path(target: str) -> Path:
+    return _pane_lock_dir() / _pane_lock_name(target)
+
+
+def _pane_lock_dir() -> Path:
+    return Path(os.environ.get("ACTL_STATE_PATH", "~/.local/state/actl/state.json")).expanduser().parent
+
+
+def _pane_lock_name(target: str) -> str:
+    safe_target = re.sub(r"[^A-Za-z0-9_.-]", "_", target)
+    return f"pane-{safe_target}.lock"
+
+
+def _remote_pane_lock_command(lock_path: Path) -> str:
+    path = str(lock_path)
+    return f"flock -x -w 2 {path if path.startswith('~/') else shlex.quote(path)} sh -c 'echo acquired; cat'"
+
+
+@contextmanager
+def _pane_lock(target: str):
+    lock_path = _pane_lock_path(target)
+    if REMOTE_SSH_TARGET:
+        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET, _remote_pane_lock_command(Path("~/.local/state/actl") / _pane_lock_name(target))]
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **_no_window())
+        try:
+            assert process.stdout is not None
+            ready, _, _ = select.select([process.stdout], [], [], 2.0)
+            if not ready or process.stdout.readline() != b"acquired\n":
+                process.kill()
+                process.wait()
+                raise TmuxError(PANE_LOCK_ERROR)
+            yield
+        finally:
+            if process.poll() is None:
+                if process.stdin is not None:
+                    process.stdin.close()
+                try:
+                    process.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+                    process.wait()
+        return
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    import fcntl
+    with lock_path.open("a+b") as handle:
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TmuxError(PANE_LOCK_ERROR)
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _maybe_guard_direct_writer(
@@ -588,68 +653,69 @@ def send_prompt_staged(
                 )
             record("pre_send_hook", True)
 
-        try:
-            if REMOTE_SSH_TARGET:
-                # The persistent remote process cannot see MainPC temp paths.
-                # tmux control mode's double-quoted argument preserves LF/UTF-8.
-                _run([*base, "set-buffer", "-b", buffer_name, prompt])
-            else:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
-                    fh.write(prompt)
-                    tmp_path = Path(fh.name)
-                _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
-            record("load_buffer", True)
-            side_effect = SIDE_EFFECT_POSSIBLE
-        except Exception as exc:
-            record("load_buffer", False, str(exc))
-            return _stage_result(
-                stages,
-                ok=False,
-                side_effect=side_effect,
-                error=str(exc),
-                buffer_name=buffer_name,
-            )
-
-        try:
-            # tmux 3.6: -p emits bracketed-paste delimiters only when the target
-            # application asked for them; -r preserves LF rather than translating
-            # every line to CR. This keeps one buffer insertion as one prompt.
-            _run([*base, "paste-buffer", "-p", "-r", "-b", buffer_name, "-t", target, "-d"])
-            record("paste_buffer", True)
-            side_effect = SIDE_EFFECT_OBSERVED
-        except Exception as exc:
-            record("paste_buffer", False, str(exc))
-            return _stage_result(
-                stages,
-                ok=False,
-                side_effect=SIDE_EFFECT_POSSIBLE,
-                delivery_disposition="DELIVERY_AMBIGUOUS",
-                error=str(exc),
-                buffer_name=buffer_name,
-            )
-
-        if press_enter:
+        with _pane_lock(target):
             try:
-                _run([*base, "send-keys", "-t", target, "Enter"])
-                record("enter", True)
+                if REMOTE_SSH_TARGET:
+                    # The persistent remote process cannot see MainPC temp paths.
+                    # tmux control mode's double-quoted argument preserves LF/UTF-8.
+                    _run([*base, "set-buffer", "-b", buffer_name, prompt])
+                else:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
+                        fh.write(prompt)
+                        tmp_path = Path(fh.name)
+                    _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
+                record("load_buffer", True)
+                side_effect = SIDE_EFFECT_POSSIBLE
             except Exception as exc:
-                record("enter", False, str(exc))
+                record("load_buffer", False, str(exc))
                 return _stage_result(
                     stages,
                     ok=False,
-                    side_effect=SIDE_EFFECT_OBSERVED,
+                    side_effect=side_effect,
+                    error=str(exc),
+                    buffer_name=buffer_name,
+                )
+
+            try:
+                # tmux 3.6: -p emits bracketed-paste delimiters only when the target
+                # application asked for them; -r preserves LF rather than translating
+                # every line to CR. This keeps one buffer insertion as one prompt.
+                _run([*base, "paste-buffer", "-p", "-r", "-b", buffer_name, "-t", target, "-d"])
+                record("paste_buffer", True)
+                side_effect = SIDE_EFFECT_OBSERVED
+            except Exception as exc:
+                record("paste_buffer", False, str(exc))
+                return _stage_result(
+                    stages,
+                    ok=False,
+                    side_effect=SIDE_EFFECT_POSSIBLE,
                     delivery_disposition="DELIVERY_AMBIGUOUS",
                     error=str(exc),
                     buffer_name=buffer_name,
                 )
 
-        return _stage_result(
-            stages,
-            ok=True,
-            side_effect=side_effect,
-            delivery_disposition="TRANSPORT_SENT",
-            buffer_name=buffer_name,
-        )
+            if press_enter:
+                try:
+                    _run([*base, "send-keys", "-t", target, "Enter"])
+                    record("enter", True)
+                except Exception as exc:
+                    record("enter", False, str(exc))
+                    return _stage_result(
+                        stages,
+                        ok=False,
+                        side_effect=SIDE_EFFECT_OBSERVED,
+                        delivery_disposition="DELIVERY_AMBIGUOUS",
+                        error=str(exc),
+                        buffer_name=buffer_name,
+                    )
+
+            return _stage_result(
+                stages,
+                ok=True,
+                side_effect=side_effect,
+                delivery_disposition="TRANSPORT_SENT",
+                buffer_name=buffer_name,
+            )
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
