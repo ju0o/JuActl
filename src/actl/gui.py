@@ -121,6 +121,14 @@ def _summary_text(rows: list[dict]) -> str:
             f"문제 {board['error']} · 확인 중 {board['unknown']}")
 
 
+def _project_sidebar_line(total: int, working: int, attention: int) -> str:
+    return f"에이전트 {total} · 작업 중 {working} · 확인 {attention}"
+
+
+def _attention_reason(reason: object) -> str:
+    return {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보"}.get(str(reason), "확인 필요")
+
+
 def inspector_truth(row: dict) -> dict[str, str]:
     """Derive all Founder-facing inspector fields from one runtime row.
 
@@ -246,9 +254,9 @@ class Board:
         top = tk.Frame(self.root, bg=GLOBAL_NAV)
         top.pack(fill="x")
         conn = f"SSH · {self.ssh_target}" if self.ssh_target else "LOCAL"
-        tk.Label(top, text="JUACTL", bg=GLOBAL_NAV, fg=TXT,
+        tk.Label(top, text="actl · 에이전트 보드", bg=GLOBAL_NAV, fg=TXT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
-        tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg=DIM,
+        tk.Label(top, text=conn, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT).pack(side="left", pady=12)
         tk.Button(top, text="업데이트", command=self.on_update,
                   bg=GLOBAL_NAV, fg=DIM, activebackground=GLOBAL_NAV,
@@ -260,7 +268,7 @@ class Board:
         self.summary_var = tk.StringVar(value="에이전트 0 · 작업 중 0 · 대기 0 · 문제 0 · 확인 중 0")
         tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="left", padx=8)
-        self.status_var = tk.StringVar(value="준비")
+        self.status_var = tk.StringVar(value="준비됨")
         tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="right", padx=10)
 
@@ -338,7 +346,7 @@ class Board:
         self.notice_label = tk.Label(right, textvariable=self.notice_var, bg=PANEL, fg=DIM,
                                      font=FONT_HDR, justify="left", anchor="w", wraplength=330)
         self.notice_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
-        tk.Label(right, text="Prompt · Ctrl+Enter", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
+        tk.Label(right, text="보낼 내용 · Ctrl+Enter로 보내기", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
         self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL2, fg=DIM,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.msg.grid(row=6, column=0, sticky="ew", padx=14, pady=2)
@@ -481,7 +489,7 @@ class Board:
         from actl.core import updater
 
         if not messagebox.askyesno("JuActl 업데이트", f"새 버전 {result['version']}을 설치할까요?", parent=self.root):
-            self.set_status("준비")
+            self.set_status("준비됨")
             return
         self.set_status("업데이트 다운로드 중…")
 
@@ -631,7 +639,7 @@ class Board:
             self.detail_var.set(truth["detail"])
             # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
             if self.loop_phase in {"READY"} and not self.send_inflight:
-                self.set_status("준비")
+                self.set_status("준비됨")
 
         self._bg(work, done)
 
@@ -831,7 +839,7 @@ class Board:
             self.preview.insert("end", message)
             self.project_counts.set(message)
         if not quiet:
-            self.log(f"새로고침 완료 ({len(self.rows)} runtime instances)")
+            self.log(f"새로고침 완료 (에이전트 {len(self.rows)}개)")
         if self.rows:
             keep = prev_sel if any(r["runtime_key"] == prev_sel for r in self.rows) else self.rows[0]["runtime_key"]
             self.selected = keep
@@ -862,7 +870,8 @@ class Board:
                 label = "전체"
             if name != "ALL PROJECTS":
                 total, working, attention = counts[name]
-                label = f"{name}\n  {total} runtime · {working} working · {attention} attention"
+                display_name = "프로젝트 미지정" if name == "UNASSIGNED" else name
+                label = f"{display_name}\n  {_project_sidebar_line(total, working, attention)}"
             button = tk.Button(self.project_buttons, text=label, anchor="w", justify="left",
                                bg=ACC if ((name == "ALL PROJECTS" and self.project_filter is None) or
                                           name == self.project_filter) else PANEL,
@@ -872,12 +881,12 @@ class Board:
                                command=lambda value=name: self.select_project(value))
             button.pack(fill="x", pady=2)
         self.project_counts.set(_state_message("empty") if not self.rows else
-                                f"{len(self.rows)} runtime instances · {len(counts)} projects")
+                                f"에이전트 {len(self.rows)} · 프로젝트 {len(counts)}")
         for child in self.attention_frame.winfo_children():
             child.destroy()
         attention = attention_rows(self.rows)
         for row in attention[:8]:
-            label = f"{row.get('project', 'UNASSIGNED')} · {row['display']} · {row.get('role', 'UNKNOWN')} · {row.get('control_reason') or row.get('runtime_state', row.get('state'))}\n  Reason: {row.get('control_detail', 'Founder action may be required')}"
+            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail') or row.get('control_reason'))}"
             tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg=PANEL2, fg=WARN,
                       relief="flat", padx=6, pady=4,
                       command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)
@@ -1374,7 +1383,7 @@ class Board:
                 groups.setdefault(session, {}).setdefault(window, []).append((pane, det))
             if not groups:
                 status.configure(text="live pane 없음")
-                self.set_status("준비")
+                self.set_status("준비됨")
                 return
             status.configure(text=f"{len(result)}개 pane · session/window/pane을 선택하세요")
             for session, windows in groups.items():
@@ -1393,7 +1402,7 @@ class Board:
                         )
                         pane_by_item[pid] = (pane, det)
                         node_targets[pid] = pane.target
-            self.set_status("준비")
+            self.set_status("준비됨")
 
         def selected_target() -> tuple[str, str] | None:
             selection = tree.selection()
