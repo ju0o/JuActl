@@ -3,14 +3,13 @@ from __future__ import annotations
 import os
 import queue
 import re
-import select
 import subprocess
 import shlex
 import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from actl.core.models import PaneInfo
@@ -44,7 +43,7 @@ def _pane_lock_name(target: str) -> str:
     return f"pane-{safe_target}.lock"
 
 
-def _remote_pane_lock_command(lock_path: Path) -> str:
+def _remote_pane_lock_command(lock_path: Path | PurePosixPath) -> str:
     path = str(lock_path)
     parent = str(lock_path.parent)
     quoted_path = path if path.startswith('~/') else shlex.quote(path)
@@ -56,12 +55,20 @@ def _remote_pane_lock_command(lock_path: Path) -> str:
 def _pane_lock(target: str):
     lock_path = _pane_lock_path(target)
     if REMOTE_SSH_TARGET:
-        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET, _remote_pane_lock_command(Path("~/.local/state/actl") / _pane_lock_name(target))]
+        remote_lock = PurePosixPath("~/.local/state/actl") / _pane_lock_name(target)
+        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET, _remote_pane_lock_command(remote_lock)]
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **_no_window())
         try:
             assert process.stdout is not None
-            ready, _, _ = select.select([process.stdout], [], [], 2.0)
-            if not ready or process.stdout.readline() != b"acquired\n":
+            acquired: list[bytes] = []
+            done = threading.Event()
+
+            def read_lock_ready() -> None:
+                acquired.append(process.stdout.readline())
+                done.set()
+
+            threading.Thread(target=read_lock_ready, daemon=True).start()
+            if not done.wait(2.0) or acquired != [b"acquired\n"]:
                 process.kill()
                 process.wait()
                 raise TmuxError(PANE_LOCK_ERROR)
