@@ -120,7 +120,17 @@ def test_result_ready_waits_for_real_post_send_change(monkeypatch):
         assert rows[0]["_result_ready"]
         assert gui._card_line(rows[0]).startswith("답이 왔어요")
         board.rows = rows
-        board._update_action_state()
+        board.hydrating = True
+        board.previous_rows = {"rk": {"activity_state": "IDLE", "result_hash": "old"}}
+        board.summary_var = _Var()
+        board._render_projects = lambda: None
+        board._render_cards = lambda _selected=None: None
+        board.pane_title = _Var()
+        board.detail_var = _Var()
+        board._diagnostic_runtime_key = None
+        board._request_preview = lambda *_args, **_kwargs: None
+        board._bg = lambda work, done: done(work())
+        board._hydration_done(rows)
         assert board.status_var.value == "답이 왔어요"
 
         copied = _board()

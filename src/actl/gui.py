@@ -916,9 +916,9 @@ class Board:
         self.summary_var.set(_summary_text(self.rows))
         self._render_projects()
         self._render_cards(self.selected)
-        self._update_action_state()
         if self.selected:
             self.on_select()
+        self._update_action_state()
         self.log("runtime detail hydration 완료")
 
     def refresh(self, quiet: bool = False) -> None:
@@ -1127,8 +1127,8 @@ class Board:
     def select_agent(self, agent: str) -> None:
         self.selected = agent
         self._highlight(agent)
-        self._update_action_state()
         self.on_select()
+        self._update_action_state()
 
     def current(self) -> dict | None:
         if self.selected:
