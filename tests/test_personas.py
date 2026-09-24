@@ -27,7 +27,7 @@ def test_persona_operator_refresh_is_event_first_with_health_fallback():
 def test_persona_dashboard_shows_live_runtimes_and_gates_controls():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert 'row.get("control_ready")' in gui
-    assert "LIVE RUNTIME INSTANCES" in gui
+    assert 'text="에이전트"' in gui
     assert 'return "결과 도착"' in gui
     assert 'return "작업중"' in gui
     assert 'return "Prompt 대기"' in gui
@@ -63,7 +63,7 @@ def test_persona_monitor_uses_one_surface_and_serializes_initial_board_load():
     refresh_done = gui.split("    def _refresh_done", 1)[1].split("    def _render_projects", 1)[0]
     assert "self.on_board" not in refresh_done
     assert '("PANE BOARD", self.on_board, False)' in gui
-    assert 'height=2' in gui
+    assert 'ScrolledText(right, height=5' in gui
 
 
 def test_persona_event_watch_throttles_output_bursts():

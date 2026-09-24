@@ -949,7 +949,7 @@ class Board:
         enabled = bool(row and row.get("control_ready")) and not self.send_inflight
         self.send_btn.configure(state="normal" if enabled else "disabled")
         for label in ("SEND PROMPT", "COPY RESULT", "FOCUS"):
-            ready = bool(row is not None and row.get("control_ready"))
+            ready = enabled if label == "SEND PROMPT" else bool(row is not None and row.get("control_ready"))
             self.action_buttons[label].configure(state="normal" if ready else "disabled")
 
     def select_agent(self, agent: str) -> None:
