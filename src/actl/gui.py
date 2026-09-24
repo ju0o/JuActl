@@ -811,8 +811,6 @@ class Board:
             self.selected = None
             message = _state_message("unreachable")
             self.connection_error = message
-            self.preview.delete("1.0", "end")
-            self.preview.insert("end", message)
             self._render_cards()
             self._render_projects()
             self.project_counts.set("연결 안 됨")

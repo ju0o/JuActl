@@ -66,7 +66,8 @@ def test_refresh_failure_shows_error_and_disables_actions():
     board._refresh_done(RuntimeError("timeout"))
 
     assert board.status_var.value == "ASUS 연결 안 됨"
-    assert board.preview.value == gui._state_message("unreachable")
+    assert board.preview.value == ""
+    assert board.connection_error == gui._state_message("unreachable")
     assert board.project_counts.value == "연결 안 됨"
     assert all(widget.states[-1] == "disabled" for widget in board.action_buttons.values())
 

@@ -54,7 +54,8 @@ def test_unreachable_message_is_plain_and_detail_is_logged():
     )
     board._refresh_done(RuntimeError(detail))
 
-    assert board.preview.value == gui._state_message("unreachable")
+    assert board.preview.value == ""
+    assert board.connection_error == gui._state_message("unreachable")
     assert board.project_counts.value == "연결 안 됨"
     assert detail in board.logw.value
 
