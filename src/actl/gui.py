@@ -1807,8 +1807,6 @@ class Board:
         _wait_row_key: str | None = None,
         _wait_text: str | None = None,
     ) -> None:
-        from tkinter import messagebox
-
         row = self.current()
         if not row or not row.get("control_ready"):
             self.notify("에이전트를 먼저 선택하세요", "warn")
@@ -1844,8 +1842,11 @@ class Board:
             return
         self._cancel_busy_wait()
         self._hide_busy_confirm()
-        if busy_choice is None and not _resend_confirmed and not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
-            return
+        if busy_choice is None and not _resend_confirmed:
+            from tkinter import messagebox
+
+            if not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+                return
         from actl.core.remote_scheduler import (
             KIND_SEND,
             P0_USER,
