@@ -1,4 +1,5 @@
 import ast
+import inspect
 from pathlib import Path
 
 
@@ -33,3 +34,14 @@ def test_prompt_has_one_send_button_and_five_lines():
     assert SOURCE.count('text="보내기"') == 1
     assert 'PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"' in SOURCE
     assert "ScrolledText(right, height=5" in SOURCE
+
+
+def test_placeholder_cannot_be_restored_while_focused_or_submitted():
+    from actl.gui import Board
+
+    restore = inspect.getsource(Board._restore_prompt_placeholder)
+    clear = inspect.getsource(Board._clear_prompt_at_submitted)
+    send = inspect.getsource(Board.on_send)
+    assert "self.msg.focus_get() is self.msg" in restore
+    assert "self._restore_prompt_placeholder()" in clear
+    assert "PROMPT_PLACEHOLDER in text" in send

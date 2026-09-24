@@ -367,9 +367,13 @@ class Board:
             self.msg.configure(fg=TXT)
 
     def _restore_prompt_placeholder(self) -> None:
-        if not self.msg.get("1.0", "end-1c").strip():
-            self.msg.configure(fg=DIM)
-            self.msg.insert("1.0", PROMPT_PLACEHOLDER)
+        if self.msg.get("1.0", "end-1c").strip():
+            return
+        if self.msg.focus_get() is self.msg:
+            self.msg.configure(fg=TXT)
+            return
+        self.msg.configure(fg=DIM)
+        self.msg.insert("1.0", PROMPT_PLACEHOLDER)
 
     def command_palette(self) -> None:
         import tkinter as tk
@@ -656,6 +660,7 @@ class Board:
         self.last_submitted_prompt = submitted_text
         try:
             self.msg.delete("1.0", "end")
+            self.msg.configure(fg=TXT)
             self._restore_prompt_placeholder()
         except Exception:
             pass
@@ -1617,7 +1622,7 @@ class Board:
             self.notify("이미 전송 중 — 완료될 때까지 대기", "warn")
             return
         text = self.msg.get("1.0", "end").strip()
-        if not text or text == PROMPT_PLACEHOLDER:
+        if not text or PROMPT_PLACEHOLDER in text:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
         if not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
