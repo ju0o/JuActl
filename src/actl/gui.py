@@ -157,6 +157,17 @@ def _save_pane_board_label(config: dict, pane_id: str, label: str) -> None:
     save_config(config)
 
 
+def _pane_action_failure_text(action: str) -> str:
+    messages = {
+        "rename": "이름을 바꾸지 못했어요",
+        "session_create": "session을 만들지 못했어요",
+        "window_create": "창을 만들지 못했어요",
+        "pane_split": "pane을 나누지 못했어요",
+        "pane_move": "pane을 옮기지 못했어요",
+    }
+    return f"{messages.get(action, 'pane 작업을 완료하지 못했어요')} — 새로고침 후 다시 시도해 주세요"
+
+
 def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
     """Return (display_text, is_fresh). Never wipe last-good pane with a timeout wall."""
     text = result if isinstance(result, str) else f"실패: {result}"
@@ -1667,7 +1678,8 @@ class Board:
 
             def done(result) -> None:
                 if isinstance(result, Exception):
-                    messagebox.showerror("이름 변경 실패", str(result), parent=top)
+                    self.log(f"이름 변경 실패: {result}")
+                    messagebox.showerror("이름 변경 실패", _pane_action_failure_text("rename"), parent=top)
                     self.set_status("이름 변경 실패")
                     return
                 top.destroy()
@@ -1682,7 +1694,8 @@ class Board:
             try:
                 tmux.create_session(name)
             except Exception as exc:
-                messagebox.showerror("session 생성 실패", str(exc), parent=top)
+                self.log(f"session 생성 실패: {exc}")
+                messagebox.showerror("session 생성 실패", _pane_action_failure_text("session_create"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -1707,7 +1720,8 @@ class Board:
             try:
                 tmux.create_window(session, name)
             except Exception as exc:
-                messagebox.showerror("window 생성 실패", str(exc), parent=top)
+                self.log(f"window 생성 실패: {exc}")
+                messagebox.showerror("window 생성 실패", _pane_action_failure_text("window_create"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -1724,7 +1738,8 @@ class Board:
             try:
                 tmux.split_pane(pane.pane_id)
             except Exception as exc:
-                messagebox.showerror("pane 생성 실패", str(exc), parent=top)
+                self.log(f"pane 생성 실패: {exc}")
+                messagebox.showerror("pane 생성 실패", _pane_action_failure_text("pane_split"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -1773,7 +1788,8 @@ class Board:
 
             def done(result) -> None:
                 if isinstance(result, Exception):
-                    messagebox.showerror("pane 이동 실패", str(result), parent=top)
+                    self.log(f"pane 이동 실패: {result}")
+                    messagebox.showerror("pane 이동 실패", _pane_action_failure_text("pane_move"), parent=top)
                     self.set_status("pane 이동 실패")
                     return
                 self.log(f"{pane.pane_id} → {destination} 이동됨")
