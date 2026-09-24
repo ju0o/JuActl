@@ -22,10 +22,9 @@ bash scripts/e2e_disposable.sh
 
 현재 운영 화면은 **JuActl Board**이며, **Hermes** 연동 맥락과 에이전트
 상태를 한국어 라벨로 표시한다. 현재 확인된 기본 흐름은
-**보내기 → 결과 → 복사**이고, 동시 전송 잠금은 진행 중이다. DA 응답 leak와
-SSH disconnect 원인은 아직 **조사 중**이다. 같은 pane에 대한 동시 전송을
-막는 writer guard와 단일 in-flight 전송 경로는 구현되어 있지만, 실제 보드에서
-중복 입력·결과·해제 순서를 확인하는 독립 운영 검증은 아직 필요하다.
+**보내기 → 결과 → 복사**이고, 같은 패널에 동시에 보내는 충돌 방지는 구현되어
+있다. 다만 실제 보드에서 중복 입력·결과·해제 순서를 확인하는 독립 운영 검증은
+아직 필요하다. DA 응답 누출과 SSH 연결 끊김의 원인은 아직 **조사 중**이다.
 Founder-only Windows E2E도 아직 **미검증**이다. 자세한 근거와 다음 단계는
 [BACKLOG.md](BACKLOG.md)와 [ROOT_CAUSE_REPORT.md](ROOT_CAUSE_REPORT.md)를
 참조한다.
