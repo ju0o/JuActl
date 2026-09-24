@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 from actl.core import remote, send_truth
 from actl.core import remote_scheduler as sched
@@ -291,3 +293,52 @@ def test_busy_send_requires_a_second_result_change():
     second, _ = send_truth.classify_result("codex", "%0", send_truth.result_hash("RESULT::JOB2"))
     assert second == send_truth.NEW_RESULT
     _reset()
+
+
+def test_gui_busy_prompt_is_inline_and_wait_chain_is_single_tokenized_send():
+    source = (Path(__file__).parents[1] / "src/actl/gui.py").read_text()
+    assert 'text="작업 중이에요. 끝나면 보낼까요, 지금 보낼까요?"' in source
+    assert "if busy_choice is None and row.get(\"activity_state\") == \"RUNNING\":" in source
+    assert "messagebox.askyesno(\"전송 확인\"" in source
+    assert "busy_choice == \"wait\"" in source
+    assert "_busy_wait_token" in source
+    assert "_busy_wait_after_id" in source
+    assert "_wait_row_key" in source
+    assert "busy_at_send=busy_choice == \"now\"" in source
+    assert "self._cancel_busy_wait()" in source
+
+
+def test_gui_wait_chain_sends_once_for_the_original_selection():
+    from actl.gui import Board
+
+    callbacks = []
+    cancelled = []
+    board = Board.__new__(Board)
+    board.root = SimpleNamespace(
+        after=lambda _delay, callback: callbacks.append(callback) or len(callbacks),
+        after_cancel=cancelled.append,
+    )
+    board._busy_wait_token = 0
+    board._busy_wait_after_id = None
+    board.send_inflight = False
+    board.rows = [{"runtime_key": "r1", "activity_state": "RUNNING"}]
+    board.selected = "r1"
+    board.current = lambda: next((r for r in board.rows if r["runtime_key"] == board.selected), None)
+    board._hide_busy_confirm = lambda: None
+    board.notify = lambda *_args: None
+    sent = []
+    board.on_send = lambda **kwargs: sent.append(kwargs)
+
+    board._wait_for_idle_send(board.current(), "first")
+    board._wait_for_idle_send(board.current(), "second")
+    callbacks[0]()
+    assert sent == []
+    assert cancelled == [1]
+    board.rows[0]["activity_state"] = "IDLE"
+    callbacks[1]()
+    assert sent == [{
+        "busy_choice": "wait",
+        "_wait_token": 2,
+        "_wait_row_key": "r1",
+        "_wait_text": "second",
+    }]

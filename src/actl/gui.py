@@ -200,6 +200,8 @@ class Board:
         self.preview_degraded: set[str] = set()
         self.preview_hold_until = 0.0
         self.send_inflight = False
+        self._busy_wait_token = 0
+        self._busy_wait_after_id = None
         self.last_submitted_prompt: str | None = None
         self.loop_phase = "READY"
         self.follow_preview_key: str | None = None
@@ -710,6 +712,41 @@ class Board:
 
     def _hide_busy_confirm(self) -> None:
         self.busy_confirm.pack_forget()
+
+    def _cancel_busy_wait(self) -> None:
+        self._busy_wait_token += 1
+        if self._busy_wait_after_id is not None:
+            try:
+                self.root.after_cancel(self._busy_wait_after_id)
+            except Exception:
+                pass
+            self._busy_wait_after_id = None
+
+    def _wait_for_idle_send(self, row: dict, text: str) -> None:
+        self._cancel_busy_wait()
+        token = self._busy_wait_token
+        runtime_key = row["runtime_key"]
+
+        def retry() -> None:
+            if token != self._busy_wait_token or self.send_inflight:
+                return
+            self._busy_wait_after_id = None
+            current = self.current()
+            if not current or current.get("runtime_key") != runtime_key:
+                self._hide_busy_confirm()
+                self.notify("선택한 에이전트가 바뀌어 전송을 취소했습니다", "warn")
+                return
+            if current.get("activity_state") == "RUNNING":
+                self._busy_wait_after_id = self.root.after(1000, retry)
+                return
+            self.on_send(
+                busy_choice="wait",
+                _wait_token=token,
+                _wait_row_key=runtime_key,
+                _wait_text=text,
+            )
+
+        self._busy_wait_after_id = self.root.after(1000, retry)
 
     def _show_busy_confirm(self) -> None:
         self.busy_confirm.pack(side="left", fill="x", expand=True, after=self.send_btn)
@@ -1654,7 +1691,14 @@ class Board:
         dialog.grab_set()
         menu.focus_set()
 
-    def on_send(self, *, busy_choice: str | None = None) -> None:
+    def on_send(
+        self,
+        *,
+        busy_choice: str | None = None,
+        _wait_token: int | None = None,
+        _wait_row_key: str | None = None,
+        _wait_text: str | None = None,
+    ) -> None:
         from tkinter import messagebox
 
         row = self.current()
@@ -1664,7 +1708,12 @@ class Board:
         if self.send_inflight:
             self.notify("이미 전송 중 — 완료될 때까지 대기", "warn")
             return
-        text = self.msg.get("1.0", "end").strip()
+        if _wait_token is not None and (
+            _wait_token != self._busy_wait_token
+            or row.get("runtime_key") != _wait_row_key
+        ):
+            return
+        text = _wait_text if _wait_text is not None else self.msg.get("1.0", "end").strip()
         if not text or PROMPT_PLACEHOLDER in text:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
@@ -1672,8 +1721,9 @@ class Board:
             self._show_busy_confirm()
             return
         if busy_choice == "wait" and row.get("activity_state") == "RUNNING":
-            self.root.after(1000, lambda: self.on_send(busy_choice="wait"))
+            self._wait_for_idle_send(row, text)
             return
+        self._cancel_busy_wait()
         self._hide_busy_confirm()
         if busy_choice is None and not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
