@@ -260,7 +260,7 @@ class Board:
         self.preview_inflight: set[str] = set()
         self.last_previews: dict[str, str] = {}
         self.preview_degraded: set[str] = set()
-        self.preview_hold_until = 0.0
+        self.preview_hold: tuple[str, float] | None = None
         self.send_inflight = False
         self._busy_wait_token = 0
         self._busy_wait_after_id = None
@@ -717,7 +717,10 @@ class Board:
             self.preview_inflight.discard(key)
             if self.selected != key:
                 return
-            if time.monotonic() < self.preview_hold_until:
+            hold = getattr(self, "preview_hold", None)
+            if hold is None and hasattr(self, "preview_hold_until"):
+                hold = (key, self.preview_hold_until)
+            if hold and hold[0] == key and time.monotonic() < hold[1]:
                 return
             live = next((r for r in self.rows if r.get("runtime_key") == key), None)
             if live is None:
@@ -741,7 +744,7 @@ class Board:
             self.pane_title.set(truth["title"])
             self.detail_var.set(truth["detail"])
             # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
-            if self.loop_phase in {"READY"} and not self.send_inflight:
+            if getattr(self, "loop_phase", "READY") in {"READY"} and not self.send_inflight:
                 self.set_status("준비됨")
 
         self._bg(work, done)
@@ -1190,10 +1193,15 @@ class Board:
         if not row:
             return
         self.selected = row["runtime_key"]
+        changed = getattr(self, "_preview_selection_key", None) != self.selected
+        self._preview_selection_key = self.selected
         truth = inspector_truth(row)
         # Synchronize title + detail + action identity before any async preview.
         self.pane_title.set(truth["title"])
         self.detail_var.set(truth["detail"])
+        if changed:
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", f"{truth['display']} 화면 불러오는 중…")
         if self._diagnostic_runtime_key != truth["runtime_key"]:
             self._diagnostic_runtime_key = truth["runtime_key"]
             self.log(truth["diagnostic"])
@@ -1381,7 +1389,7 @@ class Board:
                     self._update_action_state()
                     self._set_loop_phase(LOOP_COPIED, status=LOOP_STATE_KO[LOOP_COPIED])
                     self.notify(f"복사 완료 {result[2]}자", "ok")
-                    self.preview_hold_until = time.monotonic() + 8
+                    self.preview_hold = (row["runtime_key"], time.monotonic() + 8)
                     # Keep live pane visible; append concise confirmation above last preview.
                     prior = self.last_previews.get(row["runtime_key"]) or ""
                     self.preview.delete("1.0", "end")
