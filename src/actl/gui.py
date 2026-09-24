@@ -37,6 +37,8 @@ WARN = "#E8C270"
 BAD = "#E0726C"
 ACC = NEON
 FONT = ("Segoe UI", 10)
+MONO_FAMILIES = ("JetBrains Mono", "Cascadia Mono", "Consolas")
+FONT_MONO = (MONO_FAMILIES[0], 10)
 FONT_BIG = ("JetBrains Mono", 14, "bold")
 FONT_HDR = ("JetBrains Mono", 10, "bold")
 GLOBAL_NAV = PANEL2
@@ -52,6 +54,16 @@ STATUS_GLYPH = {
 }
 PANE_BOARD_LABELS_KEY = "pane_board_labels"
 PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"
+
+
+def _configure_fonts(root) -> None:
+    import tkinter.font as tkfont
+
+    family = next((name for name in MONO_FAMILIES if name in tkfont.families(root)), "Consolas")
+    global FONT_MONO, FONT_BIG, FONT_HDR
+    FONT_MONO = (family, 10)
+    FONT_BIG = (family, 14, "bold")
+    FONT_HDR = (family, 10, "bold")
 
 
 def _state_message(kind: str, detail: str = "") -> str:
@@ -229,6 +241,7 @@ class Board:
         import tkinter as tk
         from tkinter import ttk
 
+        _configure_fonts(self.root)
         self._style()
         top = tk.Frame(self.root, bg=GLOBAL_NAV)
         top.pack(fill="x")
@@ -238,11 +251,11 @@ class Board:
         tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg=DIM,
                  font=FONT).pack(side="left", pady=12)
         tk.Button(top, text="업데이트", command=self.on_update,
-                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
+                  bg=GLOBAL_NAV, fg=DIM, activebackground=GLOBAL_NAV,
                   activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
         self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
-                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
+                  bg=GLOBAL_NAV, fg=DIM, activebackground=GLOBAL_NAV,
                   activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
         self.summary_var = tk.StringVar(value="에이전트 0 · 작업 중 0 · 대기 0 · 문제 0 · 확인 중 0")
         tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg=DIM,
@@ -306,7 +319,7 @@ class Board:
         self.detail_var = tk.StringVar(value="Machine · Project · Agent · Role · State · Result")
         tk.Label(right, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=FONT,
                  anchor="w", justify="left", wraplength=330).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
-        self.preview = tk.Text(right, wrap="none", font=("Cascadia Mono", 10), bg=GLOBAL_NAV, fg=TXT,
+        self.preview = tk.Text(right, wrap="none", font=FONT_MONO, bg=GLOBAL_NAV, fg=TXT,
                                insertbackground=NEON, highlightthickness=0, borderwidth=0)
         self.preview.grid(row=2, column=0, sticky="nsew", padx=14)
         self.resp = self.preview
@@ -344,7 +357,7 @@ class Board:
         tk.Button(sendrow, text="다시 시도", command=self.refresh,
                   bg=PANEL, fg=ACC, activebackground=PANEL2, relief="flat", cursor="hand2",
                   font=FONT).pack(side="left", padx=6)
-        self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=("Cascadia Mono", 10),
+        self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=FONT_MONO,
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
         self.root.bind("<Control-k>", lambda _e: self.command_palette())
@@ -941,12 +954,8 @@ class Board:
                      font=FONT).pack(anchor="w", padx=8, pady=8)
 
     def _highlight(self, agent: str) -> None:
-        import tkinter as tk
-
         for name, card in self.cards.items():
-            row = next((r for r in self.rows if r["runtime_key"] == name), None)
-            color = STATUS_COLOR.get(row["state"], TXT) if row else LINE
-            card.configure(highlightbackground=color,
+            card.configure(highlightbackground=ACC if name == agent else LINE,
                            highlightthickness=1)
 
     def _update_action_state(self) -> None:
