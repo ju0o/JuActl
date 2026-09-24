@@ -379,6 +379,20 @@ class Board:
                   bg=PANEL, fg=ACC, relief="flat", padx=6).pack(side="left")
         tk.Button(self.busy_confirm, text="지금 보내기", command=lambda: self.on_send(busy_choice="now"),
                   bg=ACC, fg=BG, relief="flat", padx=6).pack(side="left", padx=4)
+        self.ambiguous_confirm = tk.Frame(sendrow, bg=PANEL)
+        tk.Label(
+            self.ambiguous_confirm, text="같은 내용을 다시 보낼까요?", bg=PANEL, fg=WARN,
+            font=FONT, anchor="w",
+        ).pack(side="left", padx=(8, 4))
+        tk.Button(
+            self.ambiguous_confirm, text="다시 보내기",
+            command=lambda: self.on_send(_resend_confirmed=True),
+            bg=ACC, fg=BG, relief="flat", padx=6,
+        ).pack(side="left")
+        tk.Button(
+            self.ambiguous_confirm, text="취소", command=self._cancel_ambiguous_retry,
+            bg=PANEL, fg=ACC, relief="flat", padx=6,
+        ).pack(side="left", padx=4)
         self.log_toggle = tk.Button(sendrow, text="▸ 자세한 기록", command=self.toggle_log,
                                     bg=PANEL, fg=DIM, activebackground=PANEL2, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
@@ -712,6 +726,14 @@ class Board:
 
     def _hide_busy_confirm(self) -> None:
         self.busy_confirm.pack_forget()
+
+    def _show_ambiguous_confirm(self, row: dict, text: str) -> None:
+        self._ambiguous_retry = (row["runtime_key"], text)
+        self.ambiguous_confirm.pack(side="left", fill="x", expand=True, after=self.send_btn)
+
+    def _cancel_ambiguous_retry(self) -> None:
+        self._ambiguous_retry = None
+        self.ambiguous_confirm.pack_forget()
 
     def _cancel_busy_wait(self) -> None:
         self._busy_wait_token += 1
@@ -1695,6 +1717,7 @@ class Board:
         self,
         *,
         busy_choice: str | None = None,
+        _resend_confirmed: bool = False,
         _wait_token: int | None = None,
         _wait_row_key: str | None = None,
         _wait_text: str | None = None,
@@ -1717,6 +1740,12 @@ class Board:
         if not text or PROMPT_PLACEHOLDER in text:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
+        pending_retry = getattr(self, "_ambiguous_retry", None)
+        if not _resend_confirmed and pending_retry == (row.get("runtime_key"), text):
+            self._show_ambiguous_confirm(row, text)
+            return
+        if _resend_confirmed:
+            self._cancel_ambiguous_retry()
         if busy_choice is None and row.get("activity_state") == "RUNNING":
             self._show_busy_confirm()
             return
@@ -1725,7 +1754,7 @@ class Board:
             return
         self._cancel_busy_wait()
         self._hide_busy_confirm()
-        if busy_choice is None and not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+        if busy_choice is None and not _resend_confirmed and not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
         from actl.core.remote_scheduler import (
             KIND_SEND,
@@ -1746,6 +1775,7 @@ class Board:
             START_ACKNOWLEDGED,
             SUBMITTED,
             begin_send,
+            delivery_ambiguous,
             set_send_state,
         )
 
@@ -1888,6 +1918,13 @@ class Board:
                         pass
                 staged = send_prompt_staged(row["target"], text, press_enter=True)
                 if not staged.get("ok"):
+                    if delivery_ambiguous(staged):
+                        set_send_state(
+                            row["agent"], row["target"], SEND_FAILED,
+                            error=str(staged.get("error") or "delivery ambiguous"),
+                            evidence={"path": "staged", **staged},
+                        )
+                        return ("ambiguous", staged.get("error") or "delivery ambiguous", staged)
                     set_send_state(
                         row["agent"],
                         row["target"],
@@ -1988,6 +2025,13 @@ class Board:
                 self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
                 self.notify("제출 완료", "ok")
                 self._start_follow_preview(row["runtime_key"])
+            elif status == "ambiguous":
+                from actl.core.send_truth import DELIVERY_AMBIGUOUS_MESSAGE
+
+                self.set_status("전송 상태 확인 필요")
+                self.loop_phase = "READY"
+                self.notify(DELIVERY_AMBIGUOUS_MESSAGE, "warn")
+                self._show_ambiguous_confirm(row, text)
             else:
                 self.set_status(SEND_STATE_KO[SEND_FAILED])
                 self.loop_phase = "READY"

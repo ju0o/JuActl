@@ -281,6 +281,27 @@ def test_result_pending_does_not_allow_clipboard():
     _reset()
 
 
+def test_delivery_ambiguous_message_mapping_requires_possible_side_effect():
+    assert send_truth.delivery_ambiguous({
+        "deliveryDisposition": "DELIVERY_AMBIGUOUS", "sideEffect": "POSSIBLE_INPUT",
+    }) is True
+    assert send_truth.delivery_ambiguous({
+        "deliveryDisposition": "DELIVERY_AMBIGUOUS", "sideEffect": "INPUT_OBSERVED",
+    }) is True
+    assert send_truth.delivery_ambiguous({
+        "deliveryDisposition": "TRANSPORT_SENT", "sideEffect": "INPUT_OBSERVED",
+    }) is False
+    assert send_truth.DELIVERY_AMBIGUOUS_MESSAGE == "보냈는지 확실하지 않아요 — ASUS 화면 전환으로 확인하세요"
+
+
+def test_gui_ambiguous_retry_guard_is_inline_and_once_confirmed():
+    source = (Path(__file__).parents[1] / "src/actl/gui.py").read_text()
+    assert "같은 내용을 다시 보낼까요?" in source
+    assert "_resend_confirmed" in source
+    assert "pending_retry == (row.get(\"runtime_key\"), text)" in source
+    assert "DELIVERY_AMBIGUOUS_MESSAGE" in source
+
+
 def test_busy_send_requires_a_second_result_change():
     _reset()
     send_truth.begin_send(

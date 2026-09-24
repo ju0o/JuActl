@@ -21,6 +21,8 @@ SUBMITTED = "SUBMITTED"
 START_ACKNOWLEDGED = "START_ACKNOWLEDGED"
 SEND_FAILED = "SEND_FAILED"
 FOREGROUND_ACQUIRE_TIMEOUT = "FOREGROUND_ACQUIRE_TIMEOUT"
+DELIVERY_AMBIGUOUS = "DELIVERY_AMBIGUOUS"
+DELIVERY_AMBIGUOUS_MESSAGE = "보냈는지 확실하지 않아요 — ASUS 화면 전환으로 확인하세요"
 
 # Result classification for COPY RESULT.
 NEW_RESULT = "NEW_RESULT"
@@ -79,6 +81,17 @@ RESULT_CLASS_KO = {
 def clipboard_write_allowed(result_class: str) -> bool:
     """Clipboard mutation is authorized only for NEW_RESULT."""
     return result_class == NEW_RESULT
+
+
+def delivery_ambiguous(evidence: dict[str, Any] | None) -> bool:
+    """Return true only when input may already have reached the target."""
+    if not evidence:
+        return False
+    disposition = evidence.get("deliveryDisposition") or evidence.get("disposition")
+    side_effect = evidence.get("sideEffect")
+    return disposition == DELIVERY_AMBIGUOUS and side_effect in {
+        "POSSIBLE_INPUT", "POSSIBLE", "INPUT_OBSERVED",
+    }
 
 
 TRANSPORT_STATE_KO = {
