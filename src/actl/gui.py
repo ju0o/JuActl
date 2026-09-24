@@ -54,6 +54,8 @@ STATUS_GLYPH = {
 }
 PANE_BOARD_LABELS_KEY = "pane_board_labels"
 PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"
+SIDEBAR_WIDTH = 240
+SIDEBAR_WRAPLENGTH = 216
 
 
 def _configure_fonts(root) -> None:
@@ -73,7 +75,7 @@ def _state_message(kind: str, detail: str = "") -> str:
         "empty": "ASUS에서 실행 중인 에이전트가 없습니다. ASUS tmux에서 에이전트를 시작하면 자동으로 나타납니다.",
     }
     message = messages[kind]
-    return f"{message} ({detail})" if kind == "unreachable" and detail else message
+    return message
 
 
 def _pane_board_label(config: dict, pane_id: str, fallback: str) -> str:
@@ -278,9 +280,9 @@ class Board:
 
         main = ttk.Frame(self.root, padding=(16, 14, 16, 16))
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=3)
-        main.columnconfigure(2, weight=2)
+        main.columnconfigure(0, minsize=SIDEBAR_WIDTH, weight=1)
+        main.columnconfigure(1, minsize=360, weight=3)
+        main.columnconfigure(2, minsize=300, weight=2)
         main.rowconfigure(0, weight=1)
 
         sidebar = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
@@ -291,7 +293,8 @@ class Board:
         self.project_buttons.pack(fill="x", padx=8)
         self.project_counts = tk.StringVar(value=_state_message("loading"))
         tk.Label(sidebar, textvariable=self.project_counts, bg=PANEL, fg=DIM,
-                 font=FONT, justify="left", anchor="w").pack(fill="x", padx=12, pady=10)
+                 font=FONT, justify="left", anchor="w", wraplength=SIDEBAR_WRAPLENGTH).pack(
+                     fill="x", padx=12, pady=10)
         tk.Label(sidebar, text="확인 필요", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
         self.attention_frame = tk.Frame(sidebar, bg=PANEL)
         self.attention_frame.pack(fill="x", padx=8)
@@ -805,13 +808,13 @@ class Board:
             self.refreshing = False
             self.rows = []
             self.selected = None
-            message = _state_message("unreachable", str(result))
+            message = _state_message("unreachable")
             self.connection_error = message
             self.preview.delete("1.0", "end")
             self.preview.insert("end", message)
             self._render_cards()
             self._render_projects()
-            self.project_counts.set(message)
+            self.project_counts.set("연결 안 됨")
             self.set_status("ASUS 연결 안 됨")
             self.log(f"새로고침 실패: {result}")
             self._update_action_state()
@@ -877,6 +880,7 @@ class Board:
                 display_name = "프로젝트 미지정" if name == "UNASSIGNED" else name
                 label = f"{display_name}\n  {_project_sidebar_line(total, working, attention)}"
             button = tk.Button(self.project_buttons, text=label, anchor="w", justify="left",
+                               wraplength=SIDEBAR_WRAPLENGTH,
                                bg=ACC if ((name == "ALL PROJECTS" and self.project_filter is None) or
                                           name == self.project_filter) else PANEL,
                                fg=BG if ((name == "ALL PROJECTS" and self.project_filter is None) or
@@ -891,7 +895,8 @@ class Board:
         attention = attention_rows(self.rows)
         for row in attention[:8]:
             label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail'), row.get('control_reason'))}"
-            tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg=PANEL2, fg=WARN,
+            tk.Button(self.attention_frame, text=label, anchor="w", justify="left",
+                      wraplength=SIDEBAR_WRAPLENGTH, bg=PANEL2, fg=WARN,
                       relief="flat", padx=6, pady=4,
                       command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)
         if not attention:
