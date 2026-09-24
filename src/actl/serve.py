@@ -453,7 +453,27 @@ class Handler(BaseHTTPRequestHandler):
 
                 agent = _canonical_agent(payload.get("agent"))
                 text = _prompt_value(payload.get("text"))
-                target = _send_to_selected(load_config(), agent, text)
+                try:
+                    target = _send_to_selected(load_config(), agent, text)
+                except Exception as exc:
+                    from actl.core.audit import record
+                    from actl.core.runtime import WriterDenied
+
+                    detail = str(exc)
+                    record("send", agent=agent, ok=False, source="web",
+                           error=type(exc).__name__, detail=detail)
+                    if "승인을 기다리고 있어요" in detail:
+                        message = detail
+                    elif detail.startswith("Selected runtime is "):
+                        message = "에이전트 화면을 찾지 못했어요 — 새로고침 후 다시 시도해 주세요"
+                    elif isinstance(exc, WriterDenied) or (
+                        ":" in detail and detail.split(":", 1)[0].isupper()
+                    ):
+                        message = "다른 곳에서 보내는 중이에요 — 잠시 후 다시 보내 주세요"
+                    else:
+                        message = "전송할 수 없어요 — 잠시 후 다시 시도해 주세요"
+                    self._json(False, error=message, code=500)
+                    return
                 spec = AGENTS[agent]
                 self._json(True, {"display": spec.display_name, "target": target})
                 return

@@ -1,6 +1,7 @@
 from io import BytesIO
 
-from actl import serve
+from actl import cli, serve
+from actl.core.runtime import WriterDenied
 
 
 class Headers(dict):
@@ -40,3 +41,40 @@ def test_web_error_bodies_are_plain_korean(monkeypatch):
 def test_web_fetch_uses_plain_connection_fallback():
     assert '"연결이 끊겼어요 — 새로고침해 주세요"' in serve.BOARD_HTML
     assert '"HTTP "+r.status' not in serve.BOARD_HTML
+
+
+def test_web_send_keeps_approval_reason(monkeypatch):
+    reason = "Codex가 승인을 기다리고 있어요. 보내면 승인 창에 들어가요 — ASUS 화면에서 직접 확인하세요"
+    monkeypatch.setattr(cli, "_send_to_selected", lambda *_args: (_ for _ in ()).throw(RuntimeError(reason)))
+
+    response = _handler("/api/send", method="POST", body=b'{"agent":"codex","text":"hello"}')
+
+    assert response["error"] == reason
+    assert "RuntimeError" not in response["error"]
+
+
+def test_web_send_hides_writer_denied_details(monkeypatch):
+    monkeypatch.setattr(cli, "_send_to_selected", lambda *_args: (_ for _ in ()).throw(WriterDenied("BUSY", "lease held by another sender")))
+
+    response = _handler("/api/send", method="POST", body=b'{"agent":"codex","text":"hello"}')
+
+    assert response["error"] == "다른 곳에서 보내는 중이에요 — 잠시 후 다시 보내 주세요"
+    assert "BUSY" not in response["error"]
+    assert "WriterDenied" not in response["error"]
+    assert "lease held" not in response["error"]
+
+
+def test_web_send_hides_selected_runtime_details(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "_send_to_selected",
+        lambda *_args: (_ for _ in ()).throw(
+            ValueError("Selected runtime is STALE; sending blocked: pane disappeared")
+        ),
+    )
+
+    response = _handler("/api/send", method="POST", body=b'{"agent":"codex","text":"hello"}')
+
+    assert response["error"] == "에이전트 화면을 찾지 못했어요 — 새로고침 후 다시 시도해 주세요"
+    assert "Selected runtime" not in response["error"]
+    assert "ValueError" not in response["error"]
