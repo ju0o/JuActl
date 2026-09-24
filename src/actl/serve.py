@@ -96,12 +96,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
 <header>
   <h1 data-text="▓ JuActl 보드 ░">▓ JuActl 보드 ░</h1>
   <span class="st" id="conn">연결 중…</span>
-  <span class="st">자동감시 <span class="live" id="autoSt">ADAPTIVE</span> (3–12s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
+  <span class="st">자동감시 <span class="live" id="autoSt">켜짐</span> (3–12s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
   <span class="st" id="clock"></span>
 </header>
 <main>
   <section class="col">
-    <h2 id="paneTitle">live pane — 에이전트 클릭</h2>
+    <h2 id="paneTitle">에이전트를 누르면 화면이 보여요</h2>
     <div id="verify"></div>
     <pre class="pane" id="preview">에이전트 카드를 클릭하세요…</pre>
     <div class="btns">
@@ -137,7 +137,7 @@ const CLS = {"UP":"up","WORKING":"up","IDLE":"up","DONE":"up","DOWN":"bad","BLOC
 function log(m){ const el=document.getElementById('log'); el.innerHTML=`<div>[${new Date().toLocaleTimeString()}] ${m}</div>`+el.innerHTML; }
 function tick(){ document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tick,1000); tick();
-function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ADAPTIVE":"OFF"; log("자동감시 "+(AUTO?"켬":"끔")); }
+function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"켜짐":"꺼짐"; log("자동감시 "+(AUTO?"켬":"끔")); }
 function esc(v){ return String(v??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c])); }
 function schedule(){ setTimeout(async()=>{ if(AUTO) await refresh(true); schedule(); },NEXT_MS); }
 const COMMANDS=[['새로고침',()=>refresh(false)],['자동감시 전환',()=>toggleAuto()],['문제만 보기',()=>{FILTER='PROBLEM';document.getElementById('stateFilter').value='PROBLEM';refresh(true)}],['전체 보기',()=>{FILTER='ALL';document.getElementById('stateFilter').value='ALL';refresh(true)}],['선택 결과 복사',()=>doCopy()]];
@@ -186,7 +186,10 @@ async function refresh(quiet){
       div.className = "card"+(a.agent===SEL?" sel":"");
       div.dataset.agent = a.agent;
       const resultLabel={READY:'결과 준비',WAITING:'결과 대기',UNKNOWN:'결과 미확인'}[a.result_state]||'결과 미확인';
-      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.runtime_state||'UNKNOWN')}</span><div class="sub">${esc(a.project||'UNKNOWN')} · ${esc(a.role||'UNKNOWN')} · ${esc(a.model_profile||'UNKNOWN')} · ${esc(a.current_task||'UNKNOWN')} · ${esc(resultLabel)} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
+      const metadata=[a.project,a.role,a.model_profile,a.current_task].filter(v=>v && !['UNKNOWN','UNASSIGNED'].includes(v)).join(' · ');
+      const preview=esc((a.preview||a.detail||"—").slice(0,80));
+      const sub=[metadata,resultLabel].filter(Boolean).map(esc).concat(preview).filter(Boolean).join(' · ');
+      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.state_ko)}</span><div class="sub">${sub}</div>`;
       div.onclick = ()=>select(a.agent);
       box.appendChild(div);
     });
@@ -303,7 +306,7 @@ def _board_data(*, reconcile: bool = False) -> dict:
             {"agent": r["agent"], "display": r["display"], "target": r["target"],
              "machine": r.get("machine", "local"), "project": r.get("project", "UNKNOWN"),
              "role": r.get("role", "UNKNOWN"), "model_profile": r.get("model_profile", "UNKNOWN"),
-             "runtime_state": r.get("runtime_state", "UNKNOWN"), "current_task": r.get("current_task", "UNKNOWN"),
+             "runtime_state": r.get("runtime_state", "UNKNOWN"), "state_ko": STATE_KO.get(r["state"], r["state"]), "current_task": r.get("current_task", "UNKNOWN"),
              "live_pane": bool(r.get("live_pane")),
              "state": r["state"], "preview": r["preview"], "detail": r["detail"],
              "activity": r.get("busy", "미확인"), "activity_ko": r.get("busy", "미확인"),
