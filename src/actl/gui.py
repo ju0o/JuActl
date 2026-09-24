@@ -920,6 +920,8 @@ class Board:
             key = row.get("runtime_key")
             corr = get_correlation(row.get("agent", ""), row.get("target", ""))
             if not key or not corr or not corr.send_succeeded:
+                if key and row.get("activity_state") != "RUNNING":
+                    self._post_send_running_keys.discard(key)
                 row["_result_ready"] = key in ready_keys
                 continue
             if row.get("activity_state") == "RUNNING":
@@ -939,6 +941,8 @@ class Board:
                 copied_key = (row.get("agent", ""), row.get("target", ""), row.get("result_hash", ""))
                 if copied_key not in copied_result_keys:
                     ready_keys.add(key)
+            if row.get("activity_state") != "RUNNING":
+                self._post_send_running_keys.discard(key)
             row["_result_ready"] = key in ready_keys
 
     def _hydration_done(self, result) -> None:
