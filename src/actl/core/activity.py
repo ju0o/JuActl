@@ -22,8 +22,6 @@ def classify_activity(cpu_percent: float | None, pane_text: str | None) -> str:
         return "WAITING_INPUT"
     if cpu_percent is None:
         return "UNKNOWN"
-    if cpu_percent > 5.0:
-        return "RUNNING"
     tail = lines[-1]
     if any(token in tail for token in (
         "working", "thinking", "generating", "running", "esc to interrupt",
@@ -32,6 +30,8 @@ def classify_activity(cpu_percent: float | None, pane_text: str | None) -> str:
         return "RUNNING"
     if tail.endswith(("❯", "›", ">", "$")):
         return "IDLE"
+    if cpu_percent > 5.0:
+        return "RUNNING"
     return "UNKNOWN"
 
 
@@ -41,24 +41,29 @@ def observe_activity(pane_id: str) -> tuple[str, str]:
         from actl.core.tmux import _no_window, _remote_args, capture_pane, pane_field
 
         pane_pid = int(pane_field(pane_id, "#{pane_pid}"))
-        proc = subprocess.run(
-            _remote_args(["ps", "-o", "times=", "-g", str(pane_pid)]),
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=5, **_no_window(),
-        )
-        total = sum(
-            sum(int(part) * multiplier for part, multiplier in zip(
-                reversed(value.split(":")), (1, 60, 3600, 86400), strict=False
-            ))
-            for value in proc.stdout.split()
-        )
+        def cpu_time() -> int:
+            proc = subprocess.run(
+                _remote_args(["ps", "-o", "times=", "-g", str(pane_pid)]),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, **_no_window(),
+            )
+            return sum(
+                sum(int(part) * multiplier for part, multiplier in zip(
+                    reversed(value.split(":")), (1, 60, 3600, 86400), strict=False
+                ))
+                for value in proc.stdout.split()
+            )
+
+        total = cpu_time()
         now = time.monotonic()
         pane_text = capture_pane(pane_id, history=8)
         previous = _CPU_SAMPLES.get(pane_id)
+        if previous is None or now - previous[1] > 1.5:
+            previous = (total, now)
+            time.sleep(0.4)
+            total = cpu_time()
+            now = time.monotonic()
         _CPU_SAMPLES[pane_id] = (total, now)
-        if previous is None:
-            state = classify_activity(0.0, pane_text)
-            return state, "cpu=0.0"
         elapsed = now - previous[1]
         cpu_percent = (total - previous[0]) / elapsed * 100.0 if elapsed > 0 else None
         state = classify_activity(cpu_percent, pane_text)

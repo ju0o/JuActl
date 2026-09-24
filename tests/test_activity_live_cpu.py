@@ -10,8 +10,9 @@ class _Proc:
 
 def test_idle_uses_cpu_delta_not_lifetime_percent(monkeypatch):
     activity._CPU_SAMPLES.clear()
-    outputs = iter(["00:00:20\n", "00:00:20\n"])
-    clocks = iter([10.0, 11.0])
+    outputs = iter(["00:00:20\n", "00:00:20\n", "00:00:20\n"])
+    clocks = iter([10.0, 10.4, 11.0])
+    monkeypatch.setattr(activity.time, "sleep", lambda _: None)
     monkeypatch.setattr(activity.subprocess, "run", lambda *args, **kwargs: _Proc(next(outputs)))
     monkeypatch.setattr(activity.time, "monotonic", lambda: next(clocks))
     monkeypatch.setattr(tmux, "pane_field", lambda *args: "123")
@@ -23,12 +24,13 @@ def test_idle_uses_cpu_delta_not_lifetime_percent(monkeypatch):
 
 def test_cpu_delta_marks_running(monkeypatch):
     activity._CPU_SAMPLES.clear()
-    outputs = iter(["00:00:01\n", "00:00:02\n"])
-    clocks = iter([20.0, 21.0])
+    outputs = iter(["00:00:01\n", "00:00:02\n", "00:00:03\n"])
+    clocks = iter([20.0, 21.0, 22.0])
+    monkeypatch.setattr(activity.time, "sleep", lambda _: None)
     monkeypatch.setattr(activity.subprocess, "run", lambda *args, **kwargs: _Proc(next(outputs)))
     monkeypatch.setattr(activity.time, "monotonic", lambda: next(clocks))
     monkeypatch.setattr(tmux, "pane_field", lambda *args: "123")
-    monkeypatch.setattr(tmux, "capture_pane", lambda *args, **kwargs: "ready ❯")
+    monkeypatch.setattr(tmux, "capture_pane", lambda *args, **kwargs: "ordinary output")
 
     activity.observe_activity("%2")
     assert activity.observe_activity("%2") == ("RUNNING", "cpu=100.0")

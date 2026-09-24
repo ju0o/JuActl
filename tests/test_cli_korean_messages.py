@@ -37,7 +37,7 @@ def test_copy_no_result_keeps_reason_in_audit(monkeypatch):
         cli._copy({}, "codex")
     assert captured["detail"] == "No completed assistant AgentMessage in matched Codex rollout"
     assert "아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요" in out.getvalue()
-    assert "No completed assistant AgentMessage" not in out.getvalue()
+    assert "No completed assistant AgentMessage" in out.getvalue()
 
 
 def test_send_and_osc52_messages_use_korean(monkeypatch):

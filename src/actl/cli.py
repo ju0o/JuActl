@@ -30,7 +30,7 @@ def _unknown_agent(value: str) -> str:
 
 
 def _activity_label(state: str) -> str:
-    return {"RUNNING": "작업 중", "IDLE": "대기"}.get(state, "미확인")
+    return {"RUNNING": "작업 중", "IDLE": "대기", "WAITING_INPUT": "승인 기다림"}.get(state, "미확인")
 
 
 def _menu() -> None:
@@ -59,8 +59,9 @@ def _print_status(config: dict, agent: str | None = None, *, json_output: bool =
             s = agent_status(config, name)
             rows.append({"id": name, **s})
             if not json_output:
+                pane = {"UP": "켜짐", "DOWN": "꺼짐", "UNMAPPED": "연결 안 됨"}.get(s["pane"], s["pane"])
                 activity = _activity_label(s.get("activity", "UNKNOWN")) if s.get("pane") == "UP" else "미확인"
-                print(f"{s['agent']:<12} {s['pane']:<4} {activity:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
+                print(f"{s['agent']:<12} {pane:<6} {activity:<6} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
         except Exception as exc:
             row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
             rows.append(row)
@@ -249,6 +250,8 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         record("copy", agent=agent, target=target, ok=False, source=result.source,
                confidence=result.confidence, detail=result.detail)
         print("아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요")
+        if result.detail and result.detail != "answer still in progress":
+            print(f"  {result.detail}")
         return 1
     if print_only:
         # Safe manual-copy fallback — prints exact extracted Result verbatim.
