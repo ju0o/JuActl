@@ -326,8 +326,8 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
         sys.stdout.write(
             f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} "
             f"{state_ko:<9}{RESET} {row.get('busy', '미확인'):<4} "
-            f"{row.get('runtime_state', 'UNKNOWN'):<7} {row['result_flag']:<6} "
-            f"{row['preview'] or row['detail']}\n"
+            f"{row['result_flag']:<6} "
+            f"{row['preview'] or ('아직 답 없음' if row['result_flag'] == '○대기' else row['detail'])}\n"
         )
     if message:
         sys.stdout.write(f"\n{message}\n")
