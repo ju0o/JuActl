@@ -528,6 +528,12 @@ class Board:
             pass
         self.root.after(100, self._drain)
 
+    def _queue_ui(self, fn) -> None:
+        if hasattr(self, "jobs"):
+            self.jobs.put((lambda _r, f=fn: f(), None))
+        else:
+            fn()
+
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
         if self.ssh_target:
@@ -1255,10 +1261,7 @@ class Board:
                 def mark_reading():
                     self.set_status(COPY_STATE_KO[COPY_READING])
 
-                try:
-                    self.root.after(0, mark_reading)
-                except Exception:
-                    pass
+                self._queue_ui(mark_reading)
                 result = extract_last_response(row["agent"], tgt, self.config)
                 current_hash = hash_result(result.text)
                 result_class, corr = classify_result(row["agent"], tgt, current_hash, text=result.text)
@@ -1309,13 +1312,8 @@ class Board:
                 if target_host:
                     def watchdog():
                         if not owned.wait(FOREGROUND_ACQUIRE_MAX_S):
-                            try:
-                                self.root.after(
-                                    0,
-                                    lambda: self.set_status(COPY_STATE_KO[COPY_ACQUIRE_TIMEOUT]),
-                                )
-                            except Exception:
-                                pass
+                            fn = lambda: self.set_status(COPY_STATE_KO[COPY_ACQUIRE_TIMEOUT])
+                            self._queue_ui(fn)
 
                     threading.Thread(target=watchdog, daemon=True).start()
                     return scheduler_for(target_host).submit(
@@ -1930,10 +1928,7 @@ class Board:
                 def mark_sending():
                     self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SENDING])
 
-                try:
-                    self.root.after(0, mark_sending)
-                except Exception:
-                    pass
+                self._queue_ui(mark_sending)
                 if is_remote():
                     try:
                         from actl.core.remote import ManagedSendDelivery
@@ -1957,10 +1952,7 @@ class Board:
                                 )
                                 self._start_follow_preview(row["runtime_key"])
 
-                            try:
-                                self.root.after(0, mark_submitted)
-                            except Exception:
-                                pass
+                            self._queue_ui(mark_submitted)
 
                         delivery = remote_managed_send(
                             row["agent"],
@@ -1984,10 +1976,7 @@ class Board:
                                 )
                                 self._start_follow_preview(row["runtime_key"])
 
-                            try:
-                                self.root.after(0, mark_submitted_fallback)
-                            except Exception:
-                                pass
+                            self._queue_ui(mark_submitted_fallback)
 
                         def _cleanup_lease() -> None:
                             ok = delivery.cleanup()
@@ -2055,10 +2044,7 @@ class Board:
                     self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
                     self._start_follow_preview(row["runtime_key"])
 
-                try:
-                    self.root.after(0, mark_staged_submitted)
-                except Exception:
-                    pass
+                self._queue_ui(mark_staged_submitted)
                 return _ack_from_activity(evidence)
 
             try:
@@ -2070,15 +2056,10 @@ class Board:
                                 row["target"],
                                 FOREGROUND_ACQUIRE_TIMEOUT,
                             )
-                            try:
-                                self.root.after(
-                                    0,
-                                    lambda: self.set_status(
-                                        SEND_STATE_KO[FOREGROUND_ACQUIRE_TIMEOUT]
-                                    ),
-                                )
-                            except Exception:
-                                pass
+                            fn = lambda: self.set_status(
+                                SEND_STATE_KO[FOREGROUND_ACQUIRE_TIMEOUT]
+                            )
+                            self._queue_ui(fn)
 
                     threading.Thread(target=watchdog, daemon=True).start()
                     return scheduler_for(target_host).submit(
