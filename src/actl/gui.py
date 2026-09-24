@@ -705,7 +705,7 @@ class Board:
 
                 if follow and _time.monotonic() > self.follow_preview_until:
                     self.follow_preview_key = None
-                if follow:
+                if follow or self.auto_refresh:
                     self._request_preview(row)
         finally:
             self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
