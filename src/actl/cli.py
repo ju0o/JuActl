@@ -10,6 +10,7 @@ from pathlib import Path
 
 from actl.agents.extract import extract_last_response
 from actl.core.config import CONFIG_PATH, backup_config, ensure_config, get_target, load_config, migration_warning, save_config
+from actl.core.activity import observe_activity
 from actl.core.input import read_event
 from actl.core.discovery import STRONG_CONFIDENCE, Detection, auto_bind_opencode_session, discover, manual_map, mapping_state, reconcile
 from actl.core.registry import AGENTS, resolve_agent
@@ -18,11 +19,23 @@ from actl.core.status import agent_status
 from actl.core.runtime import WriterDenied
 from actl.core.tmux import TmuxError, capture_pane, pane_field, send_keys, send_prompt, target_exists
 from actl.core.validation import pane_processes, require_valid_target, validate_target
-from actl.utils.clipboard import copy_text, osc52_guidance
+from actl.utils.clipboard import copy_text
 
 VERSION = "0.1.1-managed"
 
 BANNER = "Agent Control"
+
+
+def _unknown_agent(value: str) -> str:
+    return f"Unknown agent: {value} — 쓸 수 있는 이름: {', '.join(AGENTS)}"
+
+
+def _activity_label(target: str) -> str:
+    try:
+        state, _ = observe_activity(target)
+    except Exception:
+        state = "UNKNOWN"
+    return {"RUNNING": "작업 중", "IDLE": "대기"}.get(state, "미확인")
 
 
 def _menu() -> None:
@@ -51,7 +64,8 @@ def _print_status(config: dict, agent: str | None = None, *, json_output: bool =
             s = agent_status(config, name)
             rows.append({"id": name, **s})
             if not json_output:
-                print(f"{s['agent']:<12} {s['pane']:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
+                activity = _activity_label(s["target"]) if s.get("pane") == "UP" else "미확인"
+                print(f"{s['agent']:<12} {s['pane']:<4} {activity:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
         except Exception as exc:
             row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
             rows.append(row)
@@ -238,14 +252,7 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         from actl.core.audit import record
 
         record("copy", agent=agent, target=target, ok=False, source=result.source, confidence=result.confidence)
-        if result.source == "claude-unresolved":
-            print("✗ Could not confidently identify the active Claude conversation. Nothing copied.")
-        elif result.source.endswith("-blocked"):
-            print(f"✗ {result.detail or 'Result correlation blocked'}")
-        elif result.detail:
-            print(f"✗ No response text found ({result.detail})")
-        else:
-            print("✗ No response text found")
+        print("아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요")
         return 1
     if print_only:
         # Safe manual-copy fallback — prints exact extracted Result verbatim.
@@ -276,12 +283,7 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     if backend == "osc52":
         # OSC52 is best-effort: host cannot verify the Windows terminal actually
         # accepted the sequence, so never claim guaranteed clipboard success.
-        print(f"✓ Result sent to terminal clipboard via OSC52{note}")
-        guidance = osc52_guidance()
-        if guidance:
-            print(f"  {guidance}")
-        else:
-            print("  If clipboard unchanged, your terminal may block OSC52 — use /copy --print or /result")
+        print(f"터미널 클립보드로 보냈어요 (안 붙여지면 actl copy {agent} --print)")
     else:
         print(f"✓ Last response copied via {backend}{note}")
     from actl.core.audit import record
@@ -1130,7 +1132,7 @@ def _paste_mode(agent: str, target: str) -> None:
     except WriterDenied as denied:
         print(f"✗ {denied.code}: {denied.detail}")
         return
-    print(f"✓ Sent to {AGENTS[agent].display_name}")
+    print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
 
 
 def _print_cli_help() -> None:
@@ -1143,6 +1145,7 @@ def _print_cli_help() -> None:
         "  actl gui [--ssh T]  Windows GUI board (buttons, no terminal keys)\n"
         "  actl serve [port] [--host HOST] [--token TOKEN]  Web board\n"
         "  actl copy AGENT [--print]   Copy (or print) last response\n"
+        "  echo \"질문\" | actl send AGENT   Send a prompt to an agent\n"
         "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
         "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
         "  actl audit [N]            본문 없는 로컬 감사 로그\n"
@@ -1192,7 +1195,7 @@ def repl() -> int:
         if event.pasted or not line.startswith("/"):
             try:
                 _send_to_selected(config, current, line)
-                print(f"✓ Sent to {AGENTS[current].display_name}")
+                print(f"{AGENTS[current].display_name}에게 보냈어요 · 답이 오면: actl copy {current}")
             except Exception as exc:
                 print(f"✗ {exc}")
             continue
@@ -1210,7 +1213,7 @@ def repl() -> int:
                     continue
                 nxt = _resolve_selection(parts[1])
                 if not nxt:
-                    print(f"Unknown agent: {parts[1]}")
+                    print(_unknown_agent(parts[1]))
                     continue
                 current = nxt
                 print(f"✓ {AGENTS[current].display_name} selected")
@@ -1232,7 +1235,7 @@ def repl() -> int:
             elif cmd == "/status":
                 name = _resolve_selection(parts[1]) if len(parts) > 1 else current
                 if len(parts) > 1 and not name:
-                    print(f"Unknown agent: {parts[1]}")
+                    print(_unknown_agent(parts[1]))
                 else:
                     _print_status(config, name)
             elif cmd == "/debug":
@@ -1249,7 +1252,7 @@ def repl() -> int:
             elif cmd == "/probe":
                 name = _resolve_selection(parts[1]) if len(parts) > 1 else current
                 if not name:
-                    print(f"Unknown agent: {parts[1] if len(parts) > 1 else ''}")
+                    print(_unknown_agent(parts[1] if len(parts) > 1 else ""))
                 else:
                     print("\n".join(probe_agent(name)))
             elif cmd == "/config":
@@ -1424,7 +1427,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         if args.command == "status":
             agent = _resolve_selection(args.command_agent) if args.command_agent else None
             if args.command_agent and not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             _print_status(load_config(), agent, json_output=args.json)
             return
         if args.command == "discover" and not args.command_agent:
@@ -1436,7 +1439,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         if args.command in {"map", "unmap"} and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             if args.apply:
                 raise SystemExit("--apply is only valid with discover")
             if args.command == "map":
@@ -1457,7 +1460,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         if args.command == "bind" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             if agent != "opencode":
                 raise SystemExit("bind is only supported for opencode")
             _, code = _bind_opencode(load_config())
@@ -1465,17 +1468,17 @@ def _dispatch(argv: list[str] | None = None) -> None:
         if args.command == "copy" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             raise SystemExit(_copy(load_config(), agent, print_only=args.print))
         if args.command == "extract" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             raise SystemExit(_extract(load_config(), agent, args.command_extra or args.session))
         if args.command == "send" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             prompt = sys.stdin.read()
             if not prompt.strip():
                 print("empty prompt", file=sys.stderr)
@@ -1485,7 +1488,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
             except Exception as exc:
                 print(str(exc), file=sys.stderr)
                 raise SystemExit(1)
-            print(f"sent to {target}")
+            print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
             return
         if args.command == "tui" and not args.command_agent:
             from actl.tui import run_tui
@@ -1516,7 +1519,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         if args.command == "history":
             agent = _resolve_selection(args.command_agent) if args.command_agent else None
             if args.command_agent and not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             try:
                 limit = int(args.command_extra or 50)
             except ValueError:
@@ -1538,25 +1541,25 @@ def _dispatch(argv: list[str] | None = None) -> None:
         cfg = load_config()
         agent = None if args.status == "all" else _resolve_selection(args.status)
         if args.status != "all" and not agent:
-            raise SystemExit(f"Unknown agent: {args.status}")
+            raise SystemExit(_unknown_agent(args.status))
         _print_status(cfg, agent, json_output=args.json)
         return
     if args.probe:
         agent = _resolve_selection(args.probe)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.probe}")
+            raise SystemExit(_unknown_agent(args.probe))
         print("\n".join(probe_agent(agent)))
         return
     if args.debug:
         agent = _resolve_selection(args.debug)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.debug}")
+            raise SystemExit(_unknown_agent(args.debug))
         _debug(load_config(), agent)
         return
     if args.copy_diagnostic:
         agent = _resolve_selection(args.copy_diagnostic)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.copy_diagnostic}")
+            raise SystemExit(_unknown_agent(args.copy_diagnostic))
         raise SystemExit(_copy_diagnostic(load_config(), agent))
     if args.print_config:
         print(json.dumps(load_config(), indent=2, ensure_ascii=False))
