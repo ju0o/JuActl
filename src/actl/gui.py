@@ -172,9 +172,12 @@ def inspector_truth(row: dict) -> dict[str, str]:
     project = str(row.get("project") or "").strip()
     if project in {"", "UNASSIGNED", "UNKNOWN"}:
         project = "프로젝트 미지정"
+    role = str(row.get("role") or "").strip()
+    if role in {"", "UNKNOWN"}:
+        role = "미지정"
     detail = (
         f"상태: {_card_line(row).split(' · ', 1)[0]} · 프로젝트: {project}\n"
-        f"역할: {row.get('role') or '미지정'}"
+        f"역할: {role}"
     )
     diagnostic = (
         f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')} · "
@@ -226,6 +229,7 @@ class Board:
         self.loop_phase = "READY"
         self.follow_preview_key: str | None = None
         self.follow_preview_until = 0.0
+        self._diagnostic_runtime_key: str | None = None
         self.refresh_interval_ms = 12000
         self.live_preview_interval_ms = 1800
         self.event_refresh_scheduled = False
@@ -568,21 +572,14 @@ class Board:
         self.root.after(self.refresh_interval_ms, self._auto_tick)
 
     def _motion_tick(self) -> None:
-        """Animate only visible RUNNING cards; no remote work is performed."""
-        running = any(
-            row.get("activity_state") == "RUNNING"
-            and row.get("target") not in {"-", ""}
-            and not row.get("target", "").endswith("?")
-            for row in self.rows
-        )
-        if running:
+        """Refresh running cards without widening or changing their plain text contract."""
+        if any(row.get("activity_state") == "RUNNING" for row in self.rows):
             self.motion_phase = (self.motion_phase + 1) % 4
-            frame = ("◐", "◓", "◑", "◒")[self.motion_phase]
             for agent, label in list(self.motion_labels.items()):
                 row = next((item for item in self.rows if item["agent"] == agent), None)
                 if row and row.get("activity_state") == "RUNNING":
-                    # Existing motion feedback contract: "RUNNING ◐ · 작업중".
-                    label.configure(text=f"RUNNING {frame} · 작업중")
+                    # Legacy motion contract was "RUNNING ◐ · 작업중"; cards now stay plain.
+                    label.configure(text=_card_line(row))
         self.root.after(180, self._motion_tick)
 
     @staticmethod
@@ -692,7 +689,6 @@ class Board:
             self.preview.insert("end", f"{header}\n{body}")
             self.pane_title.set(truth["title"])
             self.detail_var.set(truth["detail"])
-            self.log(truth["diagnostic"])
             # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
             if self.loop_phase in {"READY"} and not self.send_inflight:
                 self.set_status("준비됨")
@@ -709,7 +705,7 @@ class Board:
 
                 if follow and _time.monotonic() > self.follow_preview_until:
                     self.follow_preview_key = None
-                if follow or self.auto_refresh:
+                if follow:
                     self._request_preview(row)
         finally:
             self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
@@ -1093,7 +1089,9 @@ class Board:
         # Synchronize title + detail + action identity before any async preview.
         self.pane_title.set(truth["title"])
         self.detail_var.set(truth["detail"])
-        self.log(truth["diagnostic"])
+        if self._diagnostic_runtime_key != truth["runtime_key"]:
+            self._diagnostic_runtime_key = truth["runtime_key"]
+            self.log(truth["diagnostic"])
         tgt = truth["target"]
         if tgt == "-":
             self.preview.delete("1.0", "end")

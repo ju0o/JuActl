@@ -21,7 +21,7 @@ def test_inspector_detail_is_korean_and_hides_machine_fields():
         "state": "UP",
         "activity_state": "IDLE",
         "project": "juactl",
-        "role": "BUILDER",
+        "role": "UNKNOWN",
         "pane_id": "%33",
         "pane_pid": "123",
         "pane_command": "codex",
@@ -29,6 +29,7 @@ def test_inspector_detail_is_korean_and_hides_machine_fields():
     assert len(truth["detail"].splitlines()) == 2
     assert "PID" not in truth["detail"]
     assert "Machine" not in truth["detail"]
+    assert "역할: UNKNOWN" not in truth["detail"]
 
 
 def test_board_has_no_undefined_card_move_method():
