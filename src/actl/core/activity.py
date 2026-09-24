@@ -9,14 +9,21 @@ _CPU_SAMPLES: dict[str, tuple[float, float]] = {}
 
 
 def classify_activity(cpu_percent: float | None, pane_text: str | None) -> str:
-    """Return RUNNING, IDLE, or UNKNOWN; never infer idle from missing evidence."""
-    if cpu_percent is None or pane_text is None:
+    """Return observed activity; never infer idle from missing evidence."""
+    if pane_text is None:
         return "UNKNOWN"
-    if cpu_percent > 5.0:
-        return "RUNNING"
     lines = [line.strip().lower() for line in pane_text.splitlines() if line.strip()]
     if not lines:
         return "UNKNOWN"
+    if any(phrase in line for line in lines[-8:] for phrase in (
+        "would you like to run", "do you want to", "proceed?",
+        "press enter to confirm", "(y/n)", "allow this",
+    )):
+        return "WAITING_INPUT"
+    if cpu_percent is None:
+        return "UNKNOWN"
+    if cpu_percent > 5.0:
+        return "RUNNING"
     tail = lines[-1]
     if any(token in tail for token in (
         "working", "thinking", "generating", "running", "esc to interrupt",

@@ -170,7 +170,7 @@ def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrat
                     from actl.core.activity import observe_activity
 
                     activity_state, _ = observe_activity(target)
-                    busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
+                    busy = {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[activity_state]
                     if state == "UP":
                         if activity_state == "RUNNING":
                             state = "WORKING"
@@ -437,7 +437,7 @@ def _pane_busy(pane_id: str) -> str:
         from actl.core.activity import observe_activity
 
         state, _ = observe_activity(pane_id)
-        return {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[state]
+        return {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[state]
     except Exception:
         return "미확인"
 

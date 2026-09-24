@@ -57,6 +57,8 @@ def runtime_state(activity_state: str, *, result_state: str = UNKNOWN,
             return candidate
     if activity_state == "RUNNING":
         return "WORKING"
+    if activity_state == "WAITING_INPUT":
+        return "BLOCKED"
     if activity_state == "IDLE":
         return "IDLE"
     return UNKNOWN

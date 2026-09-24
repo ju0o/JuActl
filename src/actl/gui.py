@@ -64,6 +64,7 @@ def _card_line(row: dict) -> str:
     phase = {
         "작업중": "작업 중",
         "Prompt 대기": "대기",
+        "승인 대기": "승인 기다림",
         "연결됨": "확인 중",
         "상태 확인 필요": "확인 중",
     }.get(Board._phase(row), Board._phase(row))
@@ -150,7 +151,8 @@ def _project_sidebar_line(total: int, working: int, attention: int) -> str:
 
 
 def _attention_reason(*reasons: object) -> str:
-    labels = {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보"}
+    labels = {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보",
+              "WAITING_INPUT": "승인 기다림"}
     for reason in reasons:
         if str(reason) in labels:
             return labels[str(reason)]
@@ -588,6 +590,8 @@ class Board:
             return "결과 도착"
         if row.get("activity_state") == "RUNNING":
             return "작업중"
+        if row.get("activity_state") == "WAITING_INPUT":
+            return "승인 대기"
         if row.get("activity_state") == "IDLE":
             return "Prompt 대기"
         if row.get("state") == "UP":
@@ -986,7 +990,7 @@ class Board:
             child.destroy()
         attention = attention_rows(self.rows)
         for row in attention[:8]:
-            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail'), row.get('control_reason'))}"
+            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail'), row.get('control_reason'), row.get('activity_state'))}"
             tk.Button(self.attention_frame, text=label, anchor="w", justify="left",
                       wraplength=SIDEBAR_WRAPLENGTH, bg=PANEL2, fg=WARN,
                       relief="flat", padx=6, pady=4,
