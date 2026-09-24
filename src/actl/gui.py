@@ -159,6 +159,7 @@ class Board:
         self.preview_inflight: set[str] = set()
         self.last_previews: dict[str, str] = {}
         self.preview_degraded: set[str] = set()
+        self.preview_hold_until = 0.0
         self.send_inflight = False
         self.last_submitted_prompt: str | None = None
         self.loop_phase = "READY"
@@ -309,12 +310,16 @@ class Board:
         self.action_buttons["COLLECT RESULT"].configure(state="disabled")
         from tkinter import scrolledtext
 
-        tk.Label(right, text="Prompt · Ctrl+Enter", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=4, column=0, sticky="w", padx=14, pady=(4, 3))
+        self.notice_var = tk.StringVar(value="")
+        self.notice_label = tk.Label(right, textvariable=self.notice_var, bg=PANEL, fg=DIM,
+                                     font=FONT_HDR, justify="left", anchor="w", wraplength=330)
+        self.notice_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
+        tk.Label(right, text="Prompt · Ctrl+Enter", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
         self.msg = scrolledtext.ScrolledText(right, height=2, font=FONT, bg="#fafafa", fg=TXT,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.msg.grid(row=5, column=0, sticky="ew", padx=14, pady=2)
+        self.msg.grid(row=6, column=0, sticky="ew", padx=14, pady=2)
         sendrow = tk.Frame(right, bg=PANEL)
-        sendrow.grid(row=6, column=0, sticky="ew", pady=2, padx=14)
+        sendrow.grid(row=7, column=0, sticky="ew", pady=2, padx=14)
         self.send_btn = tk.Button(sendrow, text="SEND PROMPT", command=self.on_send, bg=ACC, fg="white",
                                   relief="flat", padx=12, pady=6)
         self.send_btn.pack(side="left")
@@ -334,7 +339,7 @@ class Board:
             self.logw.grid_forget()
             self.log_toggle.configure(text="▸ 로그")
         else:
-            self.logw.grid(row=7, column=0, sticky="nsew", pady=2)
+            self.logw.grid(row=8, column=0, sticky="nsew", pady=2)
             self.log_toggle.configure(text="▾ 로그")
         self.log_visible = not self.log_visible
 
@@ -361,6 +366,14 @@ class Board:
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
+
+    def notify(self, text: str, level: str = "ok") -> None:
+        color = {"ok": OK, "warn": WARN, "bad": BAD}.get(level, DIM)
+        self.notice_var.set(text)
+        if hasattr(self, "notice_label"):
+            self.notice_label.configure(fg=color)
+        self.status_var.set(text)
+        self.log(text)
 
     def log(self, text: str) -> None:
         import datetime
@@ -547,6 +560,8 @@ class Board:
         def done(result) -> None:
             self.preview_inflight.discard(key)
             if self.selected != key:
+                return
+            if time.monotonic() < self.preview_hold_until:
                 return
             live = next((r for r in self.rows if r.get("runtime_key") == key), None)
             if live is None:
@@ -974,11 +989,11 @@ class Board:
     def on_copy(self) -> None:
         row = self.current()
         if not row or not row.get("control_ready"):
-            self.log("COPY RESULT disabled: validated mapping required")
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
         tgt = row["target"]
         if tgt == "-" or tgt.endswith("?"):
-            self.log(f"{row['display']} live pane 없음")
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
         from actl.core.remote_scheduler import KIND_COPY, P0_USER, FOREGROUND_ACQUIRE_MAX_S, scheduler_for
         from actl.core.send_truth import (
@@ -1091,8 +1106,7 @@ class Board:
             from actl.core.send_truth import LOOP_COPIED, LOOP_RESULT_READY, LOOP_STATE_KO, LOOP_WORKING
 
             if isinstance(result, Exception):
-                self.set_status("복사 실패")
-                self.log(f"COPY failed: {result}")
+                self.notify("클립보드 복사 실패", "bad")
                 return
             if result[0] == "ok":
                 from actl.core.state import acknowledge
@@ -1102,7 +1116,8 @@ class Board:
                 if result_class == "NEW_RESULT":
                     acknowledge(row["agent"], result[3])
                     self._set_loop_phase(LOOP_COPIED, status=LOOP_STATE_KO[LOOP_COPIED])
-                    self.log(f"{row['display']} 복사됨 · {label} ({result[1]}, {result[2]}자)")
+                    self.notify(f"복사 완료 {result[2]}자", "ok")
+                    self.preview_hold_until = time.monotonic() + 8
                     # Keep live pane visible; append concise confirmation above last preview.
                     prior = self.last_previews.get(row["runtime_key"]) or ""
                     self.preview.delete("1.0", "end")
@@ -1112,22 +1127,21 @@ class Board:
                         f"{result[6][:4000]}\n\n--- LIVE PANE ---\n{prior}",
                     )
                 else:
-                    self.log(f"{row['display']} · {label} (unexpected ok path)")
+                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
             elif result[0] == "no-clip":
                 result_class = result[1]
                 label = RESULT_CLASS_KO.get(result_class, result_class)
                 text = result[4] if len(result) > 4 else ""
                 if result_class == "RESULT_PENDING":
                     self._set_loop_phase(LOOP_WORKING, status=LOOP_STATE_KO[LOOP_WORKING])
-                    self.log(f"{row['display']} · {label} — 아직 새 결과가 없습니다 (이전 텍스트는 복사하지 않음)")
+                    self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
                 elif result_class == "STALE_RESULT":
-                    self.set_status(label)
-                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
+                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
                 elif result_class == "NEW_RESULT":
                     self._set_loop_phase(LOOP_RESULT_READY, status=LOOP_STATE_KO[LOOP_RESULT_READY])
-                    self.log(f"{row['display']} · {label}")
+                    self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
                 else:
-                    self.log(f"{row['display']} · {label} — 클립보드 변경 없음")
+                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
                 # Do not overwrite live pane with diagnostic walls.
                 if result_class == "STALE_RESULT" and text:
                     prior = self.last_previews.get(row["runtime_key"]) or text
@@ -1137,10 +1151,9 @@ class Board:
                         f"⚠ {label} — 클립보드 미변경\n\n--- LIVE PANE ---\n{prior[:4000]}",
                     )
             elif result[0] == "empty":
-                label = RESULT_CLASS_KO.get(result[2], result[2])
-                self.log(f"응답 없음 · {label} ({result[1] or '비어 있음'})")
+                self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
             else:
-                self.log(f"클립보드 실패: {result[1]}")
+                self.notify("클립보드 복사 실패", "bad")
                 # Keep Founder able to see pane; show error in diagnostics log only.
 
         self._bg(work, done)
@@ -1557,14 +1570,14 @@ class Board:
 
         row = self.current()
         if not row or not row.get("control_ready"):
-            self.log("SEND PROMPT disabled: validated mapping required")
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
         if self.send_inflight:
-            self.log("이미 전송 중 — 완료될 때까지 대기")
+            self.notify("이미 전송 중 — 완료될 때까지 대기", "warn")
             return
         text = self.msg.get("1.0", "end").strip()
         if not text:
-            self.log("빈 메시지 — 전송 안 함")
+            self.notify("보낼 내용을 입력하세요", "warn")
             return
         if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
@@ -1813,23 +1826,23 @@ class Board:
                 from actl.core.remote_scheduler import is_transport_contention
 
                 if is_transport_contention(result):
-                    self.log(f"{row['display']} · 원격 통신 대기 중 (매핑 DOWN 아님): {detail}")
+                    self.notify(f"전송 실패: 원격 통신 대기 중 (매핑 DOWN 아님): {detail[:120]}", "bad")
                 else:
-                    self.log(f"{row['display']} 전송 실패: {detail}")
+                    self.notify(f"전송 실패: {detail[:120]}", "bad")
                 return
             status, detail, staged = result
             if status == "acked":
                 self._set_loop_phase(LOOP_WORKING, status=SEND_STATE_KO[START_ACKNOWLEDGED])
-                self.log(f"{row['display']} · {SEND_STATE_KO[START_ACKNOWLEDGED]}")
+                self.notify("작업 시작 확인", "ok")
                 self._start_follow_preview(row["runtime_key"])
             elif status == "submitted":
                 self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
-                self.log(f"{row['display']} · {SEND_STATE_KO[SUBMITTED]} (시작 확인 대기)")
+                self.notify("제출 완료", "ok")
                 self._start_follow_preview(row["runtime_key"])
             else:
                 self.set_status(SEND_STATE_KO[SEND_FAILED])
                 self.loop_phase = "READY"
-                self.log(f"{row['display']} · {SEND_STATE_KO[SEND_FAILED]}: {detail}")
+                self.notify(f"전송 실패: {str(detail)[:120]}", "bad")
                 # Failed after possible commit: do not restore Prompt (avoid duplicate).
                 # Failed before commit: Prompt was never cleared.
 
