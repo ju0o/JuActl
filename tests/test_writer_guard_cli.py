@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import builtins
 import os
+import shutil
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -144,6 +146,35 @@ def test_direct_allowed_after_managed_release(monkeypatch, tmp_path):
         runtime.scope_id_for_socket("hk-test", "1000", V11_SOCK)
     )
     assert summary_path.exists()
+
+
+def test_expired_lease_from_reused_pane_does_not_block_copied_fixture(
+    monkeypatch, tmp_path
+):
+    grant, _ = _acquire_managed_pane(
+        monkeypatch,
+        tmp_path,
+        runtime_id="rt_v11_stale_pane",
+        pane_id="%9",
+        panePid="111",
+    )
+    source = runtime.journal_path_for_scope(
+        runtime.scope_id_for_socket("hk-test", "1000", V11_SOCK)
+    )
+    with sqlite3.connect(source) as conn:
+        conn.execute(
+            "UPDATE reservations SET state = 'EXPIRED_HELD' WHERE reservation_id = ?",
+            (grant["reservationId"],),
+        )
+    copied_root = tmp_path / "copied-fixture"
+    copied = copied_root / source.relative_to(tmp_path)
+    copied.parent.mkdir(parents=True)
+    shutil.copy2(source, copied)
+    monkeypatch.setattr(runtime, "_journal_root_override", copied_root)
+    monkeypatch.setattr(runtime, "canonical_tmux_socket_path", lambda socket_path=None: V11_SOCK)
+    monkeypatch.setattr(tmux, "pane_field", lambda target, fmt, socket_path=None: "222")
+
+    runtime.guard_tmux_writer(target="%9", socket_path=V11_SOCK, mode="DIRECT")
 
 
 def test_managed_transport_with_pre_send_hook_still_works(monkeypatch, tmp_path):

@@ -1347,6 +1347,19 @@ def guard_tmux_writer(*, target: str, socket_path: str | None = None, mode: str 
                         context = json.loads(row["context_json"])
                     except (TypeError, json.JSONDecodeError):
                         context = None
+                    if str(row["state"]) == "EXPIRED_HELD" and isinstance(context, dict):
+                        recorded_pane_pid = context.get("panePid")
+                        if recorded_pane_pid is not None:
+                            try:
+                                from actl.core import tmux
+
+                                current_pane_pid = tmux.pane_field(
+                                    target, "#{pane_pid}", socket_path=resolved
+                                )
+                            except Exception:
+                                current_pane_pid = None
+                            if current_pane_pid and str(current_pane_pid) != str(recorded_pane_pid):
+                                continue
                     if _context_blocks_direct_target(context, target):
                         blocked_by = (str(row["mode"]), str(row["runtime_id"]))
                         break
