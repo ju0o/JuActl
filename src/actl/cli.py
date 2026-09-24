@@ -16,7 +16,7 @@ from actl.core.registry import AGENTS, resolve_agent
 from actl.core.probe import probe_agent
 from actl.core.status import agent_status
 from actl.core.runtime import WriterDenied
-from actl.core.tmux import capture_pane, pane_field, send_keys, send_prompt, target_exists
+from actl.core.tmux import TmuxError, capture_pane, pane_field, send_keys, send_prompt, target_exists
 from actl.core.validation import pane_processes, require_valid_target, validate_target
 from actl.utils.clipboard import copy_text, osc52_guidance
 
@@ -1342,7 +1342,7 @@ def run_runtime_request_stdin(operation: str, *, stdin_text: str | None = None) 
     return code
 
 
-def main() -> None:
+def _dispatch(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="actl", description="Control multiple AI agent TUIs through tmux")
     parser.add_argument("--version", action="version", version=f"actl {VERSION}")
     parser.add_argument("--init", action="store_true", help="Create default config and exit")
@@ -1378,7 +1378,7 @@ def main() -> None:
     parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, gui, serve, help, doctor, or opencode-session")
     parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, port for serve, or runtime operation")
     parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.json and args.apply and (args.command == "discover" or args.discover):
         raise SystemExit("--json cannot be combined with --apply")
@@ -1562,6 +1562,24 @@ def main() -> None:
         print(json.dumps(load_config(), indent=2, ensure_ascii=False))
         return
     raise SystemExit(repl())
+
+
+def main(argv: list[str] | None = None) -> None:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and Path(raw_argv[0]).name == "actl":
+        raw_argv = raw_argv[1:]
+    try:
+        _dispatch(raw_argv)
+    except TmuxError as exc:
+        if raw_argv[:1] == ["runtime"] and "--request-stdin" in raw_argv:
+            raise
+        reason = str(exc).splitlines()[0][:200] or type(exc).__name__
+        print(
+            "AI 작업창(tmux)이 켜져 있지 않아요 — ASUS에서 AI를 먼저 실행한 뒤 다시 시도하세요 "
+            f"({reason})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
