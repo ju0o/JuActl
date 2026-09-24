@@ -17,6 +17,8 @@ class _Widget:
         self.value = ""
 
     def configure(self, **kwargs):
+        self.options = getattr(self, "options", {})
+        self.options.update(kwargs)
         self.value = kwargs.get("fg", self.value)
 
     def delete(self, *_args):
@@ -46,6 +48,11 @@ def _board():
     board.set_status = lambda value: board.status_var.set(value)
     board._set_loop_phase = lambda _phase, status=None: board.set_status(status or _phase)
     board._bg = lambda work, done: done(work())
+    board.send_btn = _Widget()
+    board.action_buttons = {name: _Widget() for name in ("SEND PROMPT", "COPY RESULT", "FOCUS")}
+    board._render_cards = lambda _selected=None: None
+    board._result_ready_keys = set()
+    board._post_send_running_keys = set()
     return board
 
 
@@ -91,6 +98,24 @@ def test_on_copy_clipboard_failure_is_visible(monkeypatch):
     board.on_copy()
 
     assert board.notice_var.value == "클립보드 복사 실패"
+
+
+def test_result_ready_waits_for_real_post_send_change():
+    send_truth.reset_all_correlations()
+    send_truth.begin_send("codex", "%1", previous_result_hash="old")
+    send_truth.set_send_state("codex", "%1", send_truth.SUBMITTED)
+    board = _board()
+    board._update_result_ready(
+        [{"runtime_key": "rk", "agent": "codex", "target": "%1",
+          "activity_state": "IDLE", "result_hash": "old"}],
+        {"rk": {"activity_state": "RUNNING", "result_hash": "old"}},
+    )
+    assert "rk" not in board._result_ready_keys
+    rows = [{"runtime_key": "rk", "agent": "codex", "target": "%1",
+             "activity_state": "IDLE", "result_hash": "new"}]
+    board._update_result_ready(rows, {"rk": {"activity_state": "IDLE", "result_hash": "old"}})
+    assert rows[0]["_result_ready"]
+    send_truth.reset_all_correlations()
 
 
 def test_request_preview_does_not_rewrite_during_copy_hold(monkeypatch):

@@ -61,6 +61,8 @@ CENTER_WRAPLENGTH = 330
 
 def _card_line(row: dict) -> str:
     """Return the bounded, user-facing summary for one runtime card."""
+    if row.get("_result_ready"):
+        return "답이 왔어요 · 결과 복사"
     phase = {
         "작업중": "작업 중",
         "Prompt 대기": "대기",
@@ -241,6 +243,8 @@ class Board:
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
         self.previous_rows: dict[str, dict] = {}
+        self._result_ready_keys: set[str] = set()
+        self._post_send_running_keys: set[str] = set()
         self.log_visible = False
         self._build()
         self.refresh()
@@ -864,6 +868,32 @@ class Board:
 
         self._bg(work, self._hydration_done)
 
+    def _update_result_ready(self, rows: list[dict], before_rows: dict[str, dict]) -> None:
+        from actl.core.send_truth import get_correlation
+
+        for row in rows:
+            key = row.get("runtime_key")
+            corr = get_correlation(row.get("agent", ""), row.get("target", ""))
+            if not key or not corr or not corr.send_succeeded:
+                row["_result_ready"] = key in self._result_ready_keys
+                continue
+            if row.get("activity_state") == "RUNNING":
+                self._post_send_running_keys.add(key)
+            before = before_rows.get(key, {})
+            changed = bool(
+                corr.previous_result_hash
+                and row.get("result_hash")
+                and row["result_hash"] != corr.previous_result_hash
+            )
+            completed = (
+                key in self._post_send_running_keys
+                and before.get("activity_state") == "RUNNING"
+                and row.get("activity_state") == "IDLE"
+            )
+            if changed or completed:
+                self._result_ready_keys.add(key)
+            row["_result_ready"] = key in self._result_ready_keys
+
     def _hydration_done(self, result) -> None:
         self.hydrating = False
         from actl.core.remote_scheduler import RemoteOpCancelled
@@ -874,7 +904,9 @@ class Board:
         if isinstance(result, Exception):
             self.log(f"상세 hydration 실패 — 기존 inventory 유지: {result}")
             return
+        before_rows = getattr(self, "previous_rows", {})
         self.rows = result
+        self._update_result_ready(self.rows, before_rows)
         self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
         self.summary_var.set(_summary_text(self.rows))
         self._render_projects()
@@ -922,6 +954,7 @@ class Board:
         self.connection_error = None
         self.rows = payload["rows"]
         self._snapshot_detections = payload["detections"]
+        self._update_result_ready(self.rows, self.previous_rows)
         if self.previous_rows:
             for event in detect_events(self.previous_rows, self.rows):
                 self.log(f"◆ {event['agent']} · {event['detail']}")
@@ -1064,9 +1097,24 @@ class Board:
                            highlightthickness=1)
 
     def _update_action_state(self) -> None:
+        from actl.core.send_truth import get_correlation
+
         row = self.current()
         enabled = bool(row and row.get("control_ready")) and not self.send_inflight
         self.send_btn.configure(state="normal" if enabled else "disabled")
+        copy_button = self.action_buttons["COPY RESULT"]
+        result_ready = bool(row and row.get("_result_ready"))
+        copy_button.configure(
+            text="결과 복사",
+            bg=ACC if result_ready else PANEL,
+            fg=BG if result_ready else ACC,
+            activebackground=ACC if result_ready else PANEL2,
+            activeforeground=BG if result_ready else TXT,
+        )
+        if row and not get_correlation(row["agent"], row["target"]):
+            copy_button.configure(text="지금 화면 결과 복사")
+        if result_ready and not self.send_inflight:
+            self.set_status("답이 왔어요")
         for label in ("SEND PROMPT", "COPY RESULT", "FOCUS"):
             ready = enabled if label == "SEND PROMPT" else bool(row is not None and row.get("control_ready"))
             self.action_buttons[label].configure(state="normal" if ready else "disabled")
@@ -1278,6 +1326,10 @@ class Board:
                 label = RESULT_CLASS_KO.get(result_class, result_class)
                 if result_class == "NEW_RESULT":
                     acknowledge(row["agent"], result[3])
+                    self._result_ready_keys.discard(row["runtime_key"])
+                    row["_result_ready"] = False
+                    self._render_cards(self.selected)
+                    self._update_action_state()
                     self._set_loop_phase(LOOP_COPIED, status=LOOP_STATE_KO[LOOP_COPIED])
                     self.notify(f"복사 완료 {result[2]}자", "ok")
                     self.preview_hold_until = time.monotonic() + 8
@@ -1290,7 +1342,8 @@ class Board:
                         f"{result[6][:4000]}\n\n--- LIVE PANE ---\n{prior}",
                     )
                 else:
-                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
+                    copied = result[5] and result[5].result_hash_after == result[3]
+                    self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
             elif result[0] == "no-clip":
                 result_class = result[1]
                 label = RESULT_CLASS_KO.get(result_class, result_class)
@@ -1299,7 +1352,8 @@ class Board:
                     self._set_loop_phase(LOOP_WORKING, status=LOOP_STATE_KO[LOOP_WORKING])
                     self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
                 elif result_class == "STALE_RESULT":
-                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
+                    copied = result[3] and result[3].result_hash_after == send_truth.result_hash(text)
+                    self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
                 elif result_class == "NEW_RESULT":
                     self._set_loop_phase(LOOP_RESULT_READY, status=LOOP_STATE_KO[LOOP_RESULT_READY])
                     self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
@@ -1799,6 +1853,9 @@ class Board:
             row["agent"], row["target"], previous_result_hash=previous_hash,
             busy_at_send=busy_choice == "now",
         )
+        self._result_ready_keys.discard(row["runtime_key"])
+        self._post_send_running_keys.discard(row["runtime_key"])
+        row["_result_ready"] = False
         set_send_state(row["agent"], row["target"], SEND_QUEUED)
         self._set_send_inflight(True)
         self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SEND_QUEUED])
