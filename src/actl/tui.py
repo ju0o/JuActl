@@ -372,7 +372,7 @@ def _pane_preview(target: str, lines: int = 0) -> str:
             text = _cap(target, history=lines)
     except Exception as exc:
         return f"(미리보기 불가: {exc})"
-    rows = text.splitlines()[-lines:]
+    rows = text.rstrip().splitlines()[-lines:]
     rows = [r.rstrip() for r in rows]
     while rows and not rows[0].strip():
         rows.pop(0)
