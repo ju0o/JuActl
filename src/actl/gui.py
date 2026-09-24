@@ -80,7 +80,10 @@ def _card_header(row: dict) -> str:
 def _card_line(row: dict, *, send_inflight: bool = False,
                post_send_running_keys: set[str] = ()) -> str:
     """Return the bounded, user-facing summary for one runtime card."""
-    running_after_send = row.get("runtime_key") in post_send_running_keys
+    running_after_send = (
+        row.get("activity_state") == "RUNNING"
+        and row.get("runtime_key") in post_send_running_keys
+    )
     if row.get("_result_ready") and not send_inflight and not running_after_send:
         return "답이 왔어요 · 결과 복사"
     phase = {

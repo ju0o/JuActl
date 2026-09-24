@@ -16,4 +16,8 @@ def test_card_line_uses_safe_fallback_and_send_state():
         "preview": "no text",
     }
     assert gui._card_line(row, send_inflight=True) == "작업 중 · juactl · 아직 답 없음"
+    row["activity_state"] = "RUNNING"
     assert gui._card_line(row, post_send_running_keys={"rk"}) == "작업 중 · juactl · 아직 답 없음"
+
+    row.update(activity_state="IDLE", _result_ready=True)
+    assert gui._card_line(row, post_send_running_keys={"rk"}) == "답이 왔어요 · 결과 복사"
