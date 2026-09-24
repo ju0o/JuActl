@@ -1,7 +1,64 @@
 from pathlib import Path
+import importlib.util
+import os
 import subprocess
+import time
 
 from actl.core import tmux
+
+
+def test_remote_pane_lock_creates_parent_and_times_out_with_exact_error(tmp_path, monkeypatch):
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text("#!/bin/sh\nexec /bin/sh -c \"$7\"\n", encoding="utf-8")
+    fake_ssh.chmod(0o755)
+    old_env = {key: os.environ.get(key) for key in ("PATH", "HOME", "ACTL_STATE_PATH")}
+    os.environ["PATH"] = f"{tmp_path}:{os.environ['PATH']}"
+    os.environ["HOME"] = str(tmp_path / "home")
+    os.environ["ACTL_STATE_PATH"] = str(tmp_path / "state.json")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "local")
+    command = tmux._remote_pane_lock_command(Path("~/.local/state/actl") / "pane-x.lock")
+    holder = subprocess.Popen(["/bin/sh", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        assert holder.stdout is not None
+        started = time.monotonic()
+        assert holder.stdout.readline() == b"acquired\n"
+        assert time.monotonic() - started < 1
+        try:
+            with tmux._pane_lock("x"):
+                raise AssertionError("second pane lock unexpectedly acquired")
+        except tmux.TmuxError as exc:
+            assert str(exc) == tmux.PANE_LOCK_ERROR
+    finally:
+        if holder.stdin is not None:
+            holder.stdin.close()
+        holder.wait(timeout=1)
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_board_second_instance_is_refused(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("juactl_board", Path(__file__).parents[1] / "src" / "juactl-board.py")
+    assert spec is not None and spec.loader is not None
+    board = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(board)
+    old_state_path = os.environ.get("ACTL_STATE_PATH")
+    os.environ["ACTL_STATE_PATH"] = str(tmp_path / "state.json")
+    first = board._acquire_instance_lock()
+    second = board._acquire_instance_lock()
+    try:
+        assert first is not None
+        assert second is None
+        assert board.BOARD_ALREADY_RUNNING == "JuActl Board가 이미 실행 중입니다."
+    finally:
+        if first is not None:
+            first.close()
+        if old_state_path is None:
+            os.environ.pop("ACTL_STATE_PATH", None)
+        else:
+            os.environ["ACTL_STATE_PATH"] = old_state_path
 
 
 def test_multiline_uses_one_bracketed_raw_buffer_and_one_enter(monkeypatch):

@@ -46,7 +46,10 @@ def _pane_lock_name(target: str) -> str:
 
 def _remote_pane_lock_command(lock_path: Path) -> str:
     path = str(lock_path)
-    return f"flock -x -w 2 {path if path.startswith('~/') else shlex.quote(path)} sh -c 'echo acquired; cat'"
+    parent = str(lock_path.parent)
+    quoted_path = path if path.startswith('~/') else shlex.quote(path)
+    quoted_parent = parent if parent.startswith('~/') else shlex.quote(parent)
+    return f"mkdir -p {quoted_parent} && flock -x -w 2 {quoted_path} sh -c 'echo acquired; cat'"
 
 
 @contextmanager

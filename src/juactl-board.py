@@ -64,8 +64,8 @@ def main() -> int:
         if os.name == "nt":
             try:
                 import msvcrt
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
             except OSError:
                 pass
         lock.close()
