@@ -5,6 +5,19 @@ asus tmux에서 돌고 있는 AI 에이전트 8종을 MainPC에서 버튼으로 
 
 지원: Claude Team, Claude Pro, OpenCode, Codex, Cursor, CommandCode, Cline, Grok.
 
+## 오프라인 disposable E2E 처음 실행
+
+Linux에서 `bash`, `python3`, `tmux`가 준비되어 있으면 네트워크 없이 임시
+설정과 tmux 세션으로 send→result→copy 흐름을 확인할 수 있다. 실행이 끝나면
+임시 설정과 세션은 자동으로 정리된다.
+
+```bash
+bash scripts/e2e_disposable.sh
+```
+
+성공하면 `{"ok":true,...}` JSON이 출력된다. ASUS 같은 원격 호스트에서
+확인하려면 동일한 명령에 `--ssh HOST`를 붙인다.
+
 ## MainPC에서 실행 (프로그램)
 
 ```powershell
