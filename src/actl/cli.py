@@ -636,7 +636,9 @@ def _copy_diagnostic(config: dict, agent: str) -> int:
     return 0 if result.text else 1
 
 
-def _discover(config: dict, detections: list[Detection] | None = None) -> list[Detection]:
+def _discover(
+    config: dict, detections: list[Detection] | None = None, *, apply: bool = False
+) -> list[Detection]:
     detections = detections if detections is not None else discover()
     print("#  pane_id  cwd                              command          detected      confidence mapping evidence")
     for index, detection in enumerate(detections, 1):
@@ -646,7 +648,8 @@ def _discover(config: dict, detections: list[Detection] | None = None) -> list[D
             f"{index:<2} {pane.pane_id:<8} {pane.current_path:<32} {pane.current_command:<16} "
             f"{detected:<13} {detection.confidence:<10} {mapping_state(config, detection):<8} {detection.evidence}"
         )
-    print("\nDiscovery is read-only; config was not modified.")
+    if not apply:
+        print("\n보기만 했어요 — 연결하려면 actl discover --apply")
     return detections
 
 
@@ -677,17 +680,19 @@ def _discover_json(config: dict, detections: list[Detection] | None = None) -> l
 
 def _apply_discovery(config: dict, detections: list[Detection] | None = None) -> dict:
     detections = detections if detections is not None else discover()
-    backup = backup_config()
+    backup_config()
     updated, changes = reconcile(config, detections)
     if changes:
         save_config(updated)
-        print(f"Backup: {backup}")
-        print("Mappings changed:")
-        print("\n".join(changes))
-        return updated
-    print(f"Backup: {backup}")
-    print("No safe mapping changes detected.")
-    return config
+    mappings = []
+    for agent in AGENTS:
+        target = updated.get("agents", {}).get(agent, {}).get("target")
+        previous = config.get("agents", {}).get(agent, {}).get("target")
+        if target and target != previous:
+            mappings.append(f"{AGENTS[agent].display_name} → {target}")
+    summary = ", ".join(mappings) or "변경 없음"
+    print(f"연결했어요: {summary} (이전 설정은 백업해 뒀어요)")
+    return updated if changes else config
 
 
 def _map(config: dict, agent: str, session_id: str | None = None) -> dict:
@@ -1158,22 +1163,22 @@ def _print_cli_help() -> None:
     print(
         "actl — Agent Control CLI\n"
         "\n"
-        "  actl                REPL (Agent > prompt, /help for commands)\n"
-        "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
-        "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
-        "  actl gui [--ssh T]  Windows GUI board (buttons, no terminal keys)\n"
-        "  actl serve [port] [--host HOST] [--token TOKEN]  Web board\n"
-        "  actl copy AGENT [--print]   Copy (or print) last response\n"
-        "  echo \"질문\" | actl send AGENT   Send a prompt to an agent\n"
-        "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
+        "  actl                대화형 모드 (Agent > 프롬프트, /help 명령)\n"
+        "  actl tui            에이전트 보드: 번호=선택+미리보기, c=복사, p=출력,\n"
+        "                      m=재매핑, s=전송, h=도움말, r=새로고침, q=종료\n"
+        "  actl gui [--ssh T]  Windows GUI 보드 (버튼으로 조작)\n"
+        "  actl serve [port] [--host HOST] [--token TOKEN]  웹 보드\n"
+        "  actl copy AGENT [--print]   마지막 응답 복사(또는 출력)\n"
+        "  echo \"질문\" | actl send AGENT   에이전트에 프롬프트 전송\n"
+        "  actl push FILE [--print]   SSH 세션으로 MainPC에 파일 전송\n"
         "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
         "  actl audit [N]            본문 없는 로컬 감사 로그\n"
         "  actl history [AGENT] [N]  결과 hash/source 이력 (본문 없음)\n"
-        "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
-        "  actl discover [--json] [--apply]  List (or apply) live pane detections\n"
-        "  actl status [AGENT] Probe-free mapping + liveness table\n"
-        "  actl bind opencode  One-command OpenCode session bind\n"
-        "  --ssh TARGET        Route tmux via ssh (MainPC board: actl tui --ssh asus)\n"
+        "  actl map AGENT      pane 선택기 (번호 또는 %ID, 예: %69)\n"
+        "  actl discover [--json] [--apply]  live pane 감지 목록(또는 연결 적용)\n"
+        "  actl status [AGENT] 매핑 및 실행 상태 표\n"
+        "  actl bind opencode  OpenCode 세션 한 번에 연결\n"
+        "  --ssh TARGET        ssh로 tmux 연결 (MainPC 보드: actl tui --ssh asus)\n"
     )
 
 
@@ -1451,7 +1456,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
             return
         if args.command == "discover" and not args.command_agent:
             config = load_config()
-            detections = _discover(config)
+            detections = _discover(config, apply=args.apply)
             if args.apply:
                 _apply_discovery(config, detections)
             return
@@ -1552,7 +1557,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         )
     if args.discover:
         config = load_config()
-        detections = _discover(config)
+        detections = _discover(config, apply=args.apply)
         if args.apply:
             _apply_discovery(config, detections)
         return
