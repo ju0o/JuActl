@@ -125,8 +125,12 @@ def _project_sidebar_line(total: int, working: int, attention: int) -> str:
     return f"에이전트 {total} · 작업 중 {working} · 확인 {attention}"
 
 
-def _attention_reason(reason: object) -> str:
-    return {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보"}.get(str(reason), "확인 필요")
+def _attention_reason(*reasons: object) -> str:
+    labels = {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보"}
+    for reason in reasons:
+        if str(reason) in labels:
+            return labels[str(reason)]
+    return "확인 필요"
 
 
 def inspector_truth(row: dict) -> dict[str, str]:
@@ -886,7 +890,7 @@ class Board:
             child.destroy()
         attention = attention_rows(self.rows)
         for row in attention[:8]:
-            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail') or row.get('control_reason'))}"
+            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail'), row.get('control_reason'))}"
             tk.Button(self.attention_frame, text=label, anchor="w", justify="left", bg=PANEL2, fg=WARN,
                       relief="flat", padx=6, pady=4,
                       command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)

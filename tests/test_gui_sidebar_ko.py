@@ -14,6 +14,7 @@ def test_sidebar_line_is_korean():
 def test_attention_reason_maps_control_reasons():
     assert gui._attention_reason("pane gone") == "창이 사라졌어요"
     assert gui._attention_reason("STALE") == "오래된 정보"
+    assert gui._attention_reason("Configured tmux target does not exist", "STALE") == "오래된 정보"
     assert gui._attention_reason("other") == "확인 필요"
 
 
