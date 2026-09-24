@@ -103,6 +103,8 @@ class SendCorrelation:
     send_ts: float
     previous_result_hash: str | None = None
     result_hash_after: str | None = None
+    busy_at_send: bool = False
+    busy_transition_hash: str | None = None
     send_state: str = SEND_QUEUED
     ack_state: str = "NONE"
     result_class: str = RESULT_PENDING
@@ -140,6 +142,7 @@ def begin_send(
     target: str,
     *,
     previous_result_hash: str | None,
+    busy_at_send: bool = False,
     correlation_id: str | None = None,
 ) -> SendCorrelation:
     corr = SendCorrelation(
@@ -148,6 +151,7 @@ def begin_send(
         correlation_id=correlation_id or uuid.uuid4().hex[:12],
         send_ts=time.time(),
         previous_result_hash=previous_result_hash,
+        busy_at_send=busy_at_send,
         send_state=SEND_QUEUED,
         ack_state="NONE",
         result_class=RESULT_PENDING,
@@ -227,6 +231,19 @@ def classify_result(
             corr.result_hash_after = current_hash
             corr.result_class = NEW_RESULT
             return NEW_RESULT, SendCorrelation(**corr.__dict__)
+        if corr.busy_at_send:
+            if current_hash == corr.previous_result_hash:
+                corr.result_class = RESULT_PENDING
+                return RESULT_PENDING, SendCorrelation(**corr.__dict__)
+            if corr.busy_transition_hash is None:
+                # A busy send can first observe the previous job's late output.
+                corr.busy_transition_hash = current_hash
+                corr.result_class = RESULT_PENDING
+                return RESULT_PENDING, SendCorrelation(**corr.__dict__)
+            if current_hash == corr.busy_transition_hash:
+                corr.result_class = RESULT_PENDING
+                return RESULT_PENDING, SendCorrelation(**corr.__dict__)
+            corr.busy_at_send = False
         if current_hash != corr.previous_result_hash:
             corr.result_hash_after = current_hash
             corr.result_class = NEW_RESULT

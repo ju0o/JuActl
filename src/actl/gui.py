@@ -367,6 +367,16 @@ class Board:
                                   relief="flat", padx=12, pady=6)
         self.send_btn.pack(side="left")
         self.action_buttons["SEND PROMPT"] = self.send_btn
+        self.busy_confirm = tk.Frame(sendrow, bg=PANEL)
+        self.busy_confirm_label = tk.Label(
+            self.busy_confirm, text="작업 중이에요. 끝나면 보낼까요, 지금 보낼까요?",
+            bg=PANEL, fg=WARN, font=FONT, anchor="w",
+        )
+        self.busy_confirm_label.pack(side="left", padx=(8, 4))
+        tk.Button(self.busy_confirm, text="끝나면 보내기", command=lambda: self.on_send(busy_choice="wait"),
+                  bg=PANEL, fg=ACC, relief="flat", padx=6).pack(side="left")
+        tk.Button(self.busy_confirm, text="지금 보내기", command=lambda: self.on_send(busy_choice="now"),
+                  bg=ACC, fg=BG, relief="flat", padx=6).pack(side="left", padx=4)
         self.log_toggle = tk.Button(sendrow, text="▸ 자세한 기록", command=self.toggle_log,
                                     bg=PANEL, fg=DIM, activebackground=PANEL2, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
@@ -697,6 +707,12 @@ class Board:
     def _set_send_inflight(self, active: bool) -> None:
         self.send_inflight = active
         self._update_action_state()
+
+    def _hide_busy_confirm(self) -> None:
+        self.busy_confirm.pack_forget()
+
+    def _show_busy_confirm(self) -> None:
+        self.busy_confirm.pack(side="left", fill="x", expand=True, after=self.send_btn)
 
     def _health_tick(self) -> None:
         if self.auto_refresh:
@@ -1638,7 +1654,7 @@ class Board:
         dialog.grab_set()
         menu.focus_set()
 
-    def on_send(self) -> None:
+    def on_send(self, *, busy_choice: str | None = None) -> None:
         from tkinter import messagebox
 
         row = self.current()
@@ -1652,7 +1668,14 @@ class Board:
         if not text or PROMPT_PLACEHOLDER in text:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
-        if not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+        if busy_choice is None and row.get("activity_state") == "RUNNING":
+            self._show_busy_confirm()
+            return
+        if busy_choice == "wait" and row.get("activity_state") == "RUNNING":
+            self.root.after(1000, lambda: self.on_send(busy_choice="wait"))
+            return
+        self._hide_busy_confirm()
+        if busy_choice is None and not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
             return
         from actl.core.remote_scheduler import (
             KIND_SEND,
@@ -1677,7 +1700,10 @@ class Board:
         )
 
         previous_hash = row.get("result_hash") or None
-        begin_send(row["agent"], row["target"], previous_result_hash=previous_hash)
+        begin_send(
+            row["agent"], row["target"], previous_result_hash=previous_hash,
+            busy_at_send=busy_choice == "now",
+        )
         set_send_state(row["agent"], row["target"], SEND_QUEUED)
         self._set_send_inflight(True)
         self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SEND_QUEUED])

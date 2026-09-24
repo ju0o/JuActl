@@ -277,3 +277,17 @@ def test_result_pending_does_not_allow_clipboard():
     assert klass == send_truth.RESULT_PENDING
     assert send_truth.clipboard_write_allowed(klass) is False
     _reset()
+
+
+def test_busy_send_requires_a_second_result_change():
+    _reset()
+    send_truth.begin_send(
+        "codex", "%0", previous_result_hash=send_truth.result_hash("RESULT::JOB1"),
+        busy_at_send=True,
+    )
+    send_truth.set_send_state("codex", "%0", send_truth.START_ACKNOWLEDGED)
+    first, _ = send_truth.classify_result("codex", "%0", send_truth.result_hash("NEW_RESULT"))
+    assert first != send_truth.NEW_RESULT
+    second, _ = send_truth.classify_result("codex", "%0", send_truth.result_hash("RESULT::JOB2"))
+    assert second == send_truth.NEW_RESULT
+    _reset()
