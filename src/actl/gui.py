@@ -1827,6 +1827,11 @@ class Board:
         if not text or PROMPT_PLACEHOLDER in text:
             self.notify("보낼 내용을 입력하세요", "warn")
             return
+        from actl.core.activity import send_blocked_reason
+
+        if reason := send_blocked_reason(row["target"]):
+            self.notify(reason, "warn")
+            return
         pending_retry = getattr(self, "_ambiguous_retry", None)
         if not _resend_confirmed and pending_retry == (row.get("runtime_key"), text):
             self._show_ambiguous_confirm(row, text)

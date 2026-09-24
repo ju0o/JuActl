@@ -296,6 +296,7 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
 def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | None = None) -> str:
     """Resolve on every send; never retain a target across /switch."""
     from actl.core.remote import is_remote, remote_send
+    from actl.core.activity import send_blocked_reason
 
     if target is not None:
         validation = validate_target(agent, target)
@@ -303,6 +304,8 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
             raise ValueError(
                 f"Selected runtime is {validation.state}; sending blocked: {validation.detail}"
             )
+        if reason := send_blocked_reason(target):
+            raise RuntimeError(reason)
         try:
             if is_remote():
                 from actl.core.remote import ManagedUnsupported, remote_managed_send
@@ -341,6 +344,8 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
         record("send", agent=agent, target=target, remote=True, ok=True, chars=len(prompt))
         return target
     target = _resolve_live_target(config, agent)
+    if reason := send_blocked_reason(target):
+        raise RuntimeError(reason)
     try:
         send_prompt(target, prompt)
     except WriterDenied as denied:
@@ -1483,7 +1488,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
                 target = _send_to_selected(load_config(), agent, prompt)
             except Exception as exc:
                 print(str(exc), file=sys.stderr)
-                raise SystemExit(1)
+                raise SystemExit(2 if "승인을 기다리고 있어요" in str(exc) else 1)
             print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
             return
         if args.command == "tui" and not args.command_agent:

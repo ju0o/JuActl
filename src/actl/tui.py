@@ -825,13 +825,18 @@ def run_tui() -> int:
                         if not prompt:
                             send_message = "✗ 빈 메시지"
                         else:
+                            from actl.core.activity import send_blocked_reason
                             from actl.cli import _send_to_selected
 
-                            try:
-                                _send_to_selected(config, row["agent"], prompt)
-                                send_message = f"✓ {row['display']}에 전송됨"
-                            except Exception as exc:
-                                send_message = f"✗ {exc}"
+                            reason = send_blocked_reason(tgt)
+                            if reason:
+                                send_message = f"✗ {reason}"
+                            else:
+                                try:
+                                    _send_to_selected(config, row["agent"], prompt)
+                                    send_message = f"✓ {row['display']}에 전송됨"
+                                except Exception as exc:
+                                    send_message = f"✗ {exc}"
                 finally:
                     cb.raw()
                 message = send_message

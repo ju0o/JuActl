@@ -65,3 +65,18 @@ def observe_activity(pane_id: str) -> tuple[str, str]:
         return state, f"cpu={cpu_percent:.1f}" if cpu_percent is not None else "cpu=unknown"
     except Exception as exc:
         return "UNKNOWN", type(exc).__name__
+
+
+def send_blocked_reason(target: str) -> str | None:
+    """Return a user-facing reason when sending would accept an approval prompt."""
+    state, _ = observe_activity(target)
+    if state != "WAITING_INPUT":
+        return None
+    name = target
+    try:
+        from actl.core.tmux import pane_field
+
+        name = pane_field(target, "#{pane_title}") or target
+    except Exception:
+        pass
+    return f"{name}가 승인을 기다리고 있어요. 보내면 승인 창에 들어가요 — ASUS 화면에서 직접 확인하세요"
