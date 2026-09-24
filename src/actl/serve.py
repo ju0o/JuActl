@@ -152,7 +152,7 @@ async function api(path, opts){
   const r = await fetch(path, opts);
   const j = await r.json();
   if(r.status===401) { TOKEN=prompt('JuActl 웹 토큰을 입력하세요')||''; if(TOKEN){sessionStorage.setItem('actl-token',TOKEN); return api(path,opts);} }
-  if(!j.ok) throw new Error(j.error||("HTTP "+r.status));
+  if(!j.ok) throw new Error(j.error||"연결이 끊겼어요 — 새로고침해 주세요");
   return j.data;
 }
 async function refresh(quiet){
@@ -430,11 +430,11 @@ class Handler(BaseHTTPRequestHandler):
                 agent = urllib.parse.parse_qs(parsed.query).get("agent", [""])[0]
                 self._json(True, _copy_data(agent))
                 return
-            self._json(False, error="unknown endpoint", code=404)
+            self._json(False, error="요청을 찾지 못했어요 — 주소를 확인한 후 다시 시도해 주세요", code=404)
         except ValueError as exc:
             self._json(False, error=str(exc)[:300], code=400)
         except Exception as exc:
-            self._json(False, error=f"{type(exc).__name__}: {exc}"[:300], code=500)
+            self._json(False, error="문제가 생겼어요 — 새로고침 후 다시 시도해 주세요", code=500)
 
     def do_POST(self) -> None:
         if not self._authorized():
@@ -445,7 +445,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("JSON body must be an object")
         except Exception:
-            self._json(False, error="invalid JSON", code=400)
+            self._json(False, error="요청 형식이 잘못됐어요 — 다시 시도해 주세요", code=400)
             return
         try:
             if self.path == "/api/send":
@@ -496,11 +496,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/refresh":
                 self._json(True, _board_data(reconcile=True))
                 return
-            self._json(False, error="unknown endpoint", code=404)
+            self._json(False, error="요청을 찾지 못했어요 — 주소를 확인한 후 다시 시도해 주세요", code=404)
         except ValueError as exc:
             self._json(False, error=str(exc)[:300], code=400)
         except Exception as exc:
-            self._json(False, error=f"{type(exc).__name__}: {exc}"[:300], code=500)
+            self._json(False, error="문제가 생겼어요 — 새로고침 후 다시 시도해 주세요", code=500)
 
 
 def run_serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> int:
