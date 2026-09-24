@@ -58,11 +58,30 @@ PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)
 SIDEBAR_WIDTH = 240
 SIDEBAR_WRAPLENGTH = 216
 CENTER_WRAPLENGTH = 330
+RUNTIME_STATE_LABELS = {
+    "IDLE": "쉬는 중",
+    "DONE": "쉬는 중",
+    "WORKING": "일하는 중",
+    "WAITING_INPUT": "승인 기다림",
+    "BLOCKED": "연결 끊김",
+    "UNKNOWN": "확인 중",
+}
 
 
-def _card_line(row: dict) -> str:
+def _card_header(row: dict) -> str:
+    role = str(row.get("role") or "").strip()
+    parts = [str(row.get("display") or row.get("agent") or "UNKNOWN")]
+    if role and role != "UNKNOWN":
+        parts.append(role)
+    parts.append(RUNTIME_STATE_LABELS.get(row.get("runtime_state"), "확인 중"))
+    return " · ".join(parts)
+
+
+def _card_line(row: dict, *, send_inflight: bool = False,
+               post_send_running_keys: set[str] = ()) -> str:
     """Return the bounded, user-facing summary for one runtime card."""
-    if row.get("_result_ready"):
+    running_after_send = row.get("runtime_key") in post_send_running_keys
+    if row.get("_result_ready") and not send_inflight and not running_after_send:
         return "답이 왔어요 · 결과 복사"
     phase = {
         "작업중": "작업 중",
@@ -71,14 +90,18 @@ def _card_line(row: dict) -> str:
         "연결됨": "확인 중",
         "상태 확인 필요": "확인 중",
     }.get(Board._phase(row), Board._phase(row))
-    if row.get("result_state") == "READY":
+    if send_inflight or running_after_send:
+        phase = "작업 중"
+    elif row.get("result_state") == "READY":
         phase = "결과 도착"
     elif row.get("state") in {"DOWN", "MISMATCH"}:
         phase = "연결 끊김"
     project = str(row.get("project") or "").strip()
     if project in {"", "UNASSIGNED", "UNKNOWN"}:
         project = "프로젝트 미지정"
-    preview = str(row.get("pane_preview") or row.get("preview") or row.get("detail") or "—")
+    preview = str(row.get("pane_preview") or row.get("preview") or "").strip()
+    if not preview or "no text" in preview.lower():
+        preview = "아직 답 없음"
     preview = (" ".join(preview.split())
                .replace("UNKNOWN", "미확인").replace("RUNNING", "작업 중").replace("%", ""))[:60]
     return f"{phase} · {project} · {preview}"
@@ -601,7 +624,8 @@ class Board:
                 row = next((item for item in self.rows if item["agent"] == agent), None)
                 if row and row.get("activity_state") == "RUNNING":
                     # Legacy motion contract was "RUNNING ◐ · 작업중"; cards now stay plain.
-                    label.configure(text=_card_line(row))
+                    label.configure(text=_card_line(row, send_inflight=self.send_inflight,
+                                                    post_send_running_keys=self._post_send_running_keys))
         self.root.after(180, self._motion_tick)
 
     @staticmethod
@@ -1090,10 +1114,12 @@ class Board:
             card.pack(fill="x", pady=4)
             top = tk.Frame(card, bg=PANEL)
             top.pack(fill="x", padx=8, pady=(6, 0))
-            tk.Label(top, text=f"{glyph} {r['display']}  ·  {r.get('role', 'UNKNOWN')}", bg=PANEL, fg=color,
+            tk.Label(top, text=f"{glyph} {_card_header(r)}", bg=PANEL, fg=color,
                      font=("Segoe UI", 11, "bold")).pack(side="left")
-            tk.Label(top, text=r.get("runtime_state", "UNKNOWN"), bg=PANEL, fg=color, font=FONT).pack(side="right")
-            phase_label = tk.Label(card, text=_card_line(r), bg=PANEL, fg=DIM,
+            phase_label = tk.Label(card, text=_card_line(
+                r, send_inflight=self.send_inflight,
+                post_send_running_keys=self._post_send_running_keys,
+            ), bg=PANEL, fg=DIM,
                                    font=FONT, anchor="w", justify="left", wraplength=CENTER_WRAPLENGTH)
             phase_label.pack(fill="x", padx=8, pady=(0, 6))
             self.motion_labels[r["runtime_key"]] = phase_label
