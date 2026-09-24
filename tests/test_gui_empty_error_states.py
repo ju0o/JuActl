@@ -52,11 +52,11 @@ def _board():
     return board
 
 
-def test_state_messages_are_exact_and_unreachable_includes_detail():
+def test_state_messages_are_exact_and_unreachable_excludes_detail():
     assert gui._state_message("loading") == "ASUS에서 에이전트를 찾는 중…"
     assert gui._state_message("empty") == "ASUS에서 실행 중인 에이전트가 없습니다. ASUS tmux에서 에이전트를 시작하면 자동으로 나타납니다."
     assert gui._state_message("unreachable", "timeout") == (
-        "ASUS에 연결할 수 없습니다. ASUS 전원과 네트워크를 확인한 뒤 [다시 시도]를 누르세요. (timeout)"
+        "ASUS에 연결할 수 없습니다. ASUS 전원과 네트워크를 확인한 뒤 [다시 시도]를 누르세요."
     )
 
 
@@ -66,8 +66,8 @@ def test_refresh_failure_shows_error_and_disables_actions():
     board._refresh_done(RuntimeError("timeout"))
 
     assert board.status_var.value == "ASUS 연결 안 됨"
-    assert "timeout" in board.preview.value
-    assert board.project_counts.value == board.preview.value
+    assert board.preview.value == gui._state_message("unreachable")
+    assert board.project_counts.value == "연결 안 됨"
     assert all(widget.states[-1] == "disabled" for widget in board.action_buttons.values())
 
 

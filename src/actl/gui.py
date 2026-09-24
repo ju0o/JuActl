@@ -56,6 +56,7 @@ PANE_BOARD_LABELS_KEY = "pane_board_labels"
 PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"
 SIDEBAR_WIDTH = 240
 SIDEBAR_WRAPLENGTH = 216
+CENTER_WRAPLENGTH = 330
 
 
 def _configure_fonts(root) -> None:
@@ -280,9 +281,9 @@ class Board:
 
         main = ttk.Frame(self.root, padding=(16, 14, 16, 16))
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, minsize=SIDEBAR_WIDTH, weight=1)
-        main.columnconfigure(1, minsize=360, weight=3)
-        main.columnconfigure(2, minsize=300, weight=2)
+        main.columnconfigure(0, minsize=SIDEBAR_WIDTH, weight=1, uniform="board")
+        main.columnconfigure(1, minsize=360, weight=3, uniform="board")
+        main.columnconfigure(2, minsize=300, weight=2, uniform="board")
         main.rowconfigure(0, weight=1)
 
         sidebar = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
@@ -969,7 +970,8 @@ class Board:
                         if not self.project_filter and not query and mode == "전체"
                         else "조건에 맞는 에이전트 없음")
             tk.Label(self.agent_cards, text=no_match, bg=BG, fg=DIM,
-                     font=FONT).pack(anchor="w", padx=8, pady=8)
+                     font=FONT, justify="left", anchor="w",
+                     wraplength=CENTER_WRAPLENGTH).pack(anchor="w", padx=8, pady=8)
 
     def _highlight(self, agent: str) -> None:
         for name, card in self.cards.items():
