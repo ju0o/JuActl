@@ -1475,7 +1475,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
             agent = _resolve_selection(args.command_agent)
             if not agent:
                 raise SystemExit(_unknown_agent(args.command_agent))
-            prompt = sys.stdin.read()
+            prompt = sys.stdin.read().rstrip("\r\n")
             if not prompt.strip():
                 print("empty prompt", file=sys.stderr)
                 raise SystemExit(1)
