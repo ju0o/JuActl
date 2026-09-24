@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-control-cli"
-version = "0.1.1-managed"
+version = "0.2.0"
 description = "Single-terminal tmux control plane for multiple AI coding agent CLIs"
 requires-python = ">=3.10"
 dependencies = []

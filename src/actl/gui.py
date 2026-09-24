@@ -15,6 +15,7 @@ import queue
 import threading
 import time
 
+from actl import __version__
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map, reconcile
@@ -211,7 +212,7 @@ class Board:
         self.ssh_target = ssh_target
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
+        self.root.title(f"actl {__version__} — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
         self.root.geometry("1440x900")
         self.root.minsize(1100, 700)
         self.root.configure(bg=BG)
@@ -294,7 +295,7 @@ class Board:
         top = tk.Frame(self.root, bg=GLOBAL_NAV)
         top.pack(fill="x")
         conn = f"SSH · {self.ssh_target}" if self.ssh_target else "LOCAL"
-        tk.Label(top, text="actl · 에이전트 보드", bg=GLOBAL_NAV, fg=TXT,
+        tk.Label(top, text=f"actl {__version__} · 에이전트 보드", bg=GLOBAL_NAV, fg=TXT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
         tk.Label(top, text=conn, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT).pack(side="left", pady=12)
