@@ -297,6 +297,17 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
     """Resolve on every send; never retain a target across /switch."""
     from actl.core.remote import is_remote, remote_send
     from actl.core.activity import send_blocked_reason
+    remote = is_remote()
+
+    def guard_direct_writer(target_pane: str) -> None:
+        if remote:
+            return
+        from actl.core.runtime import guard_tmux_writer
+
+        try:
+            guard_tmux_writer(target=target_pane)
+        except WriterDenied as denied:
+            raise RuntimeError(f"{denied.code}: {denied.detail}") from denied
 
     if target is not None:
         validation = validate_target(agent, target)
@@ -304,10 +315,11 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
             raise ValueError(
                 f"Selected runtime is {validation.state}; sending blocked: {validation.detail}"
             )
+        guard_direct_writer(target)
         if reason := send_blocked_reason(target):
             raise RuntimeError(reason)
         try:
-            if is_remote():
+            if remote:
                 from actl.core.remote import ManagedUnsupported, remote_managed_send
 
                 try:
@@ -331,7 +343,10 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
         record("send", agent=agent, target=target, ok=True, chars=len(prompt))
         return target
 
-    if is_remote():
+    target = _resolve_live_target(config, agent)
+    if remote:
+        if reason := send_blocked_reason(target):
+            raise RuntimeError(reason)
         try:
             target = remote_send(agent, prompt)
         except Exception as exc:
@@ -343,7 +358,7 @@ def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | No
 
         record("send", agent=agent, target=target, remote=True, ok=True, chars=len(prompt))
         return target
-    target = _resolve_live_target(config, agent)
+    guard_direct_writer(target)
     if reason := send_blocked_reason(target):
         raise RuntimeError(reason)
     try:
