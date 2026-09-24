@@ -20,7 +20,7 @@ from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map, reconcile
 from actl.core.registry import AGENTS
 from actl.core.validation import validate_target
-from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
+from actl.tui import _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
 BG = "#0B0D10"
@@ -57,6 +57,27 @@ PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)
 SIDEBAR_WIDTH = 240
 SIDEBAR_WRAPLENGTH = 216
 CENTER_WRAPLENGTH = 330
+
+
+def _card_line(row: dict) -> str:
+    """Return the bounded, user-facing summary for one runtime card."""
+    phase = {
+        "작업중": "작업 중",
+        "Prompt 대기": "대기",
+        "연결됨": "확인 중",
+        "상태 확인 필요": "확인 중",
+    }.get(Board._phase(row), Board._phase(row))
+    if row.get("result_state") == "READY":
+        phase = "결과 도착"
+    elif row.get("state") in {"DOWN", "MISMATCH"}:
+        phase = "연결 끊김"
+    project = str(row.get("project") or "").strip()
+    if project in {"", "UNASSIGNED", "UNKNOWN"}:
+        project = "프로젝트 미지정"
+    preview = str(row.get("pane_preview") or row.get("preview") or row.get("detail") or "—")
+    preview = (" ".join(preview.split())
+               .replace("UNKNOWN", "미확인").replace("RUNNING", "작업 중").replace("%", ""))[:60]
+    return f"{phase} · {project} · {preview}"
 
 
 def _configure_fonts(root) -> None:
@@ -144,22 +165,20 @@ def inspector_truth(row: dict) -> dict[str, str]:
     target = str(row.get("target") or "-")
     display = str(row.get("display") or row.get("agent") or "UNKNOWN")
     pane_id = str(row.get("pane_id") or target)
-    result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(
-        row.get("result_state"), "미확인"
-    )
     if target == "-":
         title = f"{display} — no live runtime"
     else:
         title = f"{display} · {pane_id} — LIVE PANE"
+    project = str(row.get("project") or "").strip()
+    if project in {"", "UNASSIGNED", "UNKNOWN"}:
+        project = "프로젝트 미지정"
     detail = (
-        f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')}\n"
-        f"Agent {display} · Role {row.get('role', 'UNKNOWN')}\n"
-        f"Model/Profile {row.get('model_profile', 'UNKNOWN')} · State {row.get('runtime_state', 'UNKNOWN')}\n"
-        f"Pane {pane_id} · Session {row.get('session', 'UNKNOWN')} "
-        f"Window {row.get('window', 'UNKNOWN')} Pane {row.get('pane_index', 'UNKNOWN')}\n"
-        f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}\n"
-        f"Task {row.get('current_task', 'UNKNOWN')} · Result {result_label} · Health {row.get('state', 'UNKNOWN')}\n"
-        f"Controls {row.get('control_reason', 'UNKNOWN')}: {row.get('control_detail', '')}"
+        f"상태: {_card_line(row).split(' · ', 1)[0]} · 프로젝트: {project}\n"
+        f"역할: {row.get('role') or '미지정'}"
+    )
+    diagnostic = (
+        f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')} · "
+        f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}"
     )
     return {
         "runtime_key": str(row.get("runtime_key") or ""),
@@ -170,6 +189,7 @@ def inspector_truth(row: dict) -> dict[str, str]:
         "session": str(row.get("session") or "UNKNOWN"),
         "title": title,
         "detail": detail,
+        "diagnostic": diagnostic,
     }
 
 
@@ -334,7 +354,7 @@ class Board:
         self.pane_title = tk.StringVar(value="에이전트를 선택하세요")
         tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG,
                  wraplength=330, justify="left").grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
-        self.detail_var = tk.StringVar(value="Machine · Project · Agent · Role · State · Result")
+        self.detail_var = tk.StringVar(value="상태 · 프로젝트\n역할")
         tk.Label(right, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=FONT,
                  anchor="w", justify="left", wraplength=330).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
         self.preview = tk.Text(right, wrap="none", font=FONT_MONO, bg=GLOBAL_NAV, fg=TXT,
@@ -561,6 +581,7 @@ class Board:
             for agent, label in list(self.motion_labels.items()):
                 row = next((item for item in self.rows if item["agent"] == agent), None)
                 if row and row.get("activity_state") == "RUNNING":
+                    # Existing motion feedback contract: "RUNNING ◐ · 작업중".
                     label.configure(text=f"RUNNING {frame} · 작업중")
         self.root.after(180, self._motion_tick)
 
@@ -671,6 +692,7 @@ class Board:
             self.preview.insert("end", f"{header}\n{body}")
             self.pane_title.set(truth["title"])
             self.detail_var.set(truth["detail"])
+            self.log(truth["diagnostic"])
             # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
             if self.loop_phase in {"READY"} and not self.send_inflight:
                 self.set_status("준비됨")
@@ -1007,7 +1029,6 @@ class Board:
             r.get("project", "UNKNOWN"), r.get("role", "UNKNOWN"), r.get("runtime_identity", ""),
         ))
         for r in visible:
-            state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
             color = STATUS_COLOR.get(r["state"], TXT)
             card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=ACC if r["runtime_key"] == selected else LINE,
@@ -1019,17 +1040,8 @@ class Board:
             tk.Label(top, text=f"{glyph} {r['display']}  ·  {r.get('role', 'UNKNOWN')}", bg=PANEL, fg=color,
                      font=("Segoe UI", 11, "bold")).pack(side="left")
             tk.Label(top, text=r.get("runtime_state", "UNKNOWN"), bg=PANEL, fg=color, font=FONT).pack(side="right")
-            pane_tail = (r.get("pane_preview") or r["preview"] or r["detail"] or "—").replace("\n", " ")
-            sub = (f"{r.get('project', 'UNKNOWN')} · {r.get('model_profile', 'UNKNOWN')} · "
-                   f"Pane {r.get('pane_id', 'UNKNOWN')} {r.get('pane_target', '')} · "
-                   f"{r.get('runtime_state', 'UNKNOWN')} · "
-                   f"{r.get('current_task', 'UNKNOWN')} · {pane_tail}")[:180]
-            phase = self._phase(r)
-            activity = phase
-            if r.get("activity_state") == "RUNNING":
-                activity = "RUNNING ◐ · 작업중"
-            phase_label = tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM,
-                                   font=FONT, anchor="w", justify="left")
+            phase_label = tk.Label(card, text=_card_line(r), bg=PANEL, fg=DIM,
+                                   font=FONT, anchor="w", justify="left", wraplength=CENTER_WRAPLENGTH)
             phase_label.pack(fill="x", padx=8, pady=(0, 6))
             self.motion_labels[r["runtime_key"]] = phase_label
             card.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
@@ -1081,6 +1093,7 @@ class Board:
         # Synchronize title + detail + action identity before any async preview.
         self.pane_title.set(truth["title"])
         self.detail_var.set(truth["detail"])
+        self.log(truth["diagnostic"])
         tgt = truth["target"]
         if tgt == "-":
             self.preview.delete("1.0", "end")
