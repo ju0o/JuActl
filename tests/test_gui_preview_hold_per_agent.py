@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from actl import gui
 
 
@@ -49,13 +47,28 @@ def _board():
 
 def test_preview_hold_is_per_agent_and_selection_clears_old_body(monkeypatch):
     board = _board()
+    monkeypatch.setattr(gui, "_pane_preview", lambda target, lines: f"{target} fresh")
+
+    board._request_preview(board.rows[0])
+    work, done = board.pending
+    done(work())
+    assert board.preview.value == "A copied text"
+
     board.selected = "b"
     board.on_select()
 
     assert board.preview.value == "Claude 화면 불러오는 중…"
-    monkeypatch.setattr(gui, "_pane_preview", lambda target, lines: f"{target} fresh")
     work, done = board.pending
     done(work())
 
     assert "A copied text" not in board.preview.value
     assert "%2 fresh" in board.preview.value
+
+    board.selected = "a"
+    board.on_select()
+    assert board.preview.value == "Codex 화면 불러오는 중…"
+    work, done = board.pending
+    done(work())
+
+    assert "Claude" not in board.preview.value
+    assert "%1 fresh" in board.preview.value

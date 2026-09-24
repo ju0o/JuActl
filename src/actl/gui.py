@@ -1200,6 +1200,7 @@ class Board:
         self.pane_title.set(truth["title"])
         self.detail_var.set(truth["detail"])
         if changed:
+            self.preview_hold = None
             self.preview.delete("1.0", "end")
             self.preview.insert("end", f"{truth['display']} 화면 불러오는 중…")
         if self._diagnostic_runtime_key != truth["runtime_key"]:
