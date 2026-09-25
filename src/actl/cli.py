@@ -241,7 +241,10 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     try:
         target = _resolve_live_target(config, agent)
     except ValueError as exc:
-        print(f"✗ {exc}")
+        if str(exc).startswith("Configured target is ") or "live pane 연결을 확인하지 못했어요" in str(exc):
+            print(f"✗ {AGENTS[agent].display_name} 연결된 실행 화면을 확인하지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
+        else:
+            print(f"✗ {exc}")
         return 1
     result = extract_last_response(agent, target, config)
     if not result.text:
@@ -1107,22 +1110,22 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         auto = newest_detection(matches)
         if auto is not None:
             pane_id = _persist_target(config, agent, auto.pane.pane_id)
-            print(f"✓ {AGENTS[agent].display_name}를 최신 live pane {auto.pane.pane_id}에 자동 연결했어요 — 다음 단계: 계속 진행하세요")
+            print(f"✓ {AGENTS[agent].display_name} 최신 실행 화면 {auto.pane.pane_id}에 연결을 다시 설정했어요 — 다음 단계: 계속 진행하세요")
             return pane_id
-        print(f"{AGENTS[agent].display_name} live pane이 여러 개예요 — 다음 단계: 번호 또는 %ID를 입력하세요")
+        print(f"{AGENTS[agent].display_name} 실행 화면이 여러 개예요 — 다음 단계: 번호 또는 %ID를 입력하세요")
         for idx, d in enumerate(matches, 1):
             print(f"  [{idx}] {d.pane.pane_id} — {d.evidence}")
-        raw = input("pane을 선택하세요 (번호 또는 %ID): ").strip()
+        raw = input("실행 화면을 선택하세요 (번호 또는 %ID): ").strip()
         detection = None
         if raw.startswith("%"):
             detection = next((d for d in matches if d.pane.pane_id == raw), None)
             if detection is None:
-                raise ValueError(f"일치하는 pane을 찾지 못했어요: {raw} — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
+                raise ValueError(f"일치하는 실행 화면을 찾지 못했어요: {raw} — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         else:
             try:
                 detection = matches[int(raw) - 1]
             except (ValueError, IndexError):
-                raise ValueError("pane 선택이 잘못됐어요 — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
+                raise ValueError("실행 화면 선택이 잘못됐어요 — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         pane_id = _persist_target(config, agent, detection.pane.pane_id)
         print(f"✓ {AGENTS[agent].display_name} 연결했어요: {detection.pane.pane_id} — 다음 단계: 계속 진행하세요")
         return pane_id
@@ -1131,7 +1134,7 @@ def _resolve_live_target(config: dict, agent: str) -> str:
             f"{AGENTS[agent].display_name} live pane 연결을 확인하지 못했어요 ({stored_detail}) "
             "— 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
         )
-    raise ValueError(f"{AGENTS[agent].display_name} live pane을 찾지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
+    raise ValueError(f"{AGENTS[agent].display_name} 실행 화면을 찾지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
 
 
 def _paste_mode(agent: str, target: str) -> None:

@@ -4,6 +4,7 @@ from contextlib import redirect_stdout
 from actl import cli
 from actl.core.models import CopyResult, PaneInfo
 from actl.core.discovery import Detection
+from actl.core.validation import TargetValidation
 
 
 def test_help_unknown_send_and_copy_messages_are_korean(monkeypatch):
@@ -57,14 +58,28 @@ def test_live_target_remap_and_missing_pane_messages_are_korean(monkeypatch):
     assert "re-mapped" not in text
     assert "Backup:" not in text
 
+    monkeypatch.setattr(cli, "get_target", lambda *_: (_ for _ in ()).throw(ValueError("config error")))
     monkeypatch.setattr(cli, "discover", lambda: [])
     out = io.StringIO()
     with redirect_stdout(out):
         assert cli._copy({}, "codex") == 1
     text = out.getvalue()
-    assert "live pane을 찾지 못했어요" in text
+    assert "실행 화면을 찾지 못했어요" in text
     assert "다음 단계:" in text
     assert "not currently mapped" not in text
+
+    monkeypatch.setattr(cli, "get_target", lambda *_: type("Target", (), {"target": "%stale"})())
+    monkeypatch.setattr(
+        cli,
+        "validate_target",
+        lambda *_: TargetValidation("DOWN", "%stale", detail="Configured tmux target does not exist"),
+    )
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cli._copy({}, "codex") == 1
+    text = out.getvalue()
+    assert "연결된 실행 화면을 확인하지 못했어요" in text
+    assert "Configured tmux target does not exist" not in text
 
 
 def test_send_and_osc52_messages_use_korean(monkeypatch):
