@@ -3,6 +3,36 @@
 The tester separates deterministic QA from live evidence. It never creates or
 deletes tmux sessions.
 
+## Disposable live E2E
+
+Run one isolated local or SSH-backed send/copy check. It creates only the
+timestamped `actl-e2e-*` session and removes it, plus its temporary ACTL
+configuration, HOME, and remote stub (when `--ssh` is used), on exit. The
+stub's `STUB_PROMPT>` marker is observed before the real `actl send`; copy
+uses the same temporary config and HOME, so it cannot read or write the user's
+mapping:
+
+```bash
+bash scripts/e2e_disposable.sh
+bash scripts/e2e_disposable.sh --ssh asus
+```
+
+The final line is JSON with `ok`, ordered `steps`, elapsed `ms`, and `session`.
+
+## Offline Board harness
+
+Run the disposable Windows Board flow without SSH, real tmux, or a real agent
+pane:
+
+```bash
+bash scripts/tester.sh --offline
+```
+
+The harness invokes the Board handlers in memory, sends a prompt to a temporary
+stub-agent, observes its deterministic RESULT, fetches it through `/api/copy`,
+and removes the disposable session directory in all cases. It must not be used
+as evidence of live Windows or ASUS transport behavior.
+
 ## Run
 
 ```bash

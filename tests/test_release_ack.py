@@ -292,6 +292,111 @@ def test_reconcile_requires_matching_command(monkeypatch, tmp_path):
     assert _reservation_state(tmp_path, grant["reservationId"]) == "HELD"
 
 
+def test_ownerless_expired_recovery_reconciles_without_lease_token(monkeypatch, tmp_path):
+    clock = {"ns": 50_000_000_000}
+    monkeypatch.setattr(runtime, "boot_time_ns", lambda: clock["ns"])
+    grant, ctx = _acquire(monkeypatch, tmp_path, "rt_v18_ownerless")
+    _send_ok(monkeypatch, tmp_path, grant, ctx, "cmd_v18_ownerless")
+    clock["ns"] += runtime.DEFAULT_LEASE_NS + 1
+    runtime.handle_runtime_request({
+        "contractVersion": 1,
+        "requestId": str(uuid.uuid4()),
+        "operation": "reserve",
+        "action": "acquire",
+        "runtimeId": grant["runtimeId"],
+        "mode": "MANAGED",
+        "expectedContext": ctx,
+        "serverScope": _scope(tmp_path),
+    })
+    request = {
+        "contractVersion": 1,
+        "requestId": str(uuid.uuid4()),
+        "operation": "reserve",
+        "action": "recover",
+        "reservationId": grant["reservationId"],
+        "fence": grant["fence"],
+        "recoveryEvidence": {
+            "kind": "OWNERLESS_EXPIRED_RECOVERY",
+            "acknowledged": True,
+            "reason": "LEASE_CREDENTIAL_IRRECOVERABLE",
+            "reservationId": grant["reservationId"],
+            "fence": grant["fence"],
+            "commands": [{"commandId": "cmd_v18_ownerless", "disposition": "DELIVERY_AMBIGUOUS"}],
+        },
+        "serverScope": _scope(tmp_path),
+    }
+    ok, code = runtime.handle_runtime_request(request)
+    assert code == 0 and ok["data"]["state"] == "RELEASED"
+    assert _reservation_state(tmp_path, grant["reservationId"]) == "RELEASED"
+    path = runtime.journal_path_for_scope(
+        runtime.scope_id_for_socket("hk-test", "1000", str(tmp_path / "sock"))
+    )
+    with runtime.open_journal(path) as journal:
+        receipt = journal.conn.execute(
+            "SELECT kind, stage FROM receipts WHERE command_id = ? ORDER BY created_at DESC LIMIT 1",
+            ("cmd_v18_ownerless",),
+        ).fetchone()
+        assert tuple(receipt) == ("OWNERLESS_EXPIRED_RECOVERY", "DELIVERY_AMBIGUOUS")
+
+
+def test_ownerless_recovery_does_not_take_over_held(monkeypatch, tmp_path):
+    grant, _ = _acquire(monkeypatch, tmp_path, "rt_v18_active")
+    response, code = runtime.handle_runtime_request({
+        "contractVersion": 1,
+        "requestId": str(uuid.uuid4()),
+        "operation": "reserve",
+        "action": "recover",
+        "reservationId": grant["reservationId"],
+        "fence": grant["fence"],
+        "recoveryEvidence": {
+            "kind": "OWNERLESS_EXPIRED_RECOVERY",
+            "acknowledged": True,
+            "reason": "LEASE_CREDENTIAL_IRRECOVERABLE",
+            "reservationId": grant["reservationId"],
+            "fence": grant["fence"],
+            "commands": [],
+        },
+        "serverScope": _scope(tmp_path),
+    })
+    assert code == 2 and response["error"]["code"] == "BUSY"
+    assert _reservation_state(tmp_path, grant["reservationId"]) == "HELD"
+
+
+def test_ownerless_recovery_final_capture_closes_expired_final(monkeypatch, tmp_path):
+    grant, _ = _acquire(monkeypatch, tmp_path, "rt_v18_final_recovery")
+    command_id = "cmd_v18_final_recovery"
+    result_id = "res1_v18_final_recovery"
+    path = runtime.journal_path_for_scope(
+        runtime.scope_id_for_socket("hk-test", "1000", str(tmp_path / "sock"))
+    )
+    with runtime.open_journal(path) as journal:
+        journal.conn.execute(
+            "INSERT INTO commands(command_id,runtime_id,reservation_id,request_id,request_body_sha256,stage,"
+            "delivery_disposition,wire_prompt_sha256,wire_prompt,cursor_json,session_id,turn_id,"
+            "interrupt_intent_at,result_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (command_id, grant["runtimeId"], grant["reservationId"], "req", "sha", "FINAL",
+             "TRANSPORT_SENT", "prompt", "prompt", "{}", "session", "turn", None, result_id,
+             runtime.observed_at_now(), runtime.observed_at_now()),
+        )
+        clock = runtime.boot_time_ns()
+        journal.conn.execute("UPDATE reservations SET expires_boot_ns = ? WHERE reservation_id = ?", (clock - 1, grant["reservationId"]))
+    runtime.handle_runtime_request({
+        "contractVersion": 1, "requestId": str(uuid.uuid4()), "operation": "status",
+        "runtimeId": grant["runtimeId"], "serverScope": _scope(tmp_path),
+    })
+    response, code = runtime.handle_runtime_request({
+        "contractVersion": 1, "requestId": str(uuid.uuid4()), "operation": "reserve",
+        "action": "recover", "reservationId": grant["reservationId"], "fence": grant["fence"],
+        "recoveryEvidence": {
+            "kind": "OWNERLESS_EXPIRED_RECOVERY", "acknowledged": True,
+            "reason": "LEASE_CREDENTIAL_IRRECOVERABLE", "reservationId": grant["reservationId"],
+            "fence": grant["fence"], "commands": [{"commandId": command_id,
+            "disposition": "FINAL_CAPTURE", "resultId": result_id}],
+        }, "serverScope": _scope(tmp_path),
+    })
+    assert code == 0 and response["data"]["state"] == "RELEASED"
+
+
 def test_send_does_not_auto_release(monkeypatch, tmp_path):
     grant, ctx = _acquire(monkeypatch, tmp_path, "rt_v18_hold")
     _send_ok(monkeypatch, tmp_path, grant, ctx, "cmd_v18_hold")

@@ -26,6 +26,10 @@ def _agent(text, phase="final_answer"):
     return _completed("AgentMessage", phase=phase, content=[{"type": "Text", "text": text}])
 
 
+def _task_complete(text, turn_id):
+    return {"type": "event_msg", "payload": {"type": "task_complete", "turn_id": turn_id, "last_agent_message": text}}
+
+
 def _active(monkeypatch, root, rollout, cwd, session_id="active", locks=None):
     monkeypatch.setattr(codex, "_codex_process", lambda *_: 55)
     monkeypatch.setattr(codex, "_open_rollouts", lambda *_: [rollout])
@@ -268,6 +272,59 @@ def test_managed_refuses_adoption_when_fd_closed(monkeypatch, tmp_path):
     managed = codex.resolve_codex_managed(tmp_path, "%1", 55)
     assert managed.code == "AMBIGUOUS_SESSION"
     assert "adoption" in managed.detail.lower() or "refuses" in managed.detail.lower() or "No exact" in managed.detail
+
+
+def test_managed_dynamic_panes_recreated_concurrent_and_stale_rollouts(monkeypatch, tmp_path):
+    cwd = tmp_path / "JuTell"
+    cwd.mkdir()
+    stale = _rollout(tmp_path / "sessions" / "rollout-stale.jsonl", "stale", cwd, [_agent("STALE")])
+    def events(text, turn):
+        return [
+            _completed("UserMessage", turn_id=turn, content=[{"type": "text", "text": "wire"}]),
+            _completed("AgentMessage", phase="final_answer", turn_id=turn, content=[{"type": "Text", "text": text}]),
+            _task_complete(text, turn),
+        ]
+
+    current = _rollout(tmp_path / "sessions" / "rollout-current.jsonl", "current", cwd, events("CURRENT", "turn-current"))
+    recreated = _rollout(tmp_path / "sessions" / "rollout-recreated.jsonl", "recreated", cwd, events("RECREATED", "turn-recreated"))
+    concurrent = _rollout(tmp_path / "sessions" / "rollout-concurrent.jsonl", "concurrent", cwd, events("CONCURRENT", "turn-concurrent"))
+    locks = tmp_path / "thread-writer-locks"
+    locks.mkdir()
+    for session_id in ("current", "recreated", "concurrent"):
+        (locks / f"{session_id}.lock").touch()
+
+    pane_pids = {"%09": 70, "%17": 71, "%23": 72, "%31": 73}
+    # The filesystem contains a stale rollout and all three live sessions;
+    # only the selected pane's process-owned FD set may choose a rollout.
+    owned = {
+        70: [stale, locks / "stale.lock"],
+        71: [current, locks / "current.lock"],
+        72: [recreated, locks / "recreated.lock"],
+        73: [concurrent, locks / "concurrent.lock"],
+    }
+    monkeypatch.setattr(codex, "pane_field", lambda pane, field: str(pane_pids[pane]) if field == "#{pane_pid}" else str(cwd))
+    monkeypatch.setattr(codex, "pane_processes", lambda pid: [type("Process", (), {"pid": pid, "args": "/usr/bin/codex"})()])
+    monkeypatch.setattr(codex, "_open_paths", lambda pid: owned[pid])
+
+    def collect(pane, prompt, expected):
+        resolution = codex.resolve_codex_managed(tmp_path, pane)
+        assert resolution.code == "OK" and resolution.session_id == expected
+        assert resolution.rollout_path != stale
+        result = codex.collect_codex_final(
+            path=resolution.rollout_path,
+            cursor={"path": str(resolution.rollout_path), "byteOffset": 0},
+            wire_prompt=prompt or "wire",
+            command_id=f"cmd-{expected}",
+            runtime_id=f"runtime-{expected}",
+            prompt_sha256="prompt-sha",
+        )
+        assert result.code == "FINAL"
+        return result.packet["rawFinalText"]
+
+    assert "STALE" in stale.read_text(encoding="utf-8")
+    assert collect("%17", "", "current") == "CURRENT"
+    assert collect("%23", "", "recreated") == "RECREATED"
+    assert collect("%31", "", "concurrent") == "CONCURRENT"
 
 
 def test_managed_jsonl_incomplete_tail_and_malformed_and_inode(tmp_path):

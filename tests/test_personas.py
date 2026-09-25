@@ -24,13 +24,23 @@ def test_persona_operator_refresh_is_event_first_with_health_fallback():
     assert "60000" in gui
 
 
-def test_persona_dashboard_only_shows_actionable_mappings_and_clear_phases():
+def test_persona_dashboard_shows_live_runtimes_and_gates_controls():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
-    assert 'r["target"] in {"-", ""}' in gui
+    assert 'row.get("control_ready")' in gui
+    assert 'text="에이전트"' in gui
     assert 'return "결과 도착"' in gui
     assert 'return "작업중"' in gui
     assert 'return "Prompt 대기"' in gui
-    assert 'columns=("kind", "runtime", "path", "agent", "mapped")' in gui
+
+
+def test_persona_dashboard_inventory_is_fast_and_hydrates_after_render():
+    gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
+    tui = (ROOT / "src/actl/tui.py").read_text(encoding="utf-8")
+    assert 'hydrate=False' in gui
+    assert 'hydrate=True' in gui
+    assert 'if self.hydrating' in gui
+    assert 'capture_pane(target, history=8)' not in tui
+    assert 'history=8' not in tui
 
 
 def test_persona_windows_remote_copy_prefers_mainpc_clipboard():
@@ -50,10 +60,10 @@ def test_persona_running_motion_stops_at_idle_prompt_phase():
 def test_persona_monitor_uses_one_surface_and_serializes_initial_board_load():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert "self.resp = self.preview" in gui
-    assert 'self.board_opened = False' in gui
-    assert "if self.ssh_target and not self.board_opened" in gui
-    assert 'self.root.after(80, self.on_board)' in gui
-    assert 'height=2' in gui
+    refresh_done = gui.split("    def _refresh_done", 1)[1].split("    def _render_projects", 1)[0]
+    assert "self.on_board" not in refresh_done
+    assert '("PANE BOARD", self.on_board, False)' in gui
+    assert 'ScrolledText(right, height=5' in gui
 
 
 def test_persona_event_watch_throttles_output_bursts():
@@ -67,14 +77,26 @@ def test_persona_pane_event_refresh_is_targeted_not_full_rows_refresh():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
     assert "self.pending_event_panes" in gui
     assert "self._refresh_event_panes(pane_ids)" in gui
-    assert "self._bg(lambda: _pane_preview(target), self._event_pane_done)" in gui
+    assert "self._request_preview(row)" in gui
+
+
+def test_persona_preview_preserves_last_good_on_failure():
+    from actl.gui import _preview_text
+
+    text, fresh = _preview_text("last pane", "(미리보기 불가: timeout)")
+    # Founder UX: keep last-good pane; do not paint a timeout wall over it.
+    assert "last pane" in text and not fresh
+    assert "timeout" not in text.lower()
 
 
 def test_persona_send_failure_is_visible_in_monitor_surface():
     gui = (ROOT / "src/actl/gui.py").read_text(encoding="utf-8")
-    assert 'self.set_status("전송 실패")' in gui
-    assert "전송 실패\\n\\n{detail}" in gui
-    assert "BUSY라면 현재 다른 작업이 pane을 점유 중입니다." in gui
+    # V2: Founder-facing send failure remains visible; transport busy is not remap/DOWN.
+    assert "SEND_STATE_KO[SEND_FAILED]" in gui
+    assert "전송 실패" in gui
+    assert "원격 통신 대기 중" in gui
+    assert "매핑 DOWN 아님" in gui or "재매핑은 필요 없습니다" in gui
+    assert "BUSY라면 현재 다른 작업이 pane을 점유 중입니다." not in gui
 
 
 def test_persona_pane_board_supports_confirmed_cross_window_move():

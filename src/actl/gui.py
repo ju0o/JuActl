@@ -15,33 +15,235 @@ import queue
 import threading
 import time
 
+from actl import __version__
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import Detection, STRONG_CONFIDENCE, discover, manual_map, reconcile
 from actl.core.registry import AGENTS
 from actl.core.validation import validate_target
-from actl.tui import STATE_KO, _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
+from actl.tui import _all_panes, _pane_board, _pane_preview, _unmapped_panes, _verify_row
 from actl.utils.clipboard import copy_text
 
-BG = "#f5f5f7"
-PANEL = "#ffffff"
-PANEL2 = "#f2f2f7"
-LINE = "#d2d2d7"
-TXT = "#1d1d1f"
-DIM = "#6e6e73"
-NEON = "#0066cc"
-MAGENTA = "#1d1d1f"
-LIME = "#248a3d"
-OK = "#248a3d"
-WARN = "#b25000"
-BAD = "#c9342f"
+BG = "#0B0D10"
+PANEL = "#12151A"
+PANEL2 = "#161A20"
+LINE = "#262B33"
+TXT = "#E6E8EC"
+DIM = "#9AA3AE"
+NEON = "#7FD4C1"
+MAGENTA = "#7FD4C1"
+LIME = "#7FD4C1"
+OK = "#7FD4C1"
+WARN = "#E8C270"
+BAD = "#E0726C"
 ACC = NEON
 FONT = ("Segoe UI", 10)
-FONT_BIG = ("Segoe UI", 14, "bold")
-FONT_HDR = ("Segoe UI", 10, "bold")
-GLOBAL_NAV = "#000000"
-STATUS_COLOR = {"UP": OK, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM, "DETECTED": NEON}
-STATUS_GLYPH = {"UP": "●", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○", "DETECTED": "◉"}
+MONO_FAMILIES = ("JetBrains Mono", "Cascadia Mono", "Consolas")
+FONT_MONO = (MONO_FAMILIES[0], 10)
+FONT_BIG = ("JetBrains Mono", 14, "bold")
+FONT_HDR = ("JetBrains Mono", 10, "bold")
+GLOBAL_NAV = PANEL2
+STATUS_COLOR = {
+    "UP": OK, "WORKING": OK, "IDLE": OK, "TRANSPORT_BUSY": WARN,
+    "DEGRADED": WARN, "DOWN": BAD, "MISMATCH": WARN, "UNMAPPED": DIM,
+    "DETECTED": NEON, "UNKNOWN": DIM,
+}
+STATUS_GLYPH = {
+    "UP": "●", "WORKING": "◐", "IDLE": "●", "TRANSPORT_BUSY": "…",
+    "DEGRADED": "◈", "DOWN": "✖", "MISMATCH": "◈", "UNMAPPED": "○",
+    "DETECTED": "◉", "UNKNOWN": "·",
+}
+PANE_BOARD_LABELS_KEY = "pane_board_labels"
+PROMPT_PLACEHOLDER = "에이전트에게 보낼 내용 (Ctrl+Enter로 보내기)"
+SIDEBAR_WIDTH = 240
+SIDEBAR_WRAPLENGTH = 216
+CENTER_WRAPLENGTH = 330
+RUNTIME_STATE_LABELS = {
+    "IDLE": "쉬는 중",
+    "DONE": "쉬는 중",
+    "WORKING": "일하는 중",
+    "WAITING_INPUT": "승인 기다림",
+    "BLOCKED": "연결 끊김",
+    "UNKNOWN": "확인 중",
+}
+
+
+def _card_header(row: dict) -> str:
+    role = str(row.get("role") or "").strip()
+    parts = [str(row.get("display") or row.get("agent") or "UNKNOWN")]
+    if role and role != "UNKNOWN":
+        parts.append(role)
+    parts.append(RUNTIME_STATE_LABELS.get(row.get("runtime_state"), "확인 중"))
+    return " · ".join(parts)
+
+
+def _card_line(row: dict, *, send_inflight: bool = False,
+               post_send_running_keys: set[str] = ()) -> str:
+    """Return the bounded, user-facing summary for one runtime card."""
+    running_after_send = (
+        row.get("activity_state") == "RUNNING"
+        and row.get("runtime_key") in post_send_running_keys
+    )
+    if row.get("_result_ready") and not send_inflight and not running_after_send:
+        return "답이 왔어요 · 결과 복사"
+    phase = {
+        "작업중": "작업 중",
+        "Prompt 대기": "대기",
+        "승인 대기": "승인 기다림",
+        "연결됨": "확인 중",
+        "상태 확인 필요": "확인 중",
+    }.get(Board._phase(row), Board._phase(row))
+    if send_inflight or running_after_send:
+        phase = "작업 중"
+    elif row.get("result_state") == "READY":
+        phase = "결과 도착"
+    elif row.get("state") in {"DOWN", "MISMATCH"}:
+        phase = "연결 끊김"
+    project = str(row.get("project") or "").strip()
+    if project in {"", "UNASSIGNED", "UNKNOWN"}:
+        project = "프로젝트 미지정"
+    preview = str(row.get("pane_preview") or row.get("preview") or "").strip()
+    if not preview or "no text" in preview.lower():
+        preview = "아직 답 없음"
+    preview = (" ".join(preview.split())
+               .replace("UNKNOWN", "미확인").replace("RUNNING", "작업 중").replace("%", ""))[:60]
+    return f"{phase} · {project} · {preview}"
+
+
+def _configure_fonts(root) -> None:
+    import tkinter.font as tkfont
+
+    family = next((name for name in MONO_FAMILIES if name in tkfont.families(root)), "Consolas")
+    global FONT_MONO, FONT_BIG, FONT_HDR
+    FONT_MONO = (family, 10)
+    FONT_BIG = (family, 14, "bold")
+    FONT_HDR = (family, 10, "bold")
+
+
+def _state_message(kind: str, detail: str = "") -> str:
+    messages = {
+        "loading": "ASUS에서 에이전트를 찾는 중…",
+        "unreachable": "ASUS에 연결할 수 없습니다. ASUS 전원과 네트워크를 확인한 뒤 [다시 시도]를 누르세요.",
+        "empty": "ASUS에서 실행 중인 에이전트가 없습니다. ASUS tmux에서 에이전트를 시작하면 자동으로 나타납니다.",
+    }
+    message = messages[kind]
+    return message
+
+
+def _send_failure_text(detail: str, contention: bool = False) -> str:
+    return (
+        "ASUS가 다른 작업 중이라 보내지 못했어요 — 잠시 후 다시 보내 주세요"
+        if contention
+        else "보내지 못했어요 — 잠시 후 다시 보내기를 눌러 주세요"
+    )
+
+
+def _pane_board_label(config: dict, pane_id: str, fallback: str) -> str:
+    labels = config.get(PANE_BOARD_LABELS_KEY, {})
+    label = labels.get(pane_id) if isinstance(labels, dict) else None
+    return str(label) if label else fallback
+
+
+def _save_pane_board_label(config: dict, pane_id: str, label: str) -> None:
+    if not label or "\n" in label or "\r" in label:
+        raise ValueError("pane 별칭은 한 줄의 비어 있지 않은 이름이어야 합니다")
+    label = label.strip()
+    if not label:
+        raise ValueError("pane 별칭은 한 줄의 비어 있지 않은 이름이어야 합니다")
+    labels = config.setdefault(PANE_BOARD_LABELS_KEY, {})
+    if not isinstance(labels, dict):
+        labels = config[PANE_BOARD_LABELS_KEY] = {}
+    labels[pane_id] = label
+    save_config(config)
+
+
+def _pane_action_failure_text(action: str) -> str:
+    messages = {
+        "rename": "이름을 바꾸지 못했어요",
+        "session_create": "session을 만들지 못했어요",
+        "window_create": "창을 만들지 못했어요",
+        "pane_split": "pane을 나누지 못했어요",
+        "pane_move": "pane을 옮기지 못했어요",
+    }
+    return f"{messages.get(action, 'pane 작업을 완료하지 못했어요')} — 새로고침 후 다시 시도해 주세요"
+
+
+def _preview_text(previous: str | None, result: object) -> tuple[str, bool]:
+    """Return (display_text, is_fresh). Never wipe last-good pane with a timeout wall."""
+    text = result if isinstance(result, str) else f"실패: {result}"
+    failed = (
+        text.startswith("(미리보기 불가:")
+        or text.startswith("실패:")
+        or text.startswith("remote tmux command timed out")
+        or "미리보기 보류" in text
+    )
+    if failed and previous:
+        # Keep last known-good content; soft degrade only.
+        return previous, False
+    if failed and not previous:
+        return "(pane 읽는 중… 잠시 후 자동 갱신)", False
+    return text, True
+
+
+def _summary_text(rows: list[dict]) -> str:
+    from actl.core.projection import board_counts, runtime_counts
+
+    board = board_counts(rows)
+    runtime = runtime_counts(rows)
+    return (f"에이전트 {len(rows)} · 작업 중 {runtime['WORKING']} · 대기 {runtime['IDLE']} · "
+            f"문제 {board['error']} · 확인 중 {board['unknown']}")
+
+
+def _project_sidebar_line(total: int, working: int, attention: int) -> str:
+    return f"에이전트 {total} · 작업 중 {working} · 확인 {attention}"
+
+
+def _attention_reason(*reasons: object) -> str:
+    labels = {"pane gone": "창이 사라졌어요", "STALE": "오래된 정보",
+              "WAITING_INPUT": "승인 기다림"}
+    for reason in reasons:
+        if str(reason) in labels:
+            return labels[str(reason)]
+    return "확인 필요"
+
+
+def inspector_truth(row: dict) -> dict[str, str]:
+    """Derive all Founder-facing inspector fields from one runtime row.
+
+    Title, detail, and action target must always share the same runtime_key.
+    """
+    target = str(row.get("target") or "-")
+    display = str(row.get("display") or row.get("agent") or "UNKNOWN")
+    pane_id = str(row.get("pane_id") or target)
+    if target == "-":
+        title = f"{display} — no live runtime"
+    else:
+        title = f"{display} · {pane_id} — LIVE PANE"
+    project = str(row.get("project") or "").strip()
+    if project in {"", "UNASSIGNED", "UNKNOWN"}:
+        project = "프로젝트 미지정"
+    role = str(row.get("role") or "").strip()
+    if role in {"", "UNKNOWN"}:
+        role = "미지정"
+    detail = (
+        f"상태: {_card_line(row).split(' · ', 1)[0]} · 프로젝트: {project}\n"
+        f"역할: {role}"
+    )
+    diagnostic = (
+        f"Machine {row.get('machine', 'UNKNOWN')} · Project {row.get('project', 'UNKNOWN')} · "
+        f"Command {row.get('pane_command', 'UNKNOWN')} · PID {row.get('pane_pid', 'UNKNOWN')}"
+    )
+    return {
+        "runtime_key": str(row.get("runtime_key") or ""),
+        "agent": str(row.get("agent") or ""),
+        "display": display,
+        "target": target,
+        "pane_id": pane_id,
+        "session": str(row.get("session") or "UNKNOWN"),
+        "title": title,
+        "detail": detail,
+        "diagnostic": diagnostic,
+    }
 
 
 class Board:
@@ -55,31 +257,49 @@ class Board:
         self.ssh_target = ssh_target
         self.config = load_config()
         self.root = tk.Tk()
-        self.root.title("JuActl — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
+        self.root.title(f"actl {__version__} — MainPC 에이전트 보드" + (f" (ssh {ssh_target})" if ssh_target else ""))
         self.root.geometry("1440x900")
         self.root.minsize(1100, 700)
         self.root.configure(bg=BG)
         self.selected: str | None = None
         self.rows: list[dict] = []
+        self.connection_error: str | None = None
         self.jobs: queue.Queue = queue.Queue()
         self.auto_refresh = True
         self.refreshing = False
+        self.hydrating = False
+        self.preview_inflight: set[str] = set()
+        self.last_previews: dict[str, str] = {}
+        self.preview_degraded: set[str] = set()
+        self.preview_hold: tuple[str, float] | None = None
+        self.send_inflight = False
+        self._busy_wait_token = 0
+        self._busy_wait_after_id = None
+        self.last_submitted_prompt: str | None = None
+        self.loop_phase = "READY"
+        self.follow_preview_key: str | None = None
+        self.follow_preview_until = 0.0
+        self._diagnostic_runtime_key: str | None = None
         self.refresh_interval_ms = 12000
+        self.live_preview_interval_ms = 1800
         self.event_refresh_scheduled = False
         self.last_event_refresh = 0.0
         self.pending_event_panes: set[str] = set()
         self.pending_topology_refresh = False
-        self.board_opened = False
         self.motion_phase = 0
         self.motion_labels: dict[str, object] = {}
         self.previous_rows: dict[str, dict] = {}
+        self._result_ready_keys: set[str] = set()
+        self._post_send_running_keys: set[str] = set()
+        self._copied_result_keys: set[tuple[str, str, str]] = set()
         self.log_visible = False
         self._build()
         self.refresh()
         self.root.after(100, self._drain)
         self.root.after(180, self._motion_tick)
+        self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)")
+            self.auto_var.set("● 자동 갱신 켜짐")
             self.root.after(250, self._event_tick)
             self.root.after(60000, self._health_tick)
         else:
@@ -98,16 +318,16 @@ class Board:
         style.configure("TLabel", background=PANEL, foreground=TXT, font=FONT)
         style.configure("Title.TLabel", background=BG, foreground=TXT, font=FONT_HDR)
         style.configure("TButton", font=FONT, padding=4)
-        style.configure("Primary.TButton", background=ACC, foreground="white")
+        style.configure("Primary.TButton", background=ACC, foreground=BG)
 
     def _btn(self, parent, text: str, fn, primary: bool = False):
         import tkinter as tk
 
         bg = ACC if primary else PANEL
-        fg = "white" if primary else ACC
+        fg = BG if primary else ACC
         return tk.Button(parent, text=text, command=fn, bg=bg, fg=fg,
-                         activebackground="#005bb5" if primary else PANEL2,
-                         activeforeground="white" if primary else TXT,
+                         activebackground=ACC if primary else PANEL2,
+                         activeforeground=BG if primary else TXT,
                          relief="flat", borderwidth=0, padx=15 if primary else 12,
                          pady=8 if primary else 6, cursor="hand2", font=FONT)
 
@@ -115,62 +335,55 @@ class Board:
         import tkinter as tk
         from tkinter import ttk
 
+        _configure_fonts(self.root)
         self._style()
         top = tk.Frame(self.root, bg=GLOBAL_NAV)
         top.pack(fill="x")
         conn = f"SSH · {self.ssh_target}" if self.ssh_target else "LOCAL"
-        tk.Label(top, text="JUACTL", bg=GLOBAL_NAV, fg="white",
+        tk.Label(top, text=f"actl {__version__} · 에이전트 보드", bg=GLOBAL_NAV, fg=TXT,
                  font=("Segoe UI", 12, "bold")).pack(side="left", padx=(22, 8), pady=12)
-        tk.Label(top, text=f"AGENT BOARD  ·  {conn}", bg=GLOBAL_NAV, fg="#a1a1a6",
-                 font=("Segoe UI", 9)).pack(side="left", pady=12)
+        tk.Label(top, text=conn, bg=GLOBAL_NAV, fg=DIM,
+                 font=FONT).pack(side="left", pady=12)
         tk.Button(top, text="업데이트", command=self.on_update,
-                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
-                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
+                  bg=GLOBAL_NAV, fg=DIM, activebackground=GLOBAL_NAV,
+                  activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=8)
         self.auto_var = tk.StringVar(value="◉ 자동새로고침 ON (12s)")
         tk.Button(top, textvariable=self.auto_var, command=self.toggle_auto,
-                  bg=GLOBAL_NAV, fg="#a1a1a6", activebackground=GLOBAL_NAV,
-                  activeforeground="white", relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
-        self.summary_var = tk.StringVar(value="정상 0 · 문제 0 · 미확인 0")
-        tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg="#a1a1a6",
+                  bg=GLOBAL_NAV, fg=DIM, activebackground=GLOBAL_NAV,
+                  activeforeground=TXT, relief="flat", cursor="hand2", font=FONT).pack(side="left", padx=18)
+        self.summary_var = tk.StringVar(value="에이전트 0 · 작업 중 0 · 대기 0 · 문제 0 · 확인 중 0")
+        tk.Label(top, textvariable=self.summary_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="left", padx=8)
-        self.status_var = tk.StringVar(value="준비")
-        tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg="#a1a1a6",
+        self.status_var = tk.StringVar(value="준비됨")
+        tk.Label(top, textvariable=self.status_var, bg=GLOBAL_NAV, fg=DIM,
                  font=FONT_HDR).pack(side="right", padx=10)
 
-        main = ttk.Frame(self.root, padding=(20, 18, 20, 20))
+        main = ttk.Frame(self.root, padding=(16, 14, 16, 16))
         main.pack(fill="both", expand=True)
-        main.columnconfigure(0, weight=3)
-        main.columnconfigure(1, weight=2)
+        main.columnconfigure(0, minsize=SIDEBAR_WIDTH, weight=1, uniform="board")
+        main.columnconfigure(1, minsize=360, weight=3, uniform="board")
+        main.columnconfigure(2, minsize=300, weight=2, uniform="board")
         main.rowconfigure(0, weight=1)
 
-        left = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        left.rowconfigure(2, weight=1)
-        self.pane_title = tk.StringVar(value="Live pane — 에이전트를 선택하세요")
-        tk.Label(left, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=18, pady=(16, 4))
-        self.detail_var = tk.StringVar(value="대상을 선택하면 상태와 작업 가능 여부가 표시됩니다")
-        tk.Label(left, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=("Segoe UI", 9),
-                 anchor="w").grid(row=0, column=0, sticky="e", padx=18, pady=(16, 4))
-        self.preview = tk.Text(left, wrap="none", font=("Cascadia Mono", 12), bg=GLOBAL_NAV, fg="#f5f5f7",
-                               insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.preview.grid(row=2, column=0, sticky="nsew", padx=18)
-        # One monitor surface: pane stream, result output, and copy fallback
-        # should not compete for separate vertical panels.
-        self.resp = self.preview
-        cmdbar = tk.Frame(left, bg=PANEL)
-        cmdbar.grid(row=1, column=0, sticky="ew", pady=12, padx=18)
-        for label, primary in [("⧉ 복사", True), ("⎙ 출력", False), ("✓ 확실한 매핑", False), ("⇄ 재매핑", False),
-                               ("▦ pane보드", False), ("↻ 새로고침", False)]:
-            fn = {"⧉ 복사": self.on_copy, "⎙ 출력": self.on_print, "✓ 확실한 매핑": self.on_auto_map,
-                  "⇄ 재매핑": self.on_remap,
-                  "▦ pane보드": self.on_board, "↻ 새로고침": self.refresh}[label]
-            self._btn(cmdbar, label, fn, primary=primary).pack(side="left", padx=3)
-        right = tk.Frame(main, bg=BG, highlightthickness=0)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(2, weight=1)
-        right.rowconfigure(6, weight=0)
-        tk.Label(right, text="에이전트", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", padx=2, pady=(0, 10))
-        tools = tk.Frame(right, bg=BG)
+        sidebar = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        tk.Label(sidebar, text="프로젝트", bg=PANEL, fg=TXT, font=FONT_BIG).pack(anchor="w", padx=12, pady=(14, 8))
+        self.project_filter: str | None = None
+        self.project_buttons = tk.Frame(sidebar, bg=PANEL)
+        self.project_buttons.pack(fill="x", padx=8)
+        self.project_counts = tk.StringVar(value=_state_message("loading"))
+        tk.Label(sidebar, textvariable=self.project_counts, bg=PANEL, fg=DIM,
+                 font=FONT, justify="left", anchor="w", wraplength=SIDEBAR_WRAPLENGTH).pack(
+                     fill="x", padx=12, pady=10)
+        tk.Label(sidebar, text="확인 필요", bg=PANEL, fg=TXT, font=FONT_HDR).pack(anchor="w", padx=12, pady=(12, 4))
+        self.attention_frame = tk.Frame(sidebar, bg=PANEL)
+        self.attention_frame.pack(fill="x", padx=8)
+
+        center = tk.Frame(main, bg=BG)
+        center.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
+        center.rowconfigure(2, weight=1)
+        tk.Label(center, text="에이전트", bg=BG, fg=TXT, font=FONT_BIG).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        tools = tk.Frame(center, bg=BG)
         tools.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         self.filter_var = tk.StringVar()
         search = tk.Entry(tools, textvariable=self.filter_var, bg=PANEL, fg=TXT,
@@ -184,27 +397,86 @@ class Board:
         self.filter_mode = tk.StringVar(value="전체")
         mode_menu = tk.OptionMenu(tools, self.filter_mode, "전체", "결과 도착", "작업중", "Prompt 대기", "연결됨",
                                   command=lambda _v: self._render_cards(self.selected))
-        mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white",
+        mode_menu.configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground=BG,
                             relief="flat", highlightthickness=0)
-        mode_menu["menu"].configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground="white")
+        mode_menu["menu"].configure(bg=PANEL, fg=TXT, activebackground=NEON, activeforeground=BG)
         mode_menu.pack(side="right")
         self.cards: dict[str, tk.Frame] = {}
-        self.agent_cards = tk.Frame(right, bg=BG)
+        self.agent_cards = tk.Frame(center, bg=BG)
         self.agent_cards.grid(row=2, column=0, sticky="nsew")
-        tk.Label(right, text="메시지 전송 · Ctrl+Enter", bg=BG, fg=TXT, font=FONT_HDR).grid(row=3, column=0, sticky="w", padx=2, pady=(10, 3))
+
+        right = tk.Frame(main, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        right.grid(row=0, column=2, sticky="nsew")
+        right.rowconfigure(2, weight=1)
+        self.pane_title = tk.StringVar(value="에이전트를 선택하세요")
+        tk.Label(right, textvariable=self.pane_title, bg=PANEL, fg=TXT, font=FONT_BIG,
+                 wraplength=330, justify="left").grid(row=0, column=0, sticky="w", padx=14, pady=(14, 4))
+        self.detail_var = tk.StringVar(value="상태 · 프로젝트\n역할")
+        tk.Label(right, textvariable=self.detail_var, bg=PANEL, fg=DIM, font=FONT,
+                 anchor="w", justify="left", wraplength=330).grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
+        self.preview = tk.Text(right, wrap="none", font=FONT_MONO, bg=GLOBAL_NAV, fg=TXT,
+                               insertbackground=NEON, highlightthickness=0, borderwidth=0)
+        self.preview.grid(row=2, column=0, sticky="nsew", padx=14)
+        self.resp = self.preview
+        cmdbar = tk.Frame(right, bg=PANEL)
+        cmdbar.grid(row=3, column=0, sticky="ew", pady=8, padx=14)
+        self.action_buttons = {}
+        for label, fn, primary in [("COPY RESULT", self.on_copy, False), ("FOCUS", self.on_focus, False),
+                                   ("PANE BOARD", self.on_board, False)]:
+            button = self._btn(cmdbar, {"COPY RESULT": "결과 복사", "FOCUS": "ASUS 화면 전환",
+                                        "PANE BOARD": "pane 관리(고급)"}[label], fn, primary=primary)
+            button.pack(side="left", padx=2)
+            self.action_buttons[label] = button
         from tkinter import scrolledtext
 
-        self.msg = scrolledtext.ScrolledText(right, height=2, font=FONT, bg=PANEL, fg=TXT,
+        self.notice_var = tk.StringVar(value="")
+        self.notice_label = tk.Label(right, textvariable=self.notice_var, bg=PANEL, fg=DIM,
+                                     font=FONT_HDR, justify="left", anchor="w", wraplength=330)
+        self.notice_label.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 4))
+        tk.Label(right, text="보낼 내용 · Ctrl+Enter로 보내기", bg=PANEL, fg=TXT, font=FONT_HDR).grid(row=5, column=0, sticky="w", padx=14, pady=(4, 3))
+        self.msg = scrolledtext.ScrolledText(right, height=5, font=FONT, bg=PANEL2, fg=DIM,
                                              insertbackground=NEON, highlightthickness=0, borderwidth=0)
-        self.msg.grid(row=4, column=0, sticky="ew", pady=2)
-        sendrow = tk.Frame(right, bg=BG)
-        sendrow.grid(row=5, column=0, sticky="ew", pady=2)
-        self.send_btn = self._btn(sendrow, "➤ 전송", self.on_send, primary=True)
+        self.msg.grid(row=6, column=0, sticky="ew", padx=14, pady=2)
+        self.msg.insert("1.0", PROMPT_PLACEHOLDER)
+        self.msg.bind("<FocusIn>", lambda _e: self._clear_prompt_placeholder())
+        self.msg.bind("<FocusOut>", lambda _e: self._restore_prompt_placeholder())
+        sendrow = tk.Frame(right, bg=PANEL)
+        sendrow.grid(row=7, column=0, sticky="ew", pady=2, padx=14)
+        self.send_btn = tk.Button(sendrow, text="보내기", command=self.on_send, bg=ACC, fg=BG,
+                                  relief="flat", padx=12, pady=6)
         self.send_btn.pack(side="left")
-        self.log_toggle = tk.Button(sendrow, text="▸ 로그", command=self.toggle_log,
-                                    bg=BG, fg=DIM, activebackground=BG, relief="flat", cursor="hand2", font=FONT)
+        self.action_buttons["SEND PROMPT"] = self.send_btn
+        self.busy_confirm = tk.Frame(sendrow, bg=PANEL)
+        self.busy_confirm_label = tk.Label(
+            self.busy_confirm, text="작업 중이에요. 끝나면 보낼까요, 지금 보낼까요?",
+            bg=PANEL, fg=WARN, font=FONT, anchor="w",
+        )
+        self.busy_confirm_label.pack(side="left", padx=(8, 4))
+        tk.Button(self.busy_confirm, text="끝나면 보내기", command=lambda: self.on_send(busy_choice="wait"),
+                  bg=PANEL, fg=ACC, relief="flat", padx=6).pack(side="left")
+        tk.Button(self.busy_confirm, text="지금 보내기", command=lambda: self.on_send(busy_choice="now"),
+                  bg=ACC, fg=BG, relief="flat", padx=6).pack(side="left", padx=4)
+        self.ambiguous_confirm = tk.Frame(sendrow, bg=PANEL)
+        tk.Label(
+            self.ambiguous_confirm, text="같은 내용을 다시 보낼까요?", bg=PANEL, fg=WARN,
+            font=FONT, anchor="w",
+        ).pack(side="left", padx=(8, 4))
+        tk.Button(
+            self.ambiguous_confirm, text="다시 보내기",
+            command=lambda: self.on_send(_resend_confirmed=True),
+            bg=ACC, fg=BG, relief="flat", padx=6,
+        ).pack(side="left")
+        tk.Button(
+            self.ambiguous_confirm, text="취소", command=self._cancel_ambiguous_retry,
+            bg=PANEL, fg=ACC, relief="flat", padx=6,
+        ).pack(side="left", padx=4)
+        self.log_toggle = tk.Button(sendrow, text="▸ 자세한 기록", command=self.toggle_log,
+                                    bg=PANEL, fg=DIM, activebackground=PANEL2, relief="flat", cursor="hand2", font=FONT)
         self.log_toggle.pack(side="left", padx=6)
-        self.logw = scrolledtext.ScrolledText(right, height=8, state="disabled", font=("Cascadia Mono", 9),
+        tk.Button(sendrow, text="다시 시도", command=self.refresh,
+                  bg=PANEL, fg=ACC, activebackground=PANEL2, relief="flat", cursor="hand2",
+                  font=FONT).pack(side="left", padx=6)
+        self.logw = scrolledtext.ScrolledText(right, height=6, state="disabled", font=FONT_MONO,
                                               bg=PANEL, fg=DIM, highlightthickness=0, borderwidth=0)
         self.root.bind("<F5>", lambda _e: self.refresh())
         self.root.bind("<Control-k>", lambda _e: self.command_palette())
@@ -215,11 +487,25 @@ class Board:
     def toggle_log(self) -> None:
         if self.log_visible:
             self.logw.grid_forget()
-            self.log_toggle.configure(text="▸ 로그")
+            self.log_toggle.configure(text="▸ 자세한 기록")
         else:
-            self.logw.grid(row=6, column=0, sticky="nsew", pady=2)
-            self.log_toggle.configure(text="▾ 로그")
+            self.logw.grid(row=8, column=0, sticky="nsew", pady=2)
+            self.log_toggle.configure(text="▾ 자세한 기록")
         self.log_visible = not self.log_visible
+
+    def _clear_prompt_placeholder(self) -> None:
+        if self.msg.get("1.0", "end-1c") == PROMPT_PLACEHOLDER:
+            self.msg.delete("1.0", "end")
+            self.msg.configure(fg=TXT)
+
+    def _restore_prompt_placeholder(self) -> None:
+        if self.msg.get("1.0", "end-1c").strip():
+            return
+        if self.msg.focus_get() is self.msg:
+            self.msg.configure(fg=TXT)
+            return
+        self.msg.configure(fg=DIM)
+        self.msg.insert("1.0", PROMPT_PLACEHOLDER)
 
     def command_palette(self) -> None:
         import tkinter as tk
@@ -244,6 +530,14 @@ class Board:
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
+
+    def notify(self, text: str, level: str = "ok") -> None:
+        color = {"ok": OK, "warn": WARN, "bad": BAD}.get(level, DIM)
+        self.notice_var.set(text)
+        if hasattr(self, "notice_label"):
+            self.notice_label.configure(fg=color)
+        self.status_var.set(text)
+        self.log(text)
 
     def log(self, text: str) -> None:
         import datetime
@@ -271,10 +565,16 @@ class Board:
             pass
         self.root.after(100, self._drain)
 
+    def _queue_ui(self, fn) -> None:
+        if hasattr(self, "jobs"):
+            self.jobs.put((lambda _r, f=fn: f(), None))
+        else:
+            fn()
+
     def toggle_auto(self) -> None:
         self.auto_refresh = not self.auto_refresh
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+            self.auto_var.set("● 자동 갱신 켜짐" if self.auto_refresh else "○ 자동 갱신 꺼짐")
         else:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self.log(f"{'이벤트 감시' if self.ssh_target else '자동새로고침'} {'켬' if self.auto_refresh else '끔'}")
@@ -306,7 +606,7 @@ class Board:
         from actl.core import updater
 
         if not messagebox.askyesno("JuActl 업데이트", f"새 버전 {result['version']}을 설치할까요?", parent=self.root):
-            self.set_status("준비")
+            self.set_status("준비됨")
             return
         self.set_status("업데이트 다운로드 중…")
 
@@ -331,20 +631,15 @@ class Board:
         self.root.after(self.refresh_interval_ms, self._auto_tick)
 
     def _motion_tick(self) -> None:
-        """Animate only visible RUNNING cards; no remote work is performed."""
-        running = any(
-            row.get("activity_state") == "RUNNING"
-            and row.get("target") not in {"-", ""}
-            and not row.get("target", "").endswith("?")
-            for row in self.rows
-        )
-        if running:
+        """Refresh running cards without widening or changing their plain text contract."""
+        if any(row.get("activity_state") == "RUNNING" for row in self.rows):
             self.motion_phase = (self.motion_phase + 1) % 4
-            frame = ("◐", "◓", "◑", "◒")[self.motion_phase]
             for agent, label in list(self.motion_labels.items()):
                 row = next((item for item in self.rows if item["agent"] == agent), None)
                 if row and row.get("activity_state") == "RUNNING":
-                    label.configure(text=f"RUNNING {frame} · 작업중")
+                    # Legacy motion contract was "RUNNING ◐ · 작업중"; cards now stay plain.
+                    label.configure(text=_card_line(row, send_inflight=self.send_inflight,
+                                                    post_send_running_keys=self._post_send_running_keys))
         self.root.after(180, self._motion_tick)
 
     @staticmethod
@@ -353,6 +648,8 @@ class Board:
             return "결과 도착"
         if row.get("activity_state") == "RUNNING":
             return "작업중"
+        if row.get("activity_state") == "WAITING_INPUT":
+            return "승인 대기"
         if row.get("activity_state") == "IDLE":
             return "Prompt 대기"
         if row.get("state") == "UP":
@@ -409,11 +706,155 @@ class Board:
         if not row or row.get("target") not in pane_ids:
             return
         target = row["target"]
-        self._bg(lambda: _pane_preview(target), self._event_pane_done)
+        self._request_preview(row)
 
-    def _event_pane_done(self, result) -> None:
-        self.preview.delete("1.0", "end")
-        self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
+    def _request_preview(self, row: dict, *, force: bool = False) -> None:
+        key = row["runtime_key"]
+        if key in self.preview_inflight and not force:
+            return
+        # Live preview uses one-shot SSH capture and must not wait on / block P0.
+        # Still skip starting new polls while a user action owns the scheduler intent.
+        if self.ssh_target and self.send_inflight:
+            return
+        self.preview_inflight.add(key)
+        target = row["target"]
+
+        def work():
+            # Remote Board: do NOT queue through RemoteOpScheduler — oneshot live
+            # capture keeps SEND/COPY free and still yields to send_inflight above.
+            return _pane_preview(target, lines=14)
+
+        def done(result) -> None:
+            self.preview_inflight.discard(key)
+            if self.selected != key:
+                return
+            hold = getattr(self, "preview_hold", None)
+            if hold is None and hasattr(self, "preview_hold_until"):
+                hold = (key, self.preview_hold_until)
+            if hold and hold[0] == key and time.monotonic() < hold[1]:
+                return
+            live = next((r for r in self.rows if r.get("runtime_key") == key), None)
+            if live is None:
+                return
+            truth = inspector_truth(live)
+            previous = self.last_previews.get(key)
+            text, fresh = _preview_text(previous, result)
+            degraded = not fresh
+            if fresh:
+                self.last_previews[key] = text
+                self.preview_degraded.discard(key)
+            elif degraded:
+                self.preview_degraded.add(key)
+            header = "LIVE PANE PREVIEW"
+            if key in self.preview_degraded and previous:
+                header = "LIVE PANE PREVIEW · 갱신 지연"
+            # Preserve scroll context: only rewrite body; never replace with raw timeout.
+            body = self.last_previews.get(key) or text
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", f"{header}\n{body}")
+            self.pane_title.set(truth["title"])
+            self.detail_var.set(truth["detail"])
+            # Do not clobber Founder loop status (제출 완료 / 작업 중 / 결과 준비됨).
+            if getattr(self, "loop_phase", "READY") in {"READY"} and not self.send_inflight:
+                self.set_status("준비됨")
+
+        self._bg(work, done)
+
+    def _live_preview_tick(self) -> None:
+        """Periodic live-ish refresh for the selected runtime while Board is open."""
+        try:
+            row = self.current()
+            if row and row.get("target") not in (None, "-", "") and not str(row.get("target")).endswith("?"):
+                follow = self.follow_preview_key == row.get("runtime_key")
+                import time as _time
+
+                if follow and _time.monotonic() > self.follow_preview_until:
+                    self.follow_preview_key = None
+                if follow or self.auto_refresh:
+                    self._request_preview(row)
+        finally:
+            self.root.after(self.live_preview_interval_ms, self._live_preview_tick)
+
+    def _start_follow_preview(self, runtime_key: str, *, seconds: float = 90.0) -> None:
+        import time as _time
+
+        self.follow_preview_key = runtime_key
+        self.follow_preview_until = _time.monotonic() + seconds
+        row = next((r for r in self.rows if r.get("runtime_key") == runtime_key), None)
+        if row:
+            self._request_preview(row, force=True)
+
+    def _set_loop_phase(self, phase: str, *, status: str | None = None) -> None:
+        from actl.core.send_truth import LOOP_STATE_KO
+
+        self.loop_phase = phase
+        if status is not None:
+            self.set_status(status)
+        else:
+            self.set_status(LOOP_STATE_KO.get(phase, phase))
+
+    def _clear_prompt_at_submitted(self, submitted_text: str) -> None:
+        """Clear composer at authoritative SUBMITTED; keep receipt for history."""
+        self.last_submitted_prompt = submitted_text
+        try:
+            self.msg.delete("1.0", "end")
+            self.msg.configure(fg=TXT)
+            self._restore_prompt_placeholder()
+        except Exception:
+            pass
+
+    def _set_send_inflight(self, active: bool) -> None:
+        self.send_inflight = active
+        self._update_action_state()
+
+    def _hide_busy_confirm(self) -> None:
+        self.busy_confirm.pack_forget()
+
+    def _show_ambiguous_confirm(self, row: dict, text: str) -> None:
+        self._ambiguous_retry = (row["runtime_key"], text)
+        self.ambiguous_confirm.pack(side="left", fill="x", expand=True, after=self.send_btn)
+
+    def _cancel_ambiguous_retry(self) -> None:
+        self._ambiguous_retry = None
+        self.ambiguous_confirm.pack_forget()
+
+    def _cancel_busy_wait(self) -> None:
+        self._busy_wait_token += 1
+        if self._busy_wait_after_id is not None:
+            try:
+                self.root.after_cancel(self._busy_wait_after_id)
+            except Exception:
+                pass
+            self._busy_wait_after_id = None
+
+    def _wait_for_idle_send(self, row: dict, text: str) -> None:
+        self._cancel_busy_wait()
+        token = self._busy_wait_token
+        runtime_key = row["runtime_key"]
+
+        def retry() -> None:
+            if token != self._busy_wait_token or self.send_inflight:
+                return
+            self._busy_wait_after_id = None
+            current = self.current()
+            if not current or current.get("runtime_key") != runtime_key:
+                self._hide_busy_confirm()
+                self.notify("선택한 에이전트가 바뀌어 전송을 취소했습니다", "warn")
+                return
+            if current.get("activity_state") == "RUNNING":
+                self._busy_wait_after_id = self.root.after(1000, retry)
+                return
+            self.on_send(
+                busy_choice="wait",
+                _wait_token=token,
+                _wait_row_key=runtime_key,
+                _wait_text=text,
+            )
+
+        self._busy_wait_after_id = self.root.after(1000, retry)
+
+    def _show_busy_confirm(self) -> None:
+        self.busy_confirm.pack(side="left", fill="x", expand=True, after=self.send_btn)
 
     def _health_tick(self) -> None:
         if self.auto_refresh:
@@ -423,70 +864,246 @@ class Board:
 
     def rows_now(self) -> list[dict]:
         from actl.core.discovery import discover, reconcile
+        from actl.core.remote_scheduler import KIND_REFRESH, P2_BACKGROUND, scheduler_for
         from actl.tui import _rows
 
-        detections = discover()
-        updated, changes = reconcile(self.config, detections)
-        if changes:
-            backup_config()
-            save_config(updated)
-            self.config = updated
-        return _rows(self.config, detections)
+        def work():
+            detections = discover()
+            updated, changes = reconcile(self.config, detections, unique_only=True)
+            if changes:
+                backup_config()
+                save_config(updated)
+                self.config = updated
+            return {"rows": _rows(self.config, detections, hydrate=False), "detections": detections}
+
+        if self.ssh_target:
+            return scheduler_for(self.ssh_target).submit(
+                work,
+                priority=P2_BACKGROUND,
+                kind=KIND_REFRESH,
+                coalesce_key=f"refresh:{self.ssh_target}",
+                replaceable=True,
+                timeout=90.0,
+            )
+        return work()
+
+    def _start_hydration(self) -> None:
+        if self.hydrating or not getattr(self, "_snapshot_detections", None):
+            return
+        if self.ssh_target:
+            from actl.core.remote_scheduler import scheduler_for
+
+            if scheduler_for(self.ssh_target).user_action_inflight():
+                return
+        self.hydrating = True
+        from actl.tui import _rows
+
+        detections = self._snapshot_detections
+        config = self.config
+
+        def work():
+            from actl.core.remote_scheduler import (
+                KIND_HYDRATE,
+                P2_BACKGROUND,
+                RemoteOpCancelled,
+                scheduler_for,
+            )
+
+            try:
+                if self.ssh_target:
+                    return scheduler_for(self.ssh_target).submit(
+                        lambda: _rows(config, detections, hydrate=True),
+                        priority=P2_BACKGROUND,
+                        kind=KIND_HYDRATE,
+                        coalesce_key=f"hydrate:{self.ssh_target}",
+                        replaceable=True,
+                        timeout=90.0,
+                    )
+                return _rows(config, detections, hydrate=True)
+            except RemoteOpCancelled as exc:
+                return exc
+
+        self._bg(work, self._hydration_done)
+
+    def _update_result_ready(self, rows: list[dict], before_rows: dict[str, dict]) -> None:
+        from actl.core.send_truth import get_correlation
+
+        ready_keys = getattr(self, "_result_ready_keys", set())
+        copied_result_keys = getattr(self, "_copied_result_keys", set())
+        for row in rows:
+            key = row.get("runtime_key")
+            corr = get_correlation(row.get("agent", ""), row.get("target", ""))
+            if not key or not corr or not corr.send_succeeded:
+                if key and row.get("activity_state") != "RUNNING":
+                    self._post_send_running_keys.discard(key)
+                row["_result_ready"] = key in ready_keys
+                continue
+            if row.get("activity_state") == "RUNNING":
+                self._post_send_running_keys.add(key)
+            before = before_rows.get(key, {})
+            changed = bool(
+                corr.previous_result_hash
+                and row.get("result_hash")
+                and row["result_hash"] != corr.previous_result_hash
+            )
+            completed = (
+                key in self._post_send_running_keys
+                and before.get("activity_state") == "RUNNING"
+                and row.get("activity_state") == "IDLE"
+            )
+            if changed or completed:
+                copied_key = (row.get("agent", ""), row.get("target", ""), row.get("result_hash", ""))
+                if copied_key not in copied_result_keys:
+                    ready_keys.add(key)
+            if row.get("activity_state") != "RUNNING":
+                self._post_send_running_keys.discard(key)
+            row["_result_ready"] = key in ready_keys
+
+    def _hydration_done(self, result) -> None:
+        self.hydrating = False
+        from actl.core.remote_scheduler import RemoteOpCancelled
+
+        if isinstance(result, RemoteOpCancelled):
+            self.log("상세 hydration 보류 — 사용자 작업 우선")
+            return
+        if isinstance(result, Exception):
+            self.log(f"상세 hydration 실패 — 기존 inventory 유지: {result}")
+            return
+        before_rows = getattr(self, "previous_rows", {})
+        self.rows = result
+        self._update_result_ready(self.rows, before_rows)
+        self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
+        self.summary_var.set(_summary_text(self.rows))
+        self._render_projects()
+        self._render_cards(self.selected)
+        if self.selected:
+            self.on_select()
+        self._update_action_state()
+        self.log("runtime detail hydration 완료")
 
     def refresh(self, quiet: bool = False) -> None:
         if self.refreshing:
             return
+        if self.ssh_target:
+            from actl.core.remote_scheduler import scheduler_for
+
+            if scheduler_for(self.ssh_target).user_action_inflight():
+                if not quiet:
+                    self.log("새로고침 보류 — 사용자 작업 우선")
+                return
         self.refreshing = True
         self.set_status("새로고침 중…")
+        self.project_counts.set(_state_message("loading"))
         if not quiet:
             self.log("새로고침 중…")
         self._bg(self.rows_now, lambda r: self._refresh_done(r, quiet))
 
     def _refresh_done(self, result, quiet: bool = False) -> None:
-        import tkinter as tk
-        from tkinter import ttk
-
         if isinstance(result, Exception):
             self.refreshing = False
-            self.set_status("새로고침 실패")
+            self.rows = []
+            self.selected = None
+            message = _state_message("unreachable")
+            self.connection_error = message
+            self._render_cards()
+            self._render_projects()
+            self.project_counts.set("연결 안 됨")
+            self.set_status("ASUS 연결 안 됨")
             self.log(f"새로고침 실패: {result}")
+            self._update_action_state()
             return
         prev_sel = self.selected
         from actl.core.events import detect_events
 
-        self.rows = result
+        payload = result if isinstance(result, dict) else {"rows": result, "detections": []}
+        self.connection_error = None
+        self.rows = payload["rows"]
+        self._snapshot_detections = payload["detections"]
+        self._update_result_ready(self.rows, self.previous_rows)
         if self.previous_rows:
             for event in detect_events(self.previous_rows, self.rows):
                 self.log(f"◆ {event['agent']} · {event['detail']}")
-        self.previous_rows = {r["agent"]: r for r in self.rows}
+        self.previous_rows = {r["runtime_key"]: r for r in self.rows}
         self.refresh_interval_ms = 3000 if any(r.get("activity_state") == "RUNNING" for r in self.rows) else 12000
         if self.ssh_target:
-            self.auto_var.set("◉ 이벤트 감시 ON (health 60s)" if self.auto_refresh else "◌ 이벤트 감시 OFF")
+            self.auto_var.set("● 자동 갱신 켜짐" if self.auto_refresh else "○ 자동 갱신 꺼짐")
         else:
             self.auto_var.set(f"◉ 자동새로고침 ON ({self.refresh_interval_ms // 1000}s)" if self.auto_refresh else "◌ 자동새로고침 OFF")
         self._render_cards(prev_sel)
-        counts = {
-            "정상": sum(r["state"] == "UP" for r in self.rows),
-            "문제": sum(r["state"] in {"DOWN", "MISMATCH"} for r in self.rows),
-            "미확인": sum(r["state"] not in {"UP", "DOWN", "MISMATCH"} for r in self.rows),
-        }
-        self.summary_var.set(" · ".join(f"{key} {value}" for key, value in counts.items()))
-        live = counts["정상"]
-        self.set_status(f"정상 {live}/{len(self.rows)}")
+        self.summary_var.set(_summary_text(self.rows))
+        self.set_status("ASUS 연결됨 · 에이전트 0" if not self.rows else
+                        (f"ASUS ● CONNECTED · {len(self.rows)} runtimes" if self.ssh_target else f"{len(self.rows)} runtimes"))
+        self._render_projects()
+        if not self.rows:
+            message = _state_message("empty")
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", message)
+            self.project_counts.set(message)
         if not quiet:
-            self.log(f"새로고침 완료 ({len(self.rows)} agents, 정상 {live})")
+            self.log(f"새로고침 완료 (에이전트 {len(self.rows)}개)")
         if self.rows:
-            keep = prev_sel if any(r["agent"] == prev_sel for r in self.rows) else self.rows[0]["agent"]
+            keep = prev_sel if any(r["runtime_key"] == prev_sel for r in self.rows) else self.rows[0]["runtime_key"]
             self.selected = keep
             self._highlight(keep)
-            self._update_action_state()
-        if self.ssh_target and not self.board_opened:
-            self.board_opened = True
-            self.root.after(80, self.on_board)
+            self.on_select()
+        self._update_action_state()
+        self._start_hydration()
         self.refreshing = False
+
+    def _render_projects(self) -> None:
+        import tkinter as tk
+        from actl.core.projection import attention_rows, project_groups
+
+        for child in self.project_buttons.winfo_children():
+            child.destroy()
+        counts: dict[str, tuple[int, int, int]] = {}
+        for project, project_rows in project_groups(self.rows).items():
+            for row in project_rows:
+                total, working, attention = counts.get(project, (0, 0, 0))
+                counts[project] = (total + 1, working + (row.get("runtime_state") == "WORKING"),
+                                   attention + (row.get("runtime_state") in {"BLOCKED", "UNKNOWN"} or
+                                               row.get("state") in {"DOWN", "MISMATCH", "DETECTED"}))
+        names = sorted(counts, key=lambda name: (name == "UNKNOWN", name))
+        names = (["ALL PROJECTS"] if names else []) + names
+        for name in names:
+            label = name
+            if name == "ALL PROJECTS":
+                label = "전체"
+            if name != "ALL PROJECTS":
+                total, working, attention = counts[name]
+                display_name = "프로젝트 미지정" if name == "UNASSIGNED" else name
+                label = f"{display_name}\n  {_project_sidebar_line(total, working, attention)}"
+            button = tk.Button(self.project_buttons, text=label, anchor="w", justify="left",
+                               wraplength=SIDEBAR_WRAPLENGTH,
+                               bg=ACC if ((name == "ALL PROJECTS" and self.project_filter is None) or
+                                          name == self.project_filter) else PANEL,
+                               fg=BG if ((name == "ALL PROJECTS" and self.project_filter is None) or
+                                               name == self.project_filter) else TXT,
+                               relief="flat", padx=8, pady=6,
+                               command=lambda value=name: self.select_project(value))
+            button.pack(fill="x", pady=2)
+        self.project_counts.set(_state_message("empty") if not self.rows else
+                                f"에이전트 {len(self.rows)} · 프로젝트 {len(counts)}")
+        for child in self.attention_frame.winfo_children():
+            child.destroy()
+        attention = attention_rows(self.rows)
+        for row in attention[:8]:
+            label = f"{row.get('display') or row.get('agent') or 'UNKNOWN'} · {_attention_reason(row.get('control_detail'), row.get('control_reason'), row.get('activity_state'))}"
+            tk.Button(self.attention_frame, text=label, anchor="w", justify="left",
+                      wraplength=SIDEBAR_WRAPLENGTH, bg=PANEL2, fg=WARN,
+                      relief="flat", padx=6, pady=4,
+                      command=lambda key=row["runtime_key"]: self.select_agent(key)).pack(fill="x", pady=1)
+        if not attention:
+            tk.Label(self.attention_frame, text="없음", bg=PANEL, fg=DIM, font=FONT).pack(anchor="w", padx=6)
+
+    def select_project(self, project: str) -> None:
+        self.project_filter = None if project == "ALL PROJECTS" else project
+        self._render_projects()
+        self._render_cards(self.selected)
 
     def _render_cards(self, selected: str | None = None) -> None:
         import tkinter as tk
+        from actl.core.projection import filter_project
 
         for child in self.agent_cards.winfo_children():
             child.destroy()
@@ -497,12 +1114,8 @@ class Board:
             query = ""
         mode = self.filter_mode.get()
         visible = []
-        for r in self.rows:
-            # Unmapped panes remain available in the pane board, not in the
-            # operational dashboard where every card must be actionable.
-            if r["target"] in {"-", ""} or r["target"].endswith("?"):
-                continue
-            haystack = f"{r['display']} {r['agent']} {r['target']}".lower()
+        for r in filter_project(self.rows, self.project_filter):
+            haystack = f"{r['display']} {r['agent']} {r.get('project')} {r.get('role')} {r.get('runtime_state')}".lower()
             matches_mode = mode == "전체" or self._phase(r) == mode
             if matches_mode and (not query or query in haystack):
                 visible.append(r)
@@ -511,63 +1124,77 @@ class Board:
             0 if r.get("activity_state") == "RUNNING" else 1,
             0 if r.get("activity_state") == "IDLE" else 1,
             0 if r.get("unread") else 1,
-            r.get("display", ""),
+            r.get("project", "UNKNOWN"), r.get("role", "UNKNOWN"), r.get("runtime_identity", ""),
         ))
         for r in visible:
-            state = STATE_KO.get(r["state"], r["state"])
             glyph = STATUS_GLYPH.get(r["state"], "·")
             color = STATUS_COLOR.get(r["state"], TXT)
-            card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=ACC if r["agent"] == selected else LINE,
-                            highlightthickness=2 if r["agent"] == selected else 1,
+            card = tk.Frame(self.agent_cards, bg=PANEL, highlightbackground=ACC if r["runtime_key"] == selected else LINE,
+                            highlightthickness=1,
                             cursor="hand2")
             card.pack(fill="x", pady=4)
             top = tk.Frame(card, bg=PANEL)
             top.pack(fill="x", padx=8, pady=(6, 0))
-            tk.Label(top, text=f"{glyph} {r['display']}", bg=PANEL, fg=color,
+            tk.Label(top, text=f"{glyph} {_card_header(r)}", bg=PANEL, fg=color,
                      font=("Segoe UI", 11, "bold")).pack(side="left")
-            tk.Label(top, text=r["target"], bg=PANEL, fg=DIM, font=FONT).pack(side="right")
-            sub = (r["preview"] or r["detail"] or "—")[:60]
-            phase = self._phase(r)
-            activity = phase
-            if r.get("activity_state") == "RUNNING":
-                activity = "RUNNING ◐ · 작업중"
-            phase_label = tk.Label(card, text=f"{state} · {activity} · {sub}", bg=PANEL, fg=DIM,
-                                   font=("Segoe UI", 9), anchor="w", justify="left")
+            phase_label = tk.Label(card, text=_card_line(
+                r, send_inflight=self.send_inflight,
+                post_send_running_keys=self._post_send_running_keys,
+            ), bg=PANEL, fg=DIM,
+                                   font=FONT, anchor="w", justify="left", wraplength=CENTER_WRAPLENGTH)
             phase_label.pack(fill="x", padx=8, pady=(0, 6))
-            self.motion_labels[r["agent"]] = phase_label
-            card.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
+            self.motion_labels[r["runtime_key"]] = phase_label
+            card.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
             for child in (card, top):
-                child.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
+                child.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
             for w in top.winfo_children():
-                w.bind("<Button-1>", lambda _e, a=r["agent"]: self.select_agent(a))
-            self.cards[r["agent"]] = card
+                w.bind("<Button-1>", lambda _e, a=r["runtime_key"]: self.select_agent(a))
+            self.cards[r["runtime_key"]] = card
         if not visible:
-            tk.Label(self.agent_cards, text="조건에 맞는 에이전트 없음", bg=BG, fg=DIM,
-                     font=FONT).pack(anchor="w", padx=8, pady=8)
+            no_match = (self.connection_error or _state_message("empty")
+                        if not self.project_filter and not query and mode == "전체"
+                        else "조건에 맞는 에이전트 없음")
+            tk.Label(self.agent_cards, text=no_match, bg=BG, fg=DIM,
+                     font=FONT, justify="left", anchor="w",
+                     wraplength=CENTER_WRAPLENGTH).pack(anchor="w", padx=8, pady=8)
 
     def _highlight(self, agent: str) -> None:
-        import tkinter as tk
-
         for name, card in self.cards.items():
-            row = next((r for r in self.rows if r["agent"] == name), None)
-            color = STATUS_COLOR.get(row["state"], TXT) if row else LINE
-            card.configure(highlightbackground=color,
-                           highlightthickness=2 if name == agent else 0)
+            card.configure(highlightbackground=ACC if name == agent else LINE,
+                           highlightthickness=1)
 
     def _update_action_state(self) -> None:
+        from actl.core.send_truth import get_correlation
+
         row = self.current()
-        enabled = bool(row and row["target"] not in {"-", ""} and not row["target"].endswith("?"))
+        enabled = bool(row and row.get("control_ready")) and not self.send_inflight
         self.send_btn.configure(state="normal" if enabled else "disabled")
+        copy_button = self.action_buttons["COPY RESULT"]
+        result_ready = bool(row and row.get("_result_ready"))
+        copy_button.configure(
+            text="결과 복사",
+            bg=ACC if result_ready else PANEL,
+            fg=BG if result_ready else ACC,
+            activebackground=ACC if result_ready else PANEL2,
+            activeforeground=BG if result_ready else TXT,
+        )
+        if row and not get_correlation(row["agent"], row["target"]):
+            copy_button.configure(text="지금 화면 결과 복사")
+        if result_ready and not self.send_inflight:
+            self.set_status("답이 왔어요")
+        for label in ("SEND PROMPT", "COPY RESULT", "FOCUS"):
+            ready = enabled if label == "SEND PROMPT" else bool(row is not None and row.get("control_ready"))
+            self.action_buttons[label].configure(state="normal" if ready else "disabled")
 
     def select_agent(self, agent: str) -> None:
         self.selected = agent
         self._highlight(agent)
-        self._update_action_state()
         self.on_select()
+        self._update_action_state()
 
     def current(self) -> dict | None:
         if self.selected:
-            row = next((r for r in self.rows if r["agent"] == self.selected), None)
+            row = next((r for r in self.rows if r["runtime_key"] == self.selected), None)
             if row:
                 return row
         return self.rows[0] if self.rows else None
@@ -576,86 +1203,250 @@ class Board:
         row = self.current()
         if not row:
             return
-        self.selected = row["agent"]
-        tgt = row["target"]
-        result_label = {"READY": "준비됨", "WAITING": "대기", "UNKNOWN": "미확인"}.get(row.get("result_state"), "미확인")
-        self.detail_var.set(f"상태 {STATE_KO.get(row['state'], row['state'])} · {row.get('busy', '활동 미확인')} · 결과 {result_label} · 대상 {tgt}")
-        if tgt == "-" or tgt.endswith("?"):
+        self.selected = row["runtime_key"]
+        changed = getattr(self, "_preview_selection_key", None) != self.selected
+        self._preview_selection_key = self.selected
+        truth = inspector_truth(row)
+        # Synchronize title + detail + action identity before any async preview.
+        self.pane_title.set(truth["title"])
+        self.detail_var.set(truth["detail"])
+        if changed:
+            self.preview_hold = None
             self.preview.delete("1.0", "end")
-            self.preview.insert("end", f"{row['display']}: live pane 없음 — 재매핑 버튼 사용")
-            self.pane_title.set(f"{row['display']} — 연결할 live pane 없음")
+            self.preview.insert("end", f"{truth['display']} 화면 불러오는 중…")
+        if self._diagnostic_runtime_key != truth["runtime_key"]:
+            self._diagnostic_runtime_key = truth["runtime_key"]
+            self.log(truth["diagnostic"])
+        tgt = truth["target"]
+        if tgt == "-":
+            self.preview.delete("1.0", "end")
+            self.preview.insert("end", f"{truth['display']}: live runtime 없음")
             return
-        self.set_status(f"{row['display']} 로딩…")
-        self.log(f"{row['display']} 미리보기 로딩…")
+        self.set_status(f"{truth['display']} 로딩…")
+        self.log(f"{truth['display']} 미리보기 로딩…")
 
         def work():
-            return _verify_row(row["agent"], tgt, self.config) + "\n" + _pane_preview(tgt)
+            return _verify_row(row["agent"], tgt, self.config) if row.get("control_ready") else "읽기 전용 발견 runtime — 매핑 전 제어 비활성"
+        if row.get("control_ready"):
+            self._bg(work, lambda result: self.log(result) if isinstance(result, str) else self.log(f"preview diagnostic failed: {result}"))
+        self._request_preview(row)
+
+    def on_focus(self) -> None:
+        row = self.current()
+        if not row or not row.get("control_ready"):
+            self.log("FOCUS disabled: validated tmux mapping required")
+            return
+        from actl.core.remote_scheduler import KIND_FOCUS, P0_USER, scheduler_for
+        from actl.core.tmux import _run
+
+        target_host = self.ssh_target
+        if target_host:
+            scheduler_for(target_host).pause_background()
+
+        def work():
+            try:
+                def focus():
+                    _run(["tmux", "select-pane", "-t", row["target"]])
+                    return True
+
+                if target_host:
+                    return scheduler_for(target_host).submit(
+                        focus,
+                        priority=P0_USER,
+                        kind=KIND_FOCUS,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return focus()
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
-            self.preview.delete("1.0", "end")
-            self.preview.insert("end", result if isinstance(result, str) else f"실패: {result}")
-            self.pane_title.set(f"{row['display']} {tgt} — live")
-            self.set_status("준비")
+            if result is True:
+                self.log(f"{row['display']} pane focused")
+            else:
+                self.log(f"FOCUS failed: {result}")
 
         self._bg(work, done)
 
     def on_copy(self) -> None:
         row = self.current()
-        if not row:
+        if not row or not row.get("control_ready"):
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
         tgt = row["target"]
         if tgt == "-" or tgt.endswith("?"):
-            self.log(f"{row['display']} live pane 없음")
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
-        self.set_status("복사 중…")
+        from actl.core.remote_scheduler import KIND_COPY, P0_USER, FOREGROUND_ACQUIRE_MAX_S, scheduler_for
+        from actl.core.send_truth import (
+            COPY_ACQUIRE_TIMEOUT,
+            COPY_CLEARING,
+            COPY_QUEUED,
+            COPY_READING,
+            COPY_STATE_KO,
+            NEW_RESULT,
+            RESULT_CLASS_KO,
+            classify_result,
+            result_hash as hash_result,
+        )
+
+        target_host = self.ssh_target
+        self.set_status(COPY_STATE_KO[COPY_QUEUED])
+        self.log(f"{row['display']} · {COPY_STATE_KO[COPY_QUEUED]}")
+        if target_host:
+            sched = scheduler_for(target_host)
+            sched.pause_background()
+            self.set_status(COPY_STATE_KO[COPY_CLEARING])
+            self.log(f"{row['display']} · {COPY_STATE_KO[COPY_CLEARING]}")
 
         def work():
             from actl.core.audit import record
             import hashlib
 
-            result = extract_last_response(row["agent"], tgt, self.config)
-            if not result.text:
-                record("copy", agent=row["agent"], target=tgt, ok=False,
-                       source=result.source, confidence=result.confidence)
-                return ("empty", result.detail)
-            try:
-                import sys
+            owned = threading.Event()
 
-                preferred = self.config.get("clipboard_backend", "auto")
-                # This GUI owns the MainPC clipboard. Do not send OSC52 back
-                # into the remote tmux when running the Windows remote board.
-                if sys.platform == "win32" and self.ssh_target:
-                    preferred = "local"
-                backend = copy_text(result.text, preferred=preferred)
-                result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
-                record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
-                       source=result.source, confidence=result.confidence, chars=len(result.text),
-                       result_hash=result_hash)
-                return ("ok", backend, len(result.text), result_hash)
-            except Exception as exc:
-                record("copy", agent=row["agent"], target=tgt, ok=False,
-                       source=result.source, confidence=result.confidence, error=type(exc).__name__)
-                return ("clip-fail", str(exc), result.text[:2000])
+            def copy_body():
+                owned.set()
+                # UI phase: only claim reading once P0 owns the transport.
+
+                def mark_reading():
+                    self.set_status(COPY_STATE_KO[COPY_READING])
+
+                self._queue_ui(mark_reading)
+                result = extract_last_response(row["agent"], tgt, self.config)
+                current_hash = hash_result(result.text)
+                result_class, corr = classify_result(row["agent"], tgt, current_hash, text=result.text)
+                if corr is None and result.text:
+                    result_class = NEW_RESULT
+                if not result.text:
+                    record("copy", agent=row["agent"], target=tgt, ok=False,
+                           source=result.source, confidence=result.confidence,
+                           result_class=result_class)
+                    return ("empty", result.detail, result_class, corr)
+                # Clipboard write only after classification authorizes NEW_RESULT.
+                from actl.core.send_truth import clipboard_write_allowed
+
+                if not clipboard_write_allowed(result_class):
+                    record(
+                        "copy",
+                        agent=row["agent"],
+                        target=tgt,
+                        ok=False,
+                        source=result.source,
+                        confidence=result.confidence,
+                        chars=len(result.text),
+                        result_class=result_class,
+                        clipboard="skipped",
+                    )
+                    return ("no-clip", result_class, len(result.text), corr, result.text)
+                try:
+                    import sys
+
+                    preferred = self.config.get("clipboard_backend", "auto")
+                    # This GUI owns the MainPC clipboard. Do not send OSC52 back
+                    # into the remote tmux when running the Windows remote board.
+                    if sys.platform == "win32" and self.ssh_target:
+                        preferred = "local"
+                    backend = copy_text(result.text, preferred=preferred)
+                    result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
+                    record("copy", agent=row["agent"], target=tgt, ok=True, mode=backend,
+                           source=result.source, confidence=result.confidence, chars=len(result.text),
+                           result_hash=result_hash, result_class=result_class)
+                    return ("ok", backend, len(result.text), result_hash, result_class, corr, result.text)
+                except Exception as exc:
+                    record("copy", agent=row["agent"], target=tgt, ok=False,
+                           source=result.source, confidence=result.confidence, error=type(exc).__name__,
+                           result_class=result_class)
+                    return ("clip-fail", str(exc), result.text[:2000], result_class, corr)
+
+            try:
+                if target_host:
+                    def watchdog():
+                        if not owned.wait(FOREGROUND_ACQUIRE_MAX_S):
+                            fn = lambda: self.set_status(COPY_STATE_KO[COPY_ACQUIRE_TIMEOUT])
+                            self._queue_ui(fn)
+
+                    threading.Thread(target=watchdog, daemon=True).start()
+                    return scheduler_for(target_host).submit(
+                        copy_body,
+                        priority=P0_USER,
+                        kind=KIND_COPY,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return copy_body()
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
-            self.set_status("준비")
+            from actl.core.send_truth import LOOP_COPIED, LOOP_RESULT_READY, LOOP_STATE_KO, LOOP_WORKING
+
+            if isinstance(result, Exception):
+                self.notify("클립보드 복사 실패", "bad")
+                return
             if result[0] == "ok":
                 from actl.core.state import acknowledge
 
-                acknowledge(row["agent"], result[3])
-                self.log(f"{row['display']} 복사됨 ({result[1]}, {result[2]}자)")
+                result_class = result[4]
+                label = RESULT_CLASS_KO.get(result_class, result_class)
+                if result_class == "NEW_RESULT":
+                    acknowledge(row["agent"], result[3])
+                    self._copied_result_keys.add((row["agent"], tgt, result[3]))
+                    self._result_ready_keys.discard(row["runtime_key"])
+                    row["_result_ready"] = False
+                    self._render_cards(self.selected)
+                    self._update_action_state()
+                    self._set_loop_phase(LOOP_COPIED, status=LOOP_STATE_KO[LOOP_COPIED])
+                    self.notify(f"복사 완료 {result[2]}자", "ok")
+                    self.preview_hold = (row["runtime_key"], time.monotonic() + 8)
+                    # Keep live pane visible; append concise confirmation above last preview.
+                    prior = self.last_previews.get(row["runtime_key"]) or ""
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert(
+                        "end",
+                        f"✓ {LOOP_STATE_KO[LOOP_COPIED]} · {label}\n\n"
+                        f"{result[6][:4000]}\n\n--- LIVE PANE ---\n{prior}",
+                    )
+                else:
+                    copied = (row["agent"], tgt, result[3]) in self._copied_result_keys
+                    self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
+            elif result[0] == "no-clip":
+                result_class = result[1]
+                label = RESULT_CLASS_KO.get(result_class, result_class)
+                text = result[4] if len(result) > 4 else ""
+                if result_class == "RESULT_PENDING":
+                    self._set_loop_phase(LOOP_WORKING, status=LOOP_STATE_KO[LOOP_WORKING])
+                    self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
+                elif result_class == "STALE_RESULT":
+                    copied = text and (row["agent"], tgt, hash_result(text)) in self._copied_result_keys
+                    self.notify("이미 복사한 결과예요" if copied else "이전 결과와 같아서 복사하지 않았습니다", "warn")
+                elif result_class == "NEW_RESULT":
+                    self._set_loop_phase(LOOP_RESULT_READY, status=LOOP_STATE_KO[LOOP_RESULT_READY])
+                    self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
+                else:
+                    self.notify("이전 결과와 같아서 복사하지 않았습니다", "warn")
+                # Do not overwrite live pane with diagnostic walls.
+                if result_class == "STALE_RESULT" and text:
+                    prior = self.last_previews.get(row["runtime_key"]) or text
+                    self.preview.delete("1.0", "end")
+                    self.preview.insert(
+                        "end",
+                        f"⚠ {label} — 클립보드 미변경\n\n--- LIVE PANE ---\n{prior[:4000]}",
+                    )
             elif result[0] == "empty":
-                self.log(f"응답 없음 ({result[1] or '비어 있음'})")
+                self.notify("아직 새 결과가 없습니다 — 작업이 끝나면 다시 눌러 주세요", "warn")
             else:
-                self.resp.delete("1.0", "end")
-                self.resp.insert("end", f"클립보드 실패: {result[1]}\n--- 수동 복사 ---\n{result[2]}")
-                self.log("클립보드 실패 — 응답을 화면에 출력")
+                self.notify("클립보드 복사 실패", "bad")
+                # Keep Founder able to see pane; show error in diagnostics log only.
 
         self._bg(work, done)
 
     def on_print(self) -> None:
         row = self.current()
-        if not row:
+        if not row or not row.get("control_ready"):
             return
         tgt = row["target"]
         if tgt == "-" or tgt.endswith("?"):
@@ -814,7 +1605,7 @@ class Board:
                 groups.setdefault(session, {}).setdefault(window, []).append((pane, det))
             if not groups:
                 status.configure(text="live pane 없음")
-                self.set_status("준비")
+                self.set_status("준비됨")
                 return
             status.configure(text=f"{len(result)}개 pane · session/window/pane을 선택하세요")
             for session, windows in groups.items():
@@ -828,12 +1619,12 @@ class Board:
                         detected = AGENTS[det.agent].display_name if det.agent in AGENTS else "미감지"
                         mapped = mapped_by_pane.get(pane.pane_id, "미매핑")
                         pid = tree.insert(
-                            wid, "end", text=f"{pane.pane_id}  {pane.title or '(untitled)'}",
+                            wid, "end", text=f"{pane.pane_id}  {_pane_board_label(self.config, pane.pane_id, pane.title or '(untitled)')}",
                             values=("pane", pane.current_command, pane.current_path, detected, mapped),
                         )
                         pane_by_item[pid] = (pane, det)
                         node_targets[pid] = pane.target
-            self.set_status("준비")
+            self.set_status("준비됨")
 
         def selected_target() -> tuple[str, str] | None:
             selection = tree.selection()
@@ -861,8 +1652,18 @@ class Board:
             item, kind = picked
             if kind == "pane":
                 pane, _ = pane_by_item[item]
-                target, initial, rename = node_targets[item], pane.title, tmux.rename_pane
-                prompt = f"{pane.pane_id} pane 이름"
+                initial = _pane_board_label(self.config, pane.pane_id, pane.title or "(untitled)")
+                name = simpledialog.askstring("pane 별칭 변경", f"{pane.pane_id} 표시 이름", initialvalue=initial, parent=top)
+                if name is None:
+                    return
+                try:
+                    _save_pane_board_label(self.config, pane.pane_id, name)
+                except ValueError as exc:
+                    messagebox.showerror("pane 별칭 실패", str(exc), parent=top)
+                    return
+                top.destroy()
+                self.refresh()
+                return
             elif kind == "window":
                 target = node_targets[item]
                 initial, rename, prompt = tree.item(item, "text"), tmux.rename_window, "window 이름"
@@ -877,11 +1678,11 @@ class Board:
 
             def done(result) -> None:
                 if isinstance(result, Exception):
-                    messagebox.showerror("이름 변경 실패", str(result), parent=top)
+                    self.log(f"이름 변경 실패: {result}")
+                    messagebox.showerror("이름 변경 실패", _pane_action_failure_text("rename"), parent=top)
                     self.set_status("이름 변경 실패")
                     return
                 top.destroy()
-                self.board_opened = False
                 self.refresh()
 
             self._bg(lambda: rename(target, name), done)
@@ -893,7 +1694,8 @@ class Board:
             try:
                 tmux.create_session(name)
             except Exception as exc:
-                messagebox.showerror("session 생성 실패", str(exc), parent=top)
+                self.log(f"session 생성 실패: {exc}")
+                messagebox.showerror("session 생성 실패", _pane_action_failure_text("session_create"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -918,7 +1720,8 @@ class Board:
             try:
                 tmux.create_window(session, name)
             except Exception as exc:
-                messagebox.showerror("window 생성 실패", str(exc), parent=top)
+                self.log(f"window 생성 실패: {exc}")
+                messagebox.showerror("window 생성 실패", _pane_action_failure_text("window_create"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -935,7 +1738,8 @@ class Board:
             try:
                 tmux.split_pane(pane.pane_id)
             except Exception as exc:
-                messagebox.showerror("pane 생성 실패", str(exc), parent=top)
+                self.log(f"pane 생성 실패: {exc}")
+                messagebox.showerror("pane 생성 실패", _pane_action_failure_text("pane_split"), parent=top)
                 return
             top.destroy()
             self.on_board()
@@ -984,12 +1788,12 @@ class Board:
 
             def done(result) -> None:
                 if isinstance(result, Exception):
-                    messagebox.showerror("pane 이동 실패", str(result), parent=top)
+                    self.log(f"pane 이동 실패: {result}")
+                    messagebox.showerror("pane 이동 실패", _pane_action_failure_text("pane_move"), parent=top)
                     self.set_status("pane 이동 실패")
                     return
                 self.log(f"{pane.pane_id} → {destination} 이동됨")
                 top.destroy()
-                self.board_opened = False
                 self.refresh()
 
             self._bg(lambda: tmux.move_pane(pane.pane_id, destination), done)
@@ -1045,53 +1849,341 @@ class Board:
             dialog.destroy()
             board.destroy()
 
-        tk.Button(dialog, text="검증 후 매핑", command=apply, bg=ACC, fg="white",
+        tk.Button(dialog, text="검증 후 매핑", command=apply, bg=ACC, fg=BG,
                   relief="flat", padx=16, pady=8).pack(anchor="e", padx=16, pady=(4, 16))
         dialog.bind("<Return>", lambda _e: apply())
         dialog.bind("<Escape>", lambda _e: dialog.destroy())
         dialog.grab_set()
         menu.focus_set()
 
-    def on_send(self) -> None:
-        from tkinter import messagebox
-
+    def on_send(
+        self,
+        *,
+        busy_choice: str | None = None,
+        _resend_confirmed: bool = False,
+        _wait_token: int | None = None,
+        _wait_row_key: str | None = None,
+        _wait_text: str | None = None,
+    ) -> None:
         row = self.current()
-        if not row:
+        if not row or not row.get("control_ready"):
+            self.notify("에이전트를 먼저 선택하세요", "warn")
             return
-        text = self.msg.get("1.0", "end").strip()
-        if not text:
-            self.log("빈 메시지 — 전송 안 함")
+        if self.send_inflight:
+            self.notify("이미 전송 중 — 완료될 때까지 대기", "warn")
             return
-        if not messagebox.askyesno("전송 확인", f"{row['display']} ({row['target']})에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+        if _wait_token is not None and (
+            _wait_token != self._busy_wait_token
+            or row.get("runtime_key") != _wait_row_key
+        ):
             return
-        self.set_status("전송 중…")
+        text = _wait_text if _wait_text is not None else self.msg.get("1.0", "end").strip()
+        if not text or PROMPT_PLACEHOLDER in text:
+            self.notify("보낼 내용을 입력하세요", "warn")
+            return
+        from actl.core.activity import send_blocked_reason
+
+        if reason := send_blocked_reason(row["target"]):
+            self.notify(reason, "warn")
+            return
+        pending_retry = getattr(self, "_ambiguous_retry", None)
+        if not _resend_confirmed and pending_retry == (row.get("runtime_key"), text):
+            self._show_ambiguous_confirm(row, text)
+            return
+        if _resend_confirmed:
+            self._cancel_ambiguous_retry()
+        if busy_choice is None and row.get("activity_state") == "RUNNING":
+            self._show_busy_confirm()
+            return
+        if busy_choice == "wait" and row.get("activity_state") == "RUNNING":
+            self._wait_for_idle_send(row, text)
+            return
+        self._cancel_busy_wait()
+        self._hide_busy_confirm()
+        if busy_choice is None and not _resend_confirmed:
+            from tkinter import messagebox
+
+            if not messagebox.askyesno("전송 확인", f"{row['display']}에 메시지를 전송할까요?\n\n{text[:240]}{'…' if len(text) > 240 else ''}"):
+                return
+        from actl.core.remote_scheduler import (
+            KIND_SEND,
+            P0_USER,
+            FOREGROUND_ACQUIRE_MAX_S,
+            scheduler_for,
+        )
+        from actl.core.send_truth import (
+            CLEARING_BACKGROUND,
+            FOREGROUND_ACQUIRE_TIMEOUT,
+            LOOP_SENDING,
+            LOOP_SUBMITTED,
+            LOOP_WORKING,
+            SEND_FAILED,
+            SEND_QUEUED,
+            SENDING,
+            SEND_STATE_KO,
+            START_ACKNOWLEDGED,
+            SUBMITTED,
+            begin_send,
+            delivery_ambiguous,
+            set_send_state,
+        )
+
+        previous_hash = row.get("result_hash") or None
+        begin_send(
+            row["agent"], row["target"], previous_result_hash=previous_hash,
+            busy_at_send=busy_choice == "now",
+        )
+        self._result_ready_keys.discard(row["runtime_key"])
+        self._post_send_running_keys.discard(row["runtime_key"])
+        row["_result_ready"] = False
+        set_send_state(row["agent"], row["target"], SEND_QUEUED)
+        self._set_send_inflight(True)
+        self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SEND_QUEUED])
+        self.log(f"{row['display']} · {SEND_STATE_KO[SEND_QUEUED]}")
+        target_host = self.ssh_target
+        if target_host:
+            scheduler_for(target_host).pause_background()
+            set_send_state(row["agent"], row["target"], CLEARING_BACKGROUND)
+            self.set_status(SEND_STATE_KO[CLEARING_BACKGROUND])
+            self.log(f"{row['display']} · {SEND_STATE_KO[CLEARING_BACKGROUND]}")
 
         def work():
-            from actl.cli import _send_to_selected
+            from actl.core.activity import observe_activity
+            from actl.core.remote import ManagedUnsupported, is_remote, remote_managed_send
+            from actl.core.tmux import send_prompt_staged
+            import threading
 
-            _send_to_selected(self.config, row["agent"], text)
-            return True
+            owned = threading.Event()
+
+            def _ack_from_activity(evidence: dict):
+                activity, detail = observe_activity(row["target"])
+                if activity == "RUNNING":
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        START_ACKNOWLEDGED,
+                        evidence={**evidence, "activity": activity, "detail": detail},
+                    )
+                    return ("acked", activity, evidence)
+                import time as _time
+
+                for _ in range(3):
+                    _time.sleep(0.35)
+                    activity, detail = observe_activity(row["target"])
+                    if activity == "RUNNING":
+                        set_send_state(
+                            row["agent"],
+                            row["target"],
+                            START_ACKNOWLEDGED,
+                            evidence={**evidence, "activity": activity, "detail": detail},
+                        )
+                        return ("acked", activity, evidence)
+                return ("submitted", activity, evidence)
+
+            def send_body():
+                owned.set()
+                set_send_state(row["agent"], row["target"], SENDING)
+
+                def mark_sending():
+                    self._set_loop_phase(LOOP_SENDING, status=SEND_STATE_KO[SENDING])
+
+                self._queue_ui(mark_sending)
+                if is_remote():
+                    try:
+                        from actl.core.remote import ManagedSendDelivery
+
+                        committed = threading.Event()
+
+                        def on_committed(delivery: ManagedSendDelivery) -> None:
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                SUBMITTED,
+                                evidence=dict(delivery.evidence),
+                            )
+                            committed.set()
+
+                            def mark_submitted():
+                                # Authoritative SUBMITTED: clear Prompt immediately.
+                                self._clear_prompt_at_submitted(text)
+                                self._set_loop_phase(
+                                    LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED]
+                                )
+                                self._start_follow_preview(row["runtime_key"])
+
+                            self._queue_ui(mark_submitted)
+
+                        delivery = remote_managed_send(
+                            row["agent"],
+                            row["target"],
+                            text,
+                            on_committed=on_committed,
+                            auto_cleanup=False,
+                        )
+                        if not committed.is_set():
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                SUBMITTED,
+                                evidence=dict(delivery.evidence),
+                            )
+
+                            def mark_submitted_fallback():
+                                self._clear_prompt_at_submitted(text)
+                                self._set_loop_phase(
+                                    LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED]
+                                )
+                                self._start_follow_preview(row["runtime_key"])
+
+                            self._queue_ui(mark_submitted_fallback)
+
+                        def _cleanup_lease() -> None:
+                            ok = delivery.cleanup()
+                            if not ok and delivery.cleanup_error:
+                                from actl.core.audit import record
+
+                                record(
+                                    "managed_cleanup",
+                                    agent=row["agent"],
+                                    target=row["target"],
+                                    ok=False,
+                                    error=delivery.cleanup_error[:300],
+                                    command_id=delivery.command_id,
+                                )
+
+                        threading.Thread(
+                            target=_cleanup_lease,
+                            name="actl-managed-cleanup",
+                            daemon=True,
+                        ).start()
+                        return _ack_from_activity(dict(delivery.evidence))
+                    except ManagedUnsupported:
+                        pass
+                staged = send_prompt_staged(row["target"], text, press_enter=True)
+                if not staged.get("ok"):
+                    if delivery_ambiguous(staged):
+                        set_send_state(
+                            row["agent"], row["target"], SEND_FAILED,
+                            error=str(staged.get("error") or "delivery ambiguous"),
+                            evidence={"path": "staged", **staged},
+                        )
+                        return ("ambiguous", staged.get("error") or "delivery ambiguous", staged)
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error=str(staged.get("error") or "send failed"),
+                        evidence={"stages": staged.get("stages"), "path": "staged"},
+                    )
+                    return ("failed", staged.get("error") or "send failed", staged)
+                completed = staged.get("completedStages") or []
+                if "paste_buffer" not in completed or "enter" not in completed:
+                    set_send_state(
+                        row["agent"],
+                        row["target"],
+                        SEND_FAILED,
+                        error="paste/enter evidence missing",
+                        evidence={"stages": staged.get("stages"), "path": "staged"},
+                    )
+                    return ("failed", "paste/enter evidence missing", staged)
+                evidence = {
+                    "path": "staged",
+                    "stages": staged.get("stages"),
+                    "disposition": staged.get("deliveryDisposition"),
+                }
+                set_send_state(
+                    row["agent"],
+                    row["target"],
+                    SUBMITTED,
+                    evidence=evidence,
+                )
+
+                def mark_staged_submitted():
+                    self._clear_prompt_at_submitted(text)
+                    self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
+                    self._start_follow_preview(row["runtime_key"])
+
+                self._queue_ui(mark_staged_submitted)
+                return _ack_from_activity(evidence)
+
+            try:
+                if target_host:
+                    def watchdog():
+                        if not owned.wait(FOREGROUND_ACQUIRE_MAX_S):
+                            set_send_state(
+                                row["agent"],
+                                row["target"],
+                                FOREGROUND_ACQUIRE_TIMEOUT,
+                            )
+                            fn = lambda: self.set_status(
+                                SEND_STATE_KO[FOREGROUND_ACQUIRE_TIMEOUT]
+                            )
+                            self._queue_ui(fn)
+
+                    threading.Thread(target=watchdog, daemon=True).start()
+                    return scheduler_for(target_host).submit(
+                        send_body,
+                        priority=P0_USER,
+                        kind=KIND_SEND,
+                        replaceable=False,
+                        timeout=90.0,
+                    )
+                return send_body()
+            except Exception as exc:
+                if delivery_ambiguous(exc):
+                    set_send_state(
+                        row["agent"], row["target"], SEND_FAILED,
+                        error=str(exc),
+                        evidence={
+                            "path": "managed",
+                            "disposition": "DELIVERY_AMBIGUOUS",
+                            "sideEffect": "POSSIBLE_INPUT",
+                        },
+                    )
+                    return ("ambiguous", str(exc), None)
+                set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(exc))
+                return ("failed", str(exc), None)
+            finally:
+                if target_host:
+                    scheduler_for(target_host).resume_background()
 
         def done(result) -> None:
-            self.set_status("준비")
-            if result is True:
-                self.log(f"{row['display']}에 전송됨")
-                self.msg.delete("1.0", "end")
-                self.preview.delete("1.0", "end")
-                self.preview.insert("end", f"✓ {row['display']}에 메시지를 전송했습니다.\n\n작업 결과를 기다리는 중…")
-            elif isinstance(result, Exception):
+            self._set_send_inflight(False)
+            if isinstance(result, Exception):
+                set_send_state(row["agent"], row["target"], SEND_FAILED, error=str(result))
+                self.set_status(SEND_STATE_KO[SEND_FAILED])
+                self.loop_phase = "READY"
+                # Pre-commit failure: Prompt text is preserved for retry.
                 detail = str(result) or type(result).__name__
-                self.set_status("전송 실패")
-                self.preview.delete("1.0", "end")
-                self.preview.insert(
-                    "end",
-                    f"✗ {row['display']} 전송 실패\n\n{detail}\n\n"
-                    "매핑 상태와 pane 작업 상태를 확인하세요.\n"
-                    "BUSY라면 현재 다른 작업이 pane을 점유 중입니다.",
-                )
-                self.log(f"{row['display']} 전송 실패: {detail}")
+                from actl.core.remote_scheduler import is_transport_contention
+
+                contention = is_transport_contention(result)
+                self.log(f"전송 실패: {detail}" + (" (원격 통신 대기 중 · 매핑 DOWN 아님)" if contention else ""))
+                self.notify(_send_failure_text(detail, contention), "bad")
+                return
+            status, detail, staged = result
+            if status == "acked":
+                self._set_loop_phase(LOOP_WORKING, status=SEND_STATE_KO[START_ACKNOWLEDGED])
+                self.notify("작업 시작 확인", "ok")
+                self._start_follow_preview(row["runtime_key"])
+            elif status == "submitted":
+                self._set_loop_phase(LOOP_SUBMITTED, status=SEND_STATE_KO[SUBMITTED])
+                self.notify("제출 완료", "ok")
+                self._start_follow_preview(row["runtime_key"])
+            elif status == "ambiguous":
+                from actl.core.send_truth import DELIVERY_AMBIGUOUS_MESSAGE
+
+                self.set_status("전송 상태 확인 필요")
+                self.loop_phase = "READY"
+                self.notify(DELIVERY_AMBIGUOUS_MESSAGE, "warn")
+                self._show_ambiguous_confirm(row, text)
             else:
-                self.log(f"전송 실패: {result}")
+                self.set_status(SEND_STATE_KO[SEND_FAILED])
+                self.loop_phase = "READY"
+                self.log(f"전송 실패: {detail}")
+                self.notify(_send_failure_text(detail), "bad")
+                # Failed after possible commit: do not restore Prompt (avoid duplicate).
+                # Failed before commit: Prompt was never cleared.
 
         self._bg(work, done)
 

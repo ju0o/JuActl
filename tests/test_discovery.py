@@ -75,6 +75,14 @@ def test_cursor_detection(monkeypatch):
     assert _detect(monkeypatch, [ProcessInfo(11, 10, "/x/cursor-agent/index.js")]).agent == "cursor"
 
 
+def test_batched_pane_pid_skips_remote_field_read(monkeypatch):
+    pane = PaneInfo("%3", "work:0.3", "bash", "/project", "", pane_pid=10)
+    monkeypatch.setattr(discovery, "pane_field", lambda *_: (_ for _ in ()).throw(AssertionError("re-read")))
+    monkeypatch.setattr(discovery, "pane_processes", lambda _: [ProcessInfo(11, 10, "/x/cursor-agent/index.js")])
+    result = detect_pane(pane)
+    assert (result.agent, result.confidence) == ("cursor", "exact")
+
+
 def test_unknown_pane_is_ignored(monkeypatch):
     result = _detect(monkeypatch, [ProcessInfo(11, 10, "/bin/bash")])
     assert result.agent is None and result.confidence == "unknown"
@@ -108,6 +116,20 @@ def test_apply_removes_stale_mapping_and_stores_pane_id(monkeypatch):
 def test_low_confidence_is_not_auto_applied():
     detected = Detection(PANE, "cursor", "low", "unproven")
     updated, changes = reconcile({"agents": {}}, [detected])
+    assert updated["agents"] == {} and not changes
+
+
+def test_unique_only_reconcile_maps_one_strong_runtime(monkeypatch):
+    detected = Detection(PANE, "cursor", "high", "pid 11: cursor")
+    updated, changes = reconcile({"agents": {}}, [detected], unique_only=True)
+    assert updated["agents"]["cursor"]["target"] == "%3"
+    assert changes
+
+
+def test_unique_only_reconcile_does_not_map_ambiguous_agent():
+    first = Detection(PANE, "codex", "high", "pid 11: codex")
+    second = Detection(PaneInfo("%4", "work:0.4", "codex", "/project", ""), "codex", "high", "pid 12: codex")
+    updated, changes = reconcile({"agents": {}}, [first, second], unique_only=True)
     assert updated["agents"] == {} and not changes
 
 

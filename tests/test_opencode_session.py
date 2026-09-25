@@ -321,9 +321,13 @@ class _FakeProc:
         self.stdout = _FakeStdio(replies)
         self.stderr = _FakeStdio([])
         self.terminated = False
+        self.waited = False
 
     def terminate(self):
         self.terminated = True
+
+    def wait(self):
+        self.waited = True
 
 
 def _acp(monkeypatch, replies, *, fail_spawn=False):
@@ -359,7 +363,19 @@ def test_create_session_via_acp_without_prompt(monkeypatch, tmp_path):
     sent = "".join(holders["proc"].stdin.written)
     assert "session/new" in sent and "initialize" in sent
     assert "prompt" not in sent
-    assert holders["proc"].terminated
+    assert holders["proc"].terminated and holders["proc"].waited
+
+
+def test_create_session_reaps_acp_process_on_failure(monkeypatch, tmp_path):
+    replies = [json.dumps({"jsonrpc": "2.0", "id": 1, "error": "boom"}) + "\n"]
+    holders = _acp(monkeypatch, replies)
+    try:
+        create_session(tmp_path)
+    except OpenCodeSessionError:
+        pass
+    else:
+        raise AssertionError("create_session should fail")
+    assert holders["proc"].terminated and holders["proc"].waited
 
 
 def test_create_session_rejects_invalid_or_missing_id(monkeypatch, tmp_path):

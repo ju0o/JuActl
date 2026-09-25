@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from actl.agents.extract import extract_last_response
 from actl.core.config import backup_config, get_target, load_config, save_config
 from actl.core.discovery import STRONG_CONFIDENCE, discover, manual_map
+from actl.core.projection import board_counts
 from actl.core.registry import AGENTS, resolve_agent
 from actl.core.validation import validate_target
 from actl.tui import STATE_KO, _pane_board, _pane_preview, _unmapped_panes, _verify_row
@@ -67,6 +68,8 @@ BOARD_HTML = r"""<!DOCTYPE html>
   button:hover { border-color:var(--neon); color:var(--neon); }
   button.primary { background:#003844; color:var(--neon); border-color:var(--neon); }
   button:disabled { opacity:.4; cursor:default; }
+  .send-confirm { border:1px solid var(--warn); border-radius:6px; padding:8px; color:var(--warn); font-size:12px; }
+  .send-confirm .btns { margin:8px 0 0; }
   .cards { display:flex; flex-direction:column; gap:8px; }
   .card { border:1px solid var(--line); border-radius:3px; padding:9px 10px; cursor:pointer; background:rgba(12,13,25,.82); position:relative; overflow:hidden; transition:border-color .12s, transform .12s, background .12s; }
   .card::before { content:""; position:absolute; inset:0; pointer-events:none; opacity:.1; background-image:radial-gradient(var(--neon) .6px, transparent .7px); background-size:6px 6px; transform:translateX(18px); }
@@ -95,12 +98,12 @@ BOARD_HTML = r"""<!DOCTYPE html>
 <header>
   <h1 data-text="▓ JuActl 보드 ░">▓ JuActl 보드 ░</h1>
   <span class="st" id="conn">연결 중…</span>
-  <span class="st">자동감시 <span class="live" id="autoSt">ADAPTIVE</span> (3–12s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
+  <span class="st">자동감시 <span class="live" id="autoSt">켜짐</span> (3–12s) <span class="kbd" id="autoBtn" style="cursor:pointer" onclick="toggleAuto()">전환</span></span>
   <span class="st" id="clock"></span>
 </header>
 <main>
   <section class="col">
-    <h2 id="paneTitle">live pane — 에이전트 클릭</h2>
+    <h2 id="paneTitle">에이전트를 누르면 화면이 보여요</h2>
     <div id="verify"></div>
     <pre class="pane" id="preview">에이전트 카드를 클릭하세요…</pre>
     <div class="btns">
@@ -119,6 +122,10 @@ BOARD_HTML = r"""<!DOCTYPE html>
     <h2>메시지 전송</h2>
     <textarea id="msg" placeholder="선택한 에이전트 pane에 보낼 메시지… (Ctrl+Enter 전송)"></textarea>
     <div class="btns"><button class="primary" onclick="doSend()">➤ 전송</button></div>
+    <div class="send-confirm" id="sendConfirm" hidden role="alert" aria-live="polite">
+      <div id="sendConfirmText"></div>
+      <div class="btns"><button class="primary" id="sendConfirmButton" onclick="confirmSend()">보내기</button><button onclick="cancelSend()">취소</button></div>
+    </div>
     <h2>pane 보드</h2>
     <div class="log" id="board"></div>
     <h2>이벤트 로그</h2>
@@ -132,11 +139,11 @@ let SEL = null, AUTO = true, ROWS = [], PREV = {}, NEXT_MS = 12000, REFRESHING =
 let FILTER = 'ALL';
 if(TOKEN) { sessionStorage.setItem('actl-token', TOKEN); history.replaceState(null, '', location.pathname); }
 const KO = {"UP":"정상","DOWN":"꺼짐","MISMATCH":"불일치","UNMAPPED":"미매핑","DETECTED":"감지됨"};
-const CLS = {"UP":"up","DOWN":"bad","MISMATCH":"warn","UNMAPPED":"dim","DETECTED":"acc"};
+const CLS = {"UP":"up","WORKING":"up","IDLE":"up","DONE":"up","DOWN":"bad","BLOCKED":"bad","MISMATCH":"warn","UNMAPPED":"dim","DETECTED":"acc","UNKNOWN":"dim"};
 function log(m){ const el=document.getElementById('log'); el.innerHTML=`<div>[${new Date().toLocaleTimeString()}] ${m}</div>`+el.innerHTML; }
 function tick(){ document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tick,1000); tick();
-function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"ADAPTIVE":"OFF"; log("자동감시 "+(AUTO?"켬":"끔")); }
+function toggleAuto(){ AUTO=!AUTO; document.getElementById('autoSt').textContent=AUTO?"켜짐":"꺼짐"; log("자동감시 "+(AUTO?"켬":"끔")); }
 function esc(v){ return String(v??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}[c])); }
 function schedule(){ setTimeout(async()=>{ if(AUTO) await refresh(true); schedule(); },NEXT_MS); }
 const COMMANDS=[['새로고침',()=>refresh(false)],['자동감시 전환',()=>toggleAuto()],['문제만 보기',()=>{FILTER='PROBLEM';document.getElementById('stateFilter').value='PROBLEM';refresh(true)}],['전체 보기',()=>{FILTER='ALL';document.getElementById('stateFilter').value='ALL';refresh(true)}],['선택 결과 복사',()=>doCopy()]];
@@ -151,7 +158,7 @@ async function api(path, opts){
   const r = await fetch(path, opts);
   const j = await r.json();
   if(r.status===401) { TOKEN=prompt('JuActl 웹 토큰을 입력하세요')||''; if(TOKEN){sessionStorage.setItem('actl-token',TOKEN); return api(path,opts);} }
-  if(!j.ok) throw new Error(j.error||("HTTP "+r.status));
+  if(!j.ok) throw new Error(j.error||"연결이 끊겼어요 — 새로고침해 주세요");
   return j.data;
 }
 async function refresh(quiet){
@@ -163,8 +170,8 @@ async function refresh(quiet){
     if(Object.keys(PREV).length) ROWS.forEach(a=>{ const old=PREV[a.agent]||{}; if(old.activity_state==='RUNNING'&&a.activity_state==='IDLE') log(`◆ ${a.display} · 유휴 상태 전환`); if(a.result_hash&&a.result_hash!==old.result_hash) log(`◆ ${a.display} · 새 결과 준비`); });
     PREV = Object.fromEntries(ROWS.map(a=>[a.agent,a]));
     NEXT_MS = d.nextRefreshMs || (ROWS.some(a=>a.activity_state==='RUNNING') ? 3000 : 12000);
-    const good=ROWS.filter(a=>a.state==='UP').length;
-    const problem=ROWS.filter(a=>['DOWN','MISMATCH'].includes(a.state)).length;
+    const problem=ROWS.filter(a=>['DOWN','MISMATCH'].includes(a.state)||a.runtime_state==='BLOCKED').length;
+    const good=ROWS.filter(a=>!(['DOWN','MISMATCH'].includes(a.state)||a.runtime_state==='BLOCKED') && (['UP','WORKING','IDLE'].includes(a.state)||['WORKING','IDLE','DONE'].includes(a.runtime_state))).length;
     const unknown=ROWS.length-good-problem;
     document.getElementById('conn').innerHTML = `<span class="live">● 정상 ${good}</span> · 문제 ${problem} · 미확인 ${unknown} · asus ${d.time}`;
     const box = document.getElementById('agents');
@@ -185,7 +192,10 @@ async function refresh(quiet){
       div.className = "card"+(a.agent===SEL?" sel":"");
       div.dataset.agent = a.agent;
       const resultLabel={READY:'결과 준비',WAITING:'결과 대기',UNKNOWN:'결과 미확인'}[a.result_state]||'결과 미확인';
-      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.target)} · ${esc(KO[a.state]||a.state)}</span><div class="sub">${esc(a.activity_ko||a.activity||"미확인")} · ${esc(resultLabel)} · ${esc((a.preview||a.detail||"—").slice(0,80))}</div>`;
+      const metadata=[a.project,a.role,a.model_profile,a.current_task].filter(v=>v && !['UNKNOWN','UNASSIGNED'].includes(v)).join(' · ');
+      const preview=esc((a.preview||a.detail||"—").slice(0,80));
+      const sub=[metadata,resultLabel].filter(Boolean).map(esc).concat(preview).filter(Boolean).join(' · ');
+      div.innerHTML = `<span class="nm">${esc(a.display)}</span><span class="pill ${CLS[a.state]||'dim'}">${esc(a.state_ko)}</span><div class="sub">${sub}</div>`;
       div.onclick = ()=>select(a.agent);
       box.appendChild(div);
     });
@@ -203,7 +213,7 @@ async function select(agent, silent){
   document.querySelectorAll('#agents .card').forEach(el=>el.classList.toggle('sel', el.dataset.agent===agent));
   try {
     const d = await api('/api/preview?agent='+encodeURIComponent(agent));
-    document.getElementById('paneTitle').textContent = `▚ ${d.display} ${d.target} — live`;
+    document.getElementById('paneTitle').textContent = `▚ ${d.display} ${d.target} — 실시간`;
     document.getElementById('verify').textContent = d.verify;
     document.getElementById('preview').textContent = d.text;
     if(!silent) log(`${d.display} 미리보기`);
@@ -235,14 +245,25 @@ async function showBoard(){
   document.getElementById('preview').textContent = document.getElementById('board').innerText;
   log("pane 보드 표시 — 행 클릭으로 즉시 매핑");
 }
-async function doSend(){
+function cancelSend(){ document.getElementById('sendConfirm').hidden=true; }
+function doSend(){
   if(!SEL) return;
   const v = document.getElementById('msg').value.trim();
   if(!v){ log("빈 메시지"); return; }
-  if(!confirm(`${SEL}에 메시지를 전송할까요?\n\n${v.slice(0,160)}${v.length>160?'…':''}`)) return;
+  const busy = (ROWS.find(a=>a.agent===SEL)||{}).activity_state === 'RUNNING';
+  document.getElementById('sendConfirmText').textContent = busy
+    ? '작업 중이에요 — 지금 보내면 하던 일에 끼어들 수 있어요'
+    : `${SEL}에 메시지를 보내시겠어요?`;
+  document.getElementById('sendConfirmButton').textContent = busy ? '지금 보내기' : '보내기';
+  document.getElementById('sendConfirm').hidden = false;
+}
+async function confirmSend(){
+  const v = document.getElementById('msg').value.trim();
+  if(!SEL || !v){ cancelSend(); return; }
   try {
     const d = await api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:SEL,text:v})});
     document.getElementById('msg').value = "";
+    cancelSend();
     log(`${d.display}에 전송됨 (${d.target})`);
   } catch(e){ log("전송 실패: "+e.message); }
 }
@@ -278,7 +299,7 @@ def _board_data(*, reconcile: bool = False) -> dict:
     from actl.tui import _rows
 
     rows = _rows(config)
-    live = sum(1 for r in rows if r["state"] == "UP")
+    live = board_counts(rows)["healthy"]
     from actl.tui import _pane_board
 
     board = _pane_board(config)
@@ -300,6 +321,10 @@ def _board_data(*, reconcile: bool = False) -> dict:
     return {
         "agents": [
             {"agent": r["agent"], "display": r["display"], "target": r["target"],
+             "machine": r.get("machine", "local"), "project": r.get("project", "UNKNOWN"),
+             "role": r.get("role", "UNKNOWN"), "model_profile": r.get("model_profile", "UNKNOWN"),
+             "runtime_state": r.get("runtime_state", "UNKNOWN"), "state_ko": STATE_KO.get(r["state"], r["state"]), "current_task": r.get("current_task", "UNKNOWN"),
+             "live_pane": bool(r.get("live_pane")),
              "state": r["state"], "preview": r["preview"], "detail": r["detail"],
              "activity": r.get("busy", "미확인"), "activity_ko": r.get("busy", "미확인"),
              "activity_state": r.get("activity_state", "UNKNOWN"), "result_flag": r.get("result_flag", "-"),
@@ -422,11 +447,11 @@ class Handler(BaseHTTPRequestHandler):
                 agent = urllib.parse.parse_qs(parsed.query).get("agent", [""])[0]
                 self._json(True, _copy_data(agent))
                 return
-            self._json(False, error="unknown endpoint", code=404)
+            self._json(False, error="요청을 찾지 못했어요 — 주소를 확인한 후 다시 시도해 주세요", code=404)
         except ValueError as exc:
             self._json(False, error=str(exc)[:300], code=400)
         except Exception as exc:
-            self._json(False, error=f"{type(exc).__name__}: {exc}"[:300], code=500)
+            self._json(False, error="문제가 생겼어요 — 새로고침 후 다시 시도해 주세요", code=500)
 
     def do_POST(self) -> None:
         if not self._authorized():
@@ -437,7 +462,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValueError("JSON body must be an object")
         except Exception:
-            self._json(False, error="invalid JSON", code=400)
+            self._json(False, error="요청 형식이 잘못됐어요 — 다시 시도해 주세요", code=400)
             return
         try:
             if self.path == "/api/send":
@@ -445,7 +470,27 @@ class Handler(BaseHTTPRequestHandler):
 
                 agent = _canonical_agent(payload.get("agent"))
                 text = _prompt_value(payload.get("text"))
-                target = _send_to_selected(load_config(), agent, text)
+                try:
+                    target = _send_to_selected(load_config(), agent, text)
+                except Exception as exc:
+                    from actl.core.audit import record
+                    from actl.core.runtime import WriterDenied
+
+                    detail = str(exc)
+                    record("send", agent=agent, ok=False, source="web",
+                           error=type(exc).__name__, detail=detail)
+                    if "승인을 기다리고 있어요" in detail:
+                        message = detail
+                    elif detail.startswith("Selected runtime is "):
+                        message = "에이전트 화면을 찾지 못했어요 — 새로고침 후 다시 시도해 주세요"
+                    elif isinstance(exc, WriterDenied) or (
+                        ":" in detail and detail.split(":", 1)[0].isupper()
+                    ):
+                        message = "다른 곳에서 보내는 중이에요 — 잠시 후 다시 보내 주세요"
+                    else:
+                        message = "전송할 수 없어요 — 잠시 후 다시 시도해 주세요"
+                    self._json(False, error=message, code=500)
+                    return
                 spec = AGENTS[agent]
                 self._json(True, {"display": spec.display_name, "target": target})
                 return
@@ -488,11 +533,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/refresh":
                 self._json(True, _board_data(reconcile=True))
                 return
-            self._json(False, error="unknown endpoint", code=404)
+            self._json(False, error="요청을 찾지 못했어요 — 주소를 확인한 후 다시 시도해 주세요", code=404)
         except ValueError as exc:
             self._json(False, error=str(exc)[:300], code=400)
         except Exception as exc:
-            self._json(False, error=f"{type(exc).__name__}: {exc}"[:300], code=500)
+            self._json(False, error="문제가 생겼어요 — 새로고침 후 다시 시도해 주세요", code=500)
 
 
 def run_serve(host: str = "127.0.0.1", port: int = 8765, token: str | None = None) -> int:

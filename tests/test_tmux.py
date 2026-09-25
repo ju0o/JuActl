@@ -1,6 +1,64 @@
 from pathlib import Path
+import importlib.util
+import os
+import subprocess
+import time
 
 from actl.core import tmux
+
+
+def test_remote_pane_lock_creates_parent_and_times_out_with_exact_error(tmp_path, monkeypatch):
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text("#!/bin/sh\nexec /bin/sh -c \"$7\"\n", encoding="utf-8")
+    fake_ssh.chmod(0o755)
+    old_env = {key: os.environ.get(key) for key in ("PATH", "HOME", "ACTL_STATE_PATH")}
+    os.environ["PATH"] = f"{tmp_path}:{os.environ['PATH']}"
+    os.environ["HOME"] = str(tmp_path / "home")
+    os.environ["ACTL_STATE_PATH"] = str(tmp_path / "state.json")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "local")
+    command = tmux._remote_pane_lock_command(Path("~/.local/state/actl") / "pane-x.lock")
+    holder = subprocess.Popen(["/bin/sh", "-c", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    try:
+        assert holder.stdout is not None
+        started = time.monotonic()
+        assert holder.stdout.readline() == b"acquired\n"
+        assert time.monotonic() - started < 1
+        try:
+            with tmux._pane_lock("x"):
+                raise AssertionError("second pane lock unexpectedly acquired")
+        except tmux.TmuxError as exc:
+            assert str(exc) == tmux.PANE_LOCK_ERROR
+    finally:
+        if holder.stdin is not None:
+            holder.stdin.close()
+        holder.wait(timeout=1)
+        for key, value in old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_board_second_instance_is_refused(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("juactl_board", Path(__file__).parents[1] / "src" / "juactl-board.py")
+    assert spec is not None and spec.loader is not None
+    board = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(board)
+    old_state_path = os.environ.get("ACTL_STATE_PATH")
+    os.environ["ACTL_STATE_PATH"] = str(tmp_path / "state.json")
+    first = board._acquire_instance_lock()
+    second = board._acquire_instance_lock()
+    try:
+        assert first is not None
+        assert second is None
+        assert board.BOARD_ALREADY_RUNNING == "JuActl Board가 이미 실행 중입니다."
+    finally:
+        if first is not None:
+            first.close()
+        if old_state_path is None:
+            os.environ.pop("ACTL_STATE_PATH", None)
+        else:
+            os.environ["ACTL_STATE_PATH"] = old_state_path
 
 
 def test_multiline_uses_one_bracketed_raw_buffer_and_one_enter(monkeypatch):
@@ -63,8 +121,23 @@ def test_windows_remote_format_uses_waited_native_ssh(monkeypatch):
     args = tmux._remote_args(["tmux", "list-panes", "-F", "#{pane_id}	#{session_name}"])
     assert args == [
         "ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
-        "tmux", "list-panes", "-F", "'#{pane_id}\t#{session_name}'",
+        "tmux list-panes -F '#{pane_id}\t#{session_name}'",
     ]
+
+
+def test_windows_remote_control_uses_one_remote_command(monkeypatch):
+    monkeypatch.setattr(tmux.os, "name", "nt")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+    assert tmux._remote_control_args("$0") == [
+        "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "asus",
+        "tmux -C attach-session -t '$0'",
+    ]
+
+
+def test_remote_control_quotes_numeric_session_id_on_posix(monkeypatch):
+    monkeypatch.setattr(tmux.os, "name", "posix")
+    monkeypatch.setattr(tmux, "REMOTE_SSH_TARGET", "asus")
+    assert tmux._remote_control_args("$0")[-1] == "tmux -C attach-session -t '$0'"
 
 
 def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
@@ -125,7 +198,9 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$1\tjucontrol\t5\n"})(),
+        lambda *args, **kwargs: type(
+            "Result", (), {"returncode": 0, "stdout": "$0\t123\t5\n$1\tmain\t5\n"}
+        )(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
     tmux.set_remote_ssh("asus")
@@ -133,7 +208,8 @@ def test_remote_transport_reuses_one_tmux_control_session(monkeypatch):
         assert tmux._run(["tmux", "list-panes", "-F", "#{pane_id}"]).stdout == "%p1\n"
         assert tmux._run(["tmux", "display-message", "-p", "#{pane_title}"]).stdout == "%p2\n"
         assert len(processes) == 1
-        assert "attach-session" in processes[0].command
+        assert "attach-session" in " ".join(processes[0].command)
+        assert "$1" in " ".join(processes[0].command)
         assert "new-session" not in processes[0].command
         assert processes[0].stdin.writes == [
             '"list-panes" "-F" "#{pane_id}"\n',
@@ -148,7 +224,7 @@ def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
     monkeypatch.setattr(
         tmux.subprocess,
         "run",
-        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "$0\t0\t1\n"})(),
+        lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stdout": "0\t0\t1\n"})(),
     )
     monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
     transport = tmux.RemoteTransport("asus")
@@ -162,6 +238,252 @@ def test_remote_transport_refuses_to_create_tmux_session(monkeypatch):
         assert spawned == []
     finally:
         transport.close()
+
+
+def test_remote_transport_rejects_invalid_or_empty_session_identity(monkeypatch):
+    spawned = []
+    monkeypatch.setattr(tmux.subprocess, "Popen", lambda *args, **kwargs: spawned.append(args))
+    for stdout in ("", "0\t0\t1\n", "$\t0\t1\n", "$abc\t0\t1\n", "$0\t\t1\n", "$0\t0\t0\n", "$0\t123\t1\n"):
+        monkeypatch.setattr(
+            tmux.subprocess,
+            "run",
+            lambda *args, stdout=stdout, **kwargs: type(
+                "Result", (), {"returncode": 0, "stdout": stdout}
+            )(),
+        )
+        transport = tmux.RemoteTransport("asus")
+        try:
+            try:
+                transport.executeTmux(["tmux", "list-panes"])
+            except tmux.TmuxError as exc:
+                assert "refusing to create one" in str(exc)
+            else:
+                raise AssertionError(f"invalid remote tmux identity must fail closed: {stdout!r}")
+        finally:
+            transport.close()
+    assert spawned == []
+
+
+def test_remote_transport_reader_eof_invalidates_owned_process():
+    class Pipe:
+        def readline(self):
+            return ""
+
+    class Process:
+        stdout = Pipe()
+        returncode = None
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    transport = tmux.RemoteTransport("asus")
+    process = Process()
+    transport._process = process
+    transport._read_loop()
+    assert transport._process is None
+    assert process.killed is True
+    assert transport.state == "DEGRADED"
+
+
+def test_remote_transport_error_frame_fails_only_its_request():
+    import queue
+
+    class Pipe:
+        def __init__(self, rows):
+            self.rows = iter(rows)
+
+        def readline(self):
+            return next(self.rows, "")
+
+    class Process:
+        def __init__(self):
+            self.stdout = Pipe([
+                "%begin 1 1 1\n", "request failed\n", "%error 1 1 1\n",
+                "%begin 1 2 1\n", "next response\n", "%end 1 2 1\n",
+            ])
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+    transport = tmux.RemoteTransport("asus")
+    transport._process = Process()
+    transport._responses = queue.Queue()
+    transport._read_loop()
+
+    first = transport._responses.get_nowait()
+    second = transport._responses.get_nowait()
+    assert isinstance(first, tmux.TmuxError)
+    assert str(first) == "request failed"
+    assert isinstance(second, subprocess.CompletedProcess)
+    assert second.stdout == "next response\n"
+
+
+def test_remote_transport_timeout_invalidates_owned_process(monkeypatch):
+    class Pipe:
+        def write(self, value):
+            pass
+
+        def flush(self):
+            pass
+
+    class Process:
+        stdin = Pipe()
+        returncode = None
+        killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    transport = tmux.RemoteTransport("asus")
+    process = Process()
+    transport._process = process
+    transport.connect = lambda: None
+    clock = iter((0.0, 11.0, 11.0))
+    monkeypatch.setattr(tmux.time, "monotonic", lambda: next(clock))
+    try:
+        transport._execute_tmux_exclusive(["tmux", "list-panes"])
+    except tmux.TmuxError as exc:
+        assert "timed out after 10s" in str(exc)
+    else:
+        raise AssertionError("timed out remote tmux command must fail")
+    assert transport._process is None
+    assert process.killed is True
+    assert transport.state == "DEGRADED"
+
+
+def test_remote_transport_recovers_after_eof_or_timeout_backoff(monkeypatch):
+    import threading
+
+    class Pipe:
+        def __init__(self, rows=(), *, eof_on_write=False):
+            self.rows = list(rows)
+            self.eof_on_write = eof_on_write
+            self.closed = False
+            self.wrote = threading.Event()
+
+        def write(self, value):
+            if self.eof_on_write:
+                self.wrote.set()
+
+        def flush(self):
+            pass
+
+        def readline(self):
+            while not self.rows:
+                if self.closed or (self.eof_on_write and self.wrote.is_set()):
+                    return ""
+                self.wrote.wait(0.01)
+            return self.rows.pop(0)
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        def __init__(self, mode, index):
+            startup = ["%begin 1 0 0\n", "%end 1 0 0\n"]
+            self.stdout = Pipe(startup + ([""] if mode == "eof" and index == 1 else []))
+            self.stdin = Pipe()
+            self.returncode = None
+            self.killed = False
+            self.index = index
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            self.stdout.close()
+            return 0
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+            self.stdout.close()
+
+    for mode in ("eof", "timeout"):
+        now = [0.0]
+        processes = []
+
+        def fake_popen(*args, **kwargs):
+            process = Process(mode, 2)
+            process.command = args[0]
+            if process.index == 2:
+                def respond(_value):
+                    process.stdout.rows.extend([
+                        "%begin 1 1 1\n", "recovered\n", "%end 1 1 1\n",
+                    ])
+                process.stdin.write = respond
+            processes.append(process)
+            return process
+
+        if mode == "timeout":
+            clock = iter((11.0, 22.0, 22.0))
+            monkeypatch.setattr(tmux.time, "monotonic", lambda: next(clock, now[0]))
+        else:
+            monkeypatch.setattr(tmux.time, "monotonic", lambda: now[0])
+        monkeypatch.setattr(
+            tmux.subprocess,
+            "run",
+            lambda *args, **kwargs: type(
+                "Result", (), {"returncode": 0, "stdout": "$0\tmain\t1\n"}
+            )(),
+        )
+        monkeypatch.setattr(tmux.subprocess, "Popen", fake_popen)
+        transport = tmux.RemoteTransport("asus")
+        try:
+            first = Process(mode, 1)
+            first.command = ["ssh", "asus", "tmux", "-C", "attach-session"]
+            processes.append(first)
+            transport._process = first
+            if mode == "eof":
+                transport._read_loop()
+            else:
+                try:
+                    transport._execute_tmux_exclusive(["tmux", "list-panes"])
+                except tmux.TmuxError:
+                    pass
+                else:
+                    raise AssertionError("timeout must invalidate the first process")
+            assert first.killed is True
+
+            now[0] = 21.5 if mode == "timeout" else 0.5
+            try:
+                transport._execute_tmux_exclusive(["tmux", "list-panes"])
+            except tmux.TmuxError as exc:
+                assert "backoff active" in str(exc)
+            else:
+                raise AssertionError("reconnect must wait for backoff")
+
+            now[0] = 23.0 if mode == "timeout" else 1.0
+            result = transport._execute_tmux_exclusive(["tmux", "list-panes"])
+            assert result.stdout == "recovered\n"
+            assert len(processes) == 2
+            assert all("new-session" not in process.command for process in processes)
+        finally:
+            transport.close(aggressive=True)
 
 
 def test_socket_path_passed_as_dash_s(monkeypatch):

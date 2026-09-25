@@ -3,6 +3,14 @@ set -euo pipefail
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
+
+if [[ "${1:-}" == "--offline" || "${1:-}" == "offline" ]]; then
+  echo "[offline] disposable stub-agent Board SEND -> RESULT -> COPY"
+  PYTHONPATH=src python3 tests/run_tests.py
+  echo "TESTER_OFFLINE_COMPLETE"
+  exit 0
+fi
+
 target=${1:-asus}
 
 echo "[1/2] automated persona and regression suite"

@@ -153,7 +153,7 @@ def newest_detection(choices: list[Detection]) -> Detection | None:
     return scored[-1][1]
 
 
-def reconcile(config: dict, detections: list[Detection]) -> tuple[dict, list[str]]:
+def reconcile(config: dict, detections: list[Detection], *, unique_only: bool = False) -> tuple[dict, list[str]]:
     """Return a pane-id based mapping update without writing it.
 
     Stale mappings are removed fail-closed. Unmapped agents with exactly one
@@ -182,6 +182,8 @@ def reconcile(config: dict, detections: list[Detection]) -> tuple[dict, list[str
         chosen: Detection | None = None
         if len(choices) == 1:
             chosen = choices[0]
+        elif unique_only:
+            continue
         else:
             try:
                 current = get_target(updated, agent).target

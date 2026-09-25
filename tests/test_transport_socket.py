@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -219,4 +220,35 @@ def test_v08_missing_socket_target_sends_nothing(monkeypatch):
         assert after["panes"] == before["panes"]
     finally:
         _kill_socket(str(work / "m.sock"))
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def test_isolated_tmux_concurrent_sends_do_not_interleave(monkeypatch):
+    assert Path(REAL_TMUX).is_file()
+    _force_real_tmux(monkeypatch)
+    work = Path(tempfile.mkdtemp(prefix="actl-lock-", dir="/tmp"))
+    sock = out = pane = None
+    try:
+        sock, out, pane = _start_receiver(work, "lock")
+        results = []
+
+        def send(marker):
+            results.append(tmux.send_prompt_staged(pane, f"{marker}-a\n{marker}-b", socket_path=sock))
+
+        threads = [threading.Thread(target=send, args=(marker,)) for marker in ("FIRST", "SECOND")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        assert all(result["ok"] for result in results)
+        deadline = time.time() + 2
+        while time.time() < deadline and (not out.exists() or b"FIRST-a" not in out.read_bytes() or b"SECOND-a" not in out.read_bytes()):
+            time.sleep(0.05)
+        assert out.read_bytes() in {
+            b"FIRST-a\nFIRST-b\nSECOND-a\nSECOND-b\n",
+            b"SECOND-a\nSECOND-b\nFIRST-a\nFIRST-b\n",
+        }
+    finally:
+        if sock:
+            _kill_socket(sock)
         shutil.rmtree(work, ignore_errors=True)

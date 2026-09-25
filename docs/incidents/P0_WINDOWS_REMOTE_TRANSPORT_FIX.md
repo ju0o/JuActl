@@ -111,4 +111,37 @@ The following remain deliberately open until run on the actual MainPC:
 - Founder interactive SSH + tmux coexistence for 30 minutes;
 - DA/escape correlation, reported only as `NOT REPRODUCED AFTER FIX` if absent.
 
+## Bounded DA-response investigation procedure
+
+This is a diagnostic procedure only. It does not filter escape sequences,
+rewrite captured bytes, or change the transport to suppress terminal queries.
+For each bounded capture, preserve the raw byte stream, timestamps, command,
+PTY setting, and host/client context:
+
+1. SSH to ASUS and run `bash` without tmux.
+2. SSH to ASUS and attach to the normal tmux session.
+3. SSH to ASUS and run the isolated clean tmux instance used by the harness.
+4. Repeat the interactive SSH cases with JuActl off and on only when an
+   approved real Windows Terminal capture is available.
+
+Inspect the raw stream for terminal capability queries and the specific
+reported DA response. Keep queries and responses distinct: seeing `ESC[c` or
+`ESC[>c` is not, by itself, evidence of the reported response leak. Do not
+remove, normalize, or regex-match away escape bytes before preserving the
+capture.
+
+Known limits: SSH/PTY captures without a real Windows Terminal emulator cannot
+exercise the emulator response path; short bounded captures cannot establish
+long-duration interactive disconnect behavior; and a Linux smoke cannot stand
+in for MainPC GUI or terminal evidence. A missing response in those captures
+is not a fix or reproduction conclusion.
+
+Fail closed in the report: label only directly evidenced raw output as
+`OBSERVED`; use `UNKNOWN` when evidence cannot distinguish a query from the
+reported response; and use `NOT_PROVEN` when the required interactive
+environment or capture is unavailable. Do not claim reproduction,
+non-reproduction, absence of the leak, or a transport fix from a bounded case
+alone. Preserve this boundary until the exact interactive capture is
+available.
+
 This document does not close the wider SSH incident.

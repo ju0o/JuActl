@@ -57,6 +57,7 @@ def test_stale_codex_target_cannot_send(monkeypatch):
     try:
         cli._send_to_selected(CFG, "codex", "NO")
     except ValueError as exc:
-        assert "blocked" in str(exc)
+        assert "연결된 실행 화면을 확인하지 못했어요" in str(exc)
+        assert "blocked" not in str(exc)
     else:
         raise AssertionError("expected stale mapping failure")

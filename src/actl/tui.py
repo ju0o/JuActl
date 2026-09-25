@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 import hashlib
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from actl.agents.extract import extract_last_response
@@ -32,79 +33,249 @@ DIM = "\x1b[2m"
 RESET = "\x1b[0m"
 
 
-def _rows(config: dict, detections=None) -> list[dict]:
-    """One row per agent: live target, status, busy/result, preview, candidates."""
+def _validate_live_pane(agent: str, target: str, pane) -> object:
+    try:
+        return validate_target(agent, target, pane=pane)
+    except TypeError as exc:
+        if "unexpected keyword argument 'pane'" not in str(exc):
+            raise
+        return validate_target(agent, target)
+
+
+def _rows(config: dict, detections=None, overlays: dict | None = None, *, hydrate: bool = True) -> list[dict]:
+    """Project each verified live detection as its own runtime row."""
     from actl.core.discovery import discover as _disc
+    from actl.core.models import PaneInfo
 
     all_dets = [d for d in (detections if detections is not None else _disc())
                 if d.agent and d.confidence in STRONG_CONFIDENCE]
-    by_agent: dict[str, list] = {}
-    for d in all_dets:
-        by_agent.setdefault(d.agent, []).append(d)
     from actl.core.state import seen_results
     seen = seen_results()
 
-    def build(item: tuple[int, tuple[str, object]]) -> dict:
-        idx, (name, spec) = item
+    from actl.core.tmux import REMOTE_SSH_TARGET
+    from actl.core.projection import UNKNOWN
+    machine = config.get("machine") or REMOTE_SSH_TARGET or "local"
+
+    def verified_project_names(paths: set[str]) -> dict[str, str]:
+        import subprocess
+        from actl.core.tmux import _no_window, _remote_args
+
+        names: dict[str, str] = {}
+        paths = {path for path in paths if path and path not in {"-", UNKNOWN}}
+        if REMOTE_SSH_TARGET and paths:
+            script = "for p do r=$(git -C \"$p\" rev-parse --show-toplevel 2>/dev/null) && printf '%s\\t%s\\n' \"$p\" \"$r\"; done"
+            try:
+                result = subprocess.run(
+                    _remote_args(["sh", "-c", script, "sh", *sorted(paths)]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    check=False, timeout=5, **_no_window(),
+                )
+                for line in result.stdout.splitlines():
+                    path, _, root = line.partition("\t")
+                    if root:
+                        names[path] = Path(root).name or UNKNOWN
+                return names
+            except (OSError, subprocess.SubprocessError):
+                return names
+        for path in paths:
+            if not path or path in {"-", UNKNOWN}:
+                continue
+            try:
+                result = subprocess.run(
+                    _remote_args(["git", "-C", path, "rev-parse", "--show-toplevel"]),
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    check=False, timeout=5, **_no_window(),
+                )
+                root = result.stdout.strip() if result.returncode == 0 else ""
+                if root:
+                    names[path] = Path(root).name or UNKNOWN
+            except (OSError, subprocess.SubprocessError):
+                continue
+        return names
+
+    project_names = verified_project_names({d.pane.current_path for d in all_dets})
+
+    def runtime_key(name: str, pane: PaneInfo | None = None, *, target: str = "-", path: str = "-") -> str:
+        """Projection key from existing runtime evidence, not a new identity."""
+        if pane is not None:
+            return "|".join((str(machine), name, pane.target, pane.pane_id,
+                             str(pane.pane_pid or "?"), pane.current_path or "-"))
+        return "|".join((str(machine), name, target, path))
+
+    def tmux_coordinates(target: str) -> dict[str, str]:
+        parts = target.split(":", 1)
+        if len(parts) != 2 or "." not in parts[1]:
+            return {"session": UNKNOWN, "window": UNKNOWN, "pane_index": UNKNOWN}
+        window, pane = parts[1].split(".", 1)
+        return {"session": parts[0], "window": window, "pane_index": pane}
+
+    instances: list[tuple[str, str, object, object | None]] = []
+    for detection in all_dets:
+        name = detection.agent
+        instances.append((runtime_key(name, detection.pane), name, AGENTS[name], detection))
+    def build(item: tuple[str, str, object, object | None]) -> dict:
+        key, name, spec, det = item
         target = "-"
         state = "UNMAPPED"
+        pane_path = "-"
+        control_ready = False
+        control_reason = "UNMAPPED"
+        control_detail = "strong runtime detected but no validated mapping"
+        live_runtime = det is not None
         try:
-            target = get_target(config, name).target
-            state = validate_target(name, target).state
+            mapped_target = get_target(config, name).target
         except ValueError:
-            det = by_agent.get(name, [None])[0]
-            if det:
-                target = f"{det.pane.pane_id}?"
-                state = "DETECTED"
+            mapped_target = None
+        if det is not None:
+            target = det.pane.pane_id
+            pane_path = det.pane.current_path
+            # Validate the selected live pane itself. Another pane using the
+            # same Agent family does not make this instance ambiguous.
+            validation = _validate_live_pane(name, target, det.pane)
+            state = validation.state
+            control_ready = validation.valid
+            if state == "UP":
+                # Refine UP with activity once hydrated; temporary busy stays distinct.
+                pass
+            control_reason = "READY" if control_ready and state != "TRANSPORT_BUSY" else (
+                "TRANSPORT_BUSY" if state == "TRANSPORT_BUSY" else (
+                "STALE" if state == "DOWN" else
+                "MISMATCH" if state == "MISMATCH" else state
+            ))
+            control_detail = validation.detail or f"validated selected runtime state is {state}"
+            if state == "TRANSPORT_BUSY":
+                control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
+        elif mapped_target:
+            target = mapped_target
+            validation = validate_target(name, target)
+            state = validation.state
+            pane_path = validation.path
+            control_ready = validation.valid
+            control_reason = "READY" if control_ready and state != "TRANSPORT_BUSY" else state
+            control_detail = validation.detail or f"validated target state is {state}"
+            if state == "TRANSPORT_BUSY":
+                control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
         preview = ""
+        pane_preview = ""
         detail = ""
         busy = "-"
         activity_state = "UNKNOWN"
         result_flag = "-"
         result_hash = ""
         result_state = "UNKNOWN"
-        if target != "-" and not target.endswith("?"):
-            try:
-                from actl.core.activity import observe_activity
+        coordinates = tmux_coordinates(det.pane.target if det is not None else target)
+        if target != "-" and live_runtime:
+            if hydrate:
+                try:
+                    from actl.core.activity import observe_activity
 
-                activity_state, _ = observe_activity(target)
-                busy = {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[activity_state]
-            except Exception:
-                busy = "?"
+                    activity_state, _ = observe_activity(target)
+                    busy = {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[activity_state]
+                    if state == "UP":
+                        if activity_state == "RUNNING":
+                            state = "WORKING"
+                        elif activity_state == "IDLE":
+                            state = "IDLE"
+                        elif activity_state == "WAITING_INPUT":
+                            state = "BLOCKED"
+                except Exception as exc:
+                    from actl.core.remote_scheduler import is_transport_contention
+
+                    if is_transport_contention(exc) and state == "UP":
+                        state = "TRANSPORT_BUSY"
+                        control_ready = True
+                        control_reason = "TRANSPORT_BUSY"
+                        control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
+                    busy = "?"
+        if target != "-" and control_ready and hydrate and state != "TRANSPORT_BUSY":
             try:
                 result = extract_last_response(name, target, config)
                 if result.text:
                     first = result.text.strip().splitlines()[0] if result.text.strip() else ""
                     preview = first[:100]
-                    result_flag = f"●{len(result.text)}자"
+                    result_flag = f"답 {len(result.text)}자"
                     result_state = "READY"
                     result_hash = hashlib.sha256(result.text.encode("utf-8")).hexdigest()[:16]
                 else:
                     detail = result.detail or "no text"
-                    result_flag = "○대기"
+                    result_flag = "답 없음"
                     result_state = "WAITING"
             except Exception as exc:
-                detail = str(exc)[:80]
-                result_flag = "?오류"
-        cands = [d for d in by_agent.get(name, []) if d.pane.pane_id != target]
+                from actl.core.remote_scheduler import is_transport_contention
+
+                if is_transport_contention(exc):
+                    state = "TRANSPORT_BUSY"
+                    control_ready = True
+                    control_reason = "TRANSPORT_BUSY"
+                    control_detail = "원격 통신 대기 중 — 매핑은 유지됨 (재매핑 불필요)"
+                else:
+                    detail = str(exc)[:80]
+                    result_flag = "?오류"
+        from actl.core.projection import project_metadata
+        profile = None
+        if det is not None and "claude profile " in det.evidence:
+            profile = Path(det.evidence.rsplit(" ", 1)[-1]).name
+        overlay = None
+        if isinstance(overlays, dict):
+            overlay = overlays.get(key) or overlays.get(name)
+        metadata = project_metadata(
+            config, name, pane_path,
+            activity_state=activity_state,
+            result_state=result_state,
+            profile=profile,
+            overlay=overlay,
+        )
+        if metadata.get("project") == UNKNOWN:
+            metadata["project"] = project_names.get(pane_path, UNKNOWN)
         return {
-            "key": str(idx), "agent": name, "display": spec.display_name,
+            "key": key, "runtime_key": key, "agent": name, "display": spec.display_name,
             "target": target, "state": state, "preview": preview, "detail": detail,
+            "pane_preview": pane_preview,
             "busy": busy, "activity_state": activity_state, "result_flag": result_flag,
             "result_state": result_state, "result_hash": result_hash,
+            "machine": machine, "pane_path": pane_path, "control_ready": control_ready,
+            "control_reason": control_reason, "control_detail": control_detail,
+            "live_runtime": live_runtime,
+            "runtime_identity": key,
+            "pane_id": det.pane.pane_id if det is not None else UNKNOWN,
+            "pane_target": det.pane.target if det is not None else target,
+            "pane_command": det.pane.current_command if det is not None else UNKNOWN,
+            "pane_pid": str(det.pane.pane_pid) if det is not None and det.pane.pane_pid else UNKNOWN,
+            "session": coordinates["session"], "window": coordinates["window"],
+            "pane_index": coordinates["pane_index"],
+            "detection_evidence": det.evidence if det is not None else UNKNOWN,
+            **metadata,
+            "project": "UNASSIGNED" if metadata.get("project") == "UNKNOWN" else metadata.get("project"),
             "unread": bool(result_hash and seen.get(name) != result_hash),
-            "candidates": [{"pane_id": d.pane.pane_id, "path": d.pane.current_path,
-                            "evidence": d.evidence} for d in cands],
         }
 
-    items = list(enumerate(AGENTS.items(), 1))
     # ponytail: bounded workers hide slow independent pane/storage reads;
     # increase only after measuring a real remote saturation problem.
-    with ThreadPoolExecutor(max_workers=min(4, len(items))) as pool:
-        return list(pool.map(build, items))
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(instances)))) as pool:
+        rows = list(pool.map(build, instances))
+    role_order = {"PM": 0, "BUILDER": 1, "QA": 2}
+    rows.sort(key=lambda row: (row.get("machine", ""), row.get("project", "UNKNOWN") == "UNASSIGNED",
+                               row.get("project", "UNKNOWN"), role_order.get(row.get("role"), 3),
+                               row.get("runtime_identity", "")))
+    for index, row in enumerate(rows, 1):
+        row["key"] = str(index)
+        row["key_display"] = str(index)
+    return rows
 
 
-STATE_KO = {"UP": "정상", "DOWN": "꺼짐", "MISMATCH": "불일치", "UNMAPPED": "미매핑", "DETECTED": "감지됨"}
+STATE_KO = {
+    "UP": "미확인",
+    "WORKING": "일하는 중",
+    "IDLE": "쉬는 중",
+    "BLOCKED": "승인 기다림",
+    "TRANSPORT_BUSY": "미확인",
+    "DEGRADED": "미확인",
+    "DOWN": "연결 끊김",
+    "UNKNOWN": "미확인",
+    "MISMATCH": "미확인",
+    "UNMAPPED": "미확인",
+    "DETECTED": "미확인",
+}
 
 HELP_TEXT = """\
 actl 에이전트 보드 — 도움말
@@ -153,12 +324,13 @@ def _render(rows: list[dict], selected: int, message: str = "") -> None:
     )
     for i, row in enumerate(rows):
         marker = ">" if i == selected else " "
-        state_color = "" if row["state"] == "UP" else DIM
+        state_color = "" if row["state"] in {"UP", "IDLE"} else DIM
         state_ko = STATE_KO.get(row["state"], row["state"])
         sys.stdout.write(
             f"{marker} [{row['key']}] {state_color}{row['display']:<12} {row['target']:<6} "
-            f"{state_ko:<9}{RESET} {row['busy']:<4} {row['result_flag']:<6} "
-            f"{row['preview'] or row['detail']}\n"
+            f"{state_ko:<9}{RESET} "
+            f"{row['result_flag']:<6} "
+            f"{row['preview'] or ('답 없음' if row['result_flag'] == '답 없음' else row['detail'])}\n"
         )
     if message:
         sys.stdout.write(f"\n{message}\n")
@@ -191,19 +363,19 @@ def _pane_preview(target: str, lines: int = 0) -> str:
     기존 textwrap 재포장은 TUI 레이아웃을 깨뜨려 제거. tmux가 이미 pane
     너비에 맞춰 줄바꿈한 화면을 그대로 보여줌 (tail = 현재 화면).
     """
-    from actl.core.tmux import capture_pane as _cap
+    from actl.core.tmux import REMOTE_SSH_TARGET, capture_pane as _cap, capture_pane_live
 
-    try:
-        width, height = _pane_geometry(target)
-    except Exception:
-        width, height = 100, 30
     if lines <= 0:
-        lines = height
+        lines = 12
     try:
-        text = _cap(target, history=lines)
+        # Remote Board: bounded one-shot capture so preview never occupies P0 transport.
+        if REMOTE_SSH_TARGET:
+            text = capture_pane_live(target, history=max(lines, 16), timeout=3.0)
+        else:
+            text = _cap(target, history=lines)
     except Exception as exc:
         return f"(미리보기 불가: {exc})"
-    rows = text.splitlines()[-lines:]
+    rows = text.rstrip().splitlines()[-lines:]
     rows = [r.rstrip() for r in rows]
     while rows and not rows[0].strip():
         rows.pop(0)
@@ -215,17 +387,20 @@ def _verify_row(agent: str, target: str, config: dict) -> str:
     from actl.core.validation import validate_target
 
     if target == "-" or target.endswith("?"):
-        return "매핑: 없음 — m 눌러 pane 선택"
-    validation = validate_target(agent, target)
+        return "매핑: 없음 — 다음 단계: 작업창을 선택하세요"
+    try:
+        validation = validate_target(agent, target)
+    except Exception:
+        return "매핑: 확인 필요 — 다음 단계: 다시 매핑하세요"
     if not validation.valid:
-        return f"매핑: {validation.state} — {validation.detail} (m 눌러 재매핑)"
+        return "매핑: 확인 필요 — 다음 단계: 다시 매핑하세요"
     try:
         result = extract_last_response(agent, target, config)
-    except Exception as exc:
-        return f"매핑: 정상 proc 확인, 추출 실패: {exc}"
+    except Exception:
+        return "매핑: 정상 · 결과 확인 실패 — 다음 단계: 다시 시도하세요"
     if result.text:
-        return f"매핑: 정상 · 복사: 가능 ({len(result.text)}자, {result.source})"
-    return f"매핑: 정상 · 복사: 불가 ({result.detail or '응답 없음'})"
+        return f"매핑: 정상 · 복사 가능 ({len(result.text)}자) — 다음 단계: 복사하세요"
+    return "매핑: 정상 · 복사 불가 — 다음 단계: 응답을 기다리세요"
 
 
 def _unmapped_panes(config: dict, agent: str) -> list:
@@ -268,7 +443,7 @@ def _pane_busy(pane_id: str) -> str:
         from actl.core.activity import observe_activity
 
         state, _ = observe_activity(pane_id)
-        return {"RUNNING": "실행중", "IDLE": "유휴", "UNKNOWN": "미확인"}[state]
+        return {"RUNNING": "실행중", "IDLE": "유휴", "WAITING_INPUT": "승인 기다림", "UNKNOWN": "미확인"}[state]
     except Exception:
         return "미확인"
 
@@ -312,6 +487,23 @@ def _pane_board(config: dict) -> str:
 
 
 _BOARD: list = []
+
+
+def _event_scope(events: list[str]) -> tuple[bool, set[str]]:
+    """Classify remote tmux notifications without turning output into a scan."""
+    topology = any(
+        event.startswith(("%sessions-changed", "%window-", "%layout-change", "%session-"))
+        for event in events
+    )
+    pane_events = ("%output", "%pane-mode-changed", "%pause", "%continue")
+    pane_ids = {
+        parts[1]
+        for event in events
+        if event.startswith(pane_events)
+        for parts in [event.split(maxsplit=2)]
+        if len(parts) > 1 and parts[1].startswith("%")
+    }
+    return topology, pane_ids
 
 
 def _pane_board_cache(config: dict, board: list | None = None) -> list:
@@ -434,15 +626,21 @@ def run_tui() -> int:
 
         next_refresh = time.monotonic() + 12.0
         next_health = time.monotonic() + 60.0
+        next_event_refresh = 0.0
+        pending_event_panes: set[str] = set()
         while True:
             ch = cb.read_key(timeout=0.5)
             if ch is None:
                 from actl.core.tmux import REMOTE_SSH_TARGET, remote_events
 
                 event_mode = bool(REMOTE_SSH_TARGET)
-                event_ready = bool(remote_events()) if event_mode else False
-                due = time.monotonic() >= (next_health if event_mode else next_refresh)
-                if event_ready or due:
+                now = time.monotonic()
+                events = remote_events() if event_mode else []
+                topology, pane_ids = _event_scope(events)
+                pending_event_panes.update(pane_ids)
+                local_due = pending_event_panes and now >= next_event_refresh
+                due = now >= (next_health if event_mode else next_refresh)
+                if topology or due:
                     config = load_config()
                     try:
                         from actl.cli import _auto_reconcile
@@ -454,7 +652,15 @@ def run_tui() -> int:
                     interval = 3.0 if any(r.get("activity_state") == "RUNNING" for r in rows) else 12.0
                     next_refresh = time.monotonic() + interval
                     next_health = time.monotonic() + 60.0
+                    pending_event_panes.clear()
                     _render(rows, selected, "자동 새로고침 완료")
+                elif local_due:
+                    target = rows[selected].get("target") if rows else None
+                    if target in pending_event_panes:
+                        message = f"자동 pane 갱신\n{_pane_preview(target)}"
+                        _render(rows, selected, message)
+                    pending_event_panes.clear()
+                    next_event_refresh = now + 1.0
                 continue
             if ch in {"q", "\x03"}:
                 sys.stdout.write("\n")
@@ -595,8 +801,8 @@ def run_tui() -> int:
             if ch == "s":
                 row = rows[selected]
                 tgt = row["target"]
-                if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} live pane 없음 (먼저 m 눌러 매핑)"
+                if tgt == "-" or not row.get("control_ready"):
+                    message = f"✗ {row['display']} 제어 비활성 (validated mapping 필요)"
                     _render(rows, selected, message)
                     continue
                 cb.restore()
@@ -625,13 +831,18 @@ def run_tui() -> int:
                         if not prompt:
                             send_message = "✗ 빈 메시지"
                         else:
+                            from actl.core.activity import send_blocked_reason
                             from actl.cli import _send_to_selected
 
-                            try:
-                                _send_to_selected(config, row["agent"], prompt)
-                                send_message = f"✓ {row['display']}에 전송됨"
-                            except Exception as exc:
-                                send_message = f"✗ {exc}"
+                            reason = send_blocked_reason(tgt)
+                            if reason:
+                                send_message = f"✗ {reason}"
+                            else:
+                                try:
+                                    _send_to_selected(config, row["agent"], prompt)
+                                    send_message = f"✓ {row['display']}에 전송됨"
+                                except Exception as exc:
+                                    send_message = f"✗ {exc}"
                 finally:
                     cb.raw()
                 message = send_message
@@ -640,8 +851,8 @@ def run_tui() -> int:
             if ch in {"c", "p"}:
                 row = rows[selected]
                 tgt = row["target"]
-                if tgt == "-" or tgt.endswith("?"):
-                    message = f"✗ {row['display']} live pane 없음"
+                if tgt == "-" or not row.get("control_ready"):
+                    message = f"✗ {row['display']} 복사 비활성 (validated mapping 필요)"
                     _render(rows, selected, message)
                     continue
                 try:

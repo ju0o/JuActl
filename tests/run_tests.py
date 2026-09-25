@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import shutil
 import sys
 import tempfile
@@ -23,29 +24,38 @@ class MonkeyPatch:
 
 def main() -> int:
     passed = failed = 0
-    for file in sorted((ROOT / "tests").glob("test_*.py")):
-        mod = importlib.import_module(file.stem)
-        for name, fn in inspect.getmembers(mod, inspect.isfunction):
-            if not name.startswith("test_"):
-                continue
-            args = []
-            tmps: list[Path] = []
-            patch = MonkeyPatch()
-            try:
-                for param in inspect.signature(fn).parameters:
-                    if param == "tmp_path":
-                        tmp = Path(tempfile.mkdtemp(prefix="actl-test-"))
-                        tmps.append(tmp)
-                        args.append(tmp)
-                    elif param == "monkeypatch": args.append(patch)
-                    else: raise RuntimeError(f"unsupported fixture: {param}")
-                fn(*args); passed += 1; print(f"PASS {file.stem}.{name}")
-            except Exception as exc:
-                failed += 1; print(f"FAIL {file.stem}.{name}: {exc}")
-            finally:
-                patch.close()
-                for tmp in tmps:
-                    shutil.rmtree(tmp, ignore_errors=True)
+    isolated = Path(tempfile.mkdtemp(prefix="actl-test-state-"))
+    os.environ.update({
+        "HOME": str(isolated / "home"),
+        "ACTL_AUDIT_PATH": str(isolated / "audit.jsonl"),
+        "ACTL_STATE_PATH": str(isolated / "state.json"),
+    })
+    try:
+        for file in sorted((ROOT / "tests").glob("test_*.py")):
+            mod = importlib.import_module(file.stem)
+            for name, fn in inspect.getmembers(mod, inspect.isfunction):
+                if not name.startswith("test_"):
+                    continue
+                args = []
+                tmps: list[Path] = []
+                patch = MonkeyPatch()
+                try:
+                    for param in inspect.signature(fn).parameters:
+                        if param == "tmp_path":
+                            tmp = Path(tempfile.mkdtemp(prefix="actl-test-"))
+                            tmps.append(tmp)
+                            args.append(tmp)
+                        elif param == "monkeypatch": args.append(patch)
+                        else: raise RuntimeError(f"unsupported fixture: {param}")
+                    fn(*args); passed += 1; print(f"PASS {file.stem}.{name}")
+                except Exception as exc:
+                    failed += 1; print(f"FAIL {file.stem}.{name}: {exc}")
+                finally:
+                    patch.close()
+                    for tmp in tmps:
+                        shutil.rmtree(tmp, ignore_errors=True)
+    finally:
+        shutil.rmtree(isolated, ignore_errors=True)
     print(f"{passed} passed, {failed} failed")
     return 1 if failed else 0
 

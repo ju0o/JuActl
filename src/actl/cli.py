@@ -16,13 +16,21 @@ from actl.core.registry import AGENTS, resolve_agent
 from actl.core.probe import probe_agent
 from actl.core.status import agent_status
 from actl.core.runtime import WriterDenied
-from actl.core.tmux import pane_field, send_keys, send_prompt, target_exists
+from actl.core.tmux import PANE_LOCK_ERROR, TmuxError, capture_pane, pane_field, send_keys, send_prompt, target_exists
 from actl.core.validation import pane_processes, require_valid_target, validate_target
-from actl.utils.clipboard import copy_text, osc52_guidance
+from actl.utils.clipboard import copy_text
 
 VERSION = "0.1.1-managed"
 
 BANNER = "Agent Control"
+
+
+def _unknown_agent(value: str) -> str:
+    return f"Unknown agent: {value} — 쓸 수 있는 이름: {', '.join(AGENTS)}"
+
+
+def _activity_label(state: str) -> str:
+    return {"RUNNING": "작업 중", "IDLE": "대기", "WAITING_INPUT": "승인 기다림"}.get(state, "미확인")
 
 
 def _menu() -> None:
@@ -51,12 +59,14 @@ def _print_status(config: dict, agent: str | None = None, *, json_output: bool =
             s = agent_status(config, name)
             rows.append({"id": name, **s})
             if not json_output:
-                print(f"{s['agent']:<12} {s['pane']:<4} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
+                pane = {"UP": "켜짐", "DOWN": "꺼짐", "UNMAPPED": "연결 안 됨"}.get(s["pane"], s["pane"])
+                activity = _activity_label(s.get("activity", "UNKNOWN")) if s.get("pane") == "UP" else "미확인"
+                print(f"{s['agent']:<12} {pane:<6} {activity:<6} {s['target']:<14} 명령={s['command']:<14} 경로={s['path']}")
         except Exception as exc:
             row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
             rows.append(row)
             if not json_output:
-                print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
+                print(f"{AGENTS[name].display_name:<12} 확인 필요 — actl doctor 로 점검하세요")
     if json_output:
         print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
 
@@ -237,15 +247,11 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     if not result.text:
         from actl.core.audit import record
 
-        record("copy", agent=agent, target=target, ok=False, source=result.source, confidence=result.confidence)
-        if result.source == "claude-unresolved":
-            print("✗ Could not confidently identify the active Claude conversation. Nothing copied.")
-        elif result.source.endswith("-blocked"):
-            print(f"✗ {result.detail or 'Result correlation blocked'}")
-        elif result.detail:
-            print(f"✗ No response text found ({result.detail})")
-        else:
-            print("✗ No response text found")
+        record("copy", agent=agent, target=target, ok=False, source=result.source,
+               confidence=result.confidence, detail=result.detail)
+        print("아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요")
+        if result.detail and result.detail != "answer still in progress":
+            print(f"  {result.detail}")
         return 1
     if print_only:
         # Safe manual-copy fallback — prints exact extracted Result verbatim.
@@ -269,21 +275,14 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         record("copy", agent=agent, target=target, ok=False, mode=preferred,
                source=result.source, confidence=result.confidence, error=type(exc).__name__)
         # Clipboard transport failed — offer manual fallback.
-        print(f"✗ Clipboard delivery failed: {exc}")
-        print("  Use /copy --print or /result for manual copy.")
+        print("복사하지 못했어요 — actl copy <agent> --print 로 답을 화면에 띄워 복사하세요")
         return 1
-    note = f" [{result.source}, confidence={result.confidence}]" if result.confidence not in {"high", "exact"} else ""
     if backend == "osc52":
         # OSC52 is best-effort: host cannot verify the Windows terminal actually
         # accepted the sequence, so never claim guaranteed clipboard success.
-        print(f"✓ Result sent to terminal clipboard via OSC52{note}")
-        guidance = osc52_guidance()
-        if guidance:
-            print(f"  {guidance}")
-        else:
-            print("  If clipboard unchanged, your terminal may block OSC52 — use /copy --print or /result")
+        print(f"터미널 클립보드로 보냈어요 (안 붙여지면 actl copy {agent} --print)")
     else:
-        print(f"✓ Last response copied via {backend}{note}")
+        print("답을 복사했어요 — 붙여넣기 하세요")
     from actl.core.audit import record
 
     record("copy", agent=agent, target=target, ok=True, mode=backend,
@@ -295,11 +294,60 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     return 0
 
 
-def _send_to_selected(config: dict, agent: str, prompt: str) -> str:
+def _send_to_selected(config: dict, agent: str, prompt: str, *, target: str | None = None) -> str:
     """Resolve on every send; never retain a target across /switch."""
     from actl.core.remote import is_remote, remote_send
+    from actl.core.activity import send_blocked_reason
+    remote = is_remote()
 
-    if is_remote():
+    def guard_direct_writer(target_pane: str) -> None:
+        if remote:
+            return
+        from actl.core.runtime import guard_tmux_writer
+
+        try:
+            guard_tmux_writer(target=target_pane)
+        except WriterDenied as denied:
+            raise RuntimeError(f"{denied.code}: {denied.detail}") from denied
+
+    if target is not None:
+        validation = validate_target(agent, target)
+        if not validation.valid:
+            raise ValueError(
+                f"Selected runtime is {validation.state}; sending blocked: {validation.detail}"
+            )
+        guard_direct_writer(target)
+        if reason := send_blocked_reason(target):
+            raise RuntimeError(reason)
+        try:
+            if remote:
+                from actl.core.remote import ManagedUnsupported, remote_managed_send
+
+                try:
+                    delivery = remote_managed_send(agent, target, prompt)
+                    return str(delivery)
+                except ManagedUnsupported:
+                    pass
+            send_prompt(target, prompt)
+        except WriterDenied as denied:
+            from actl.core.audit import record
+
+            record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=denied.code)
+            raise RuntimeError(f"{denied.code}: {denied.detail}") from denied
+        except Exception as exc:
+            from actl.core.audit import record
+
+            record("send", agent=agent, target=target, ok=False, chars=len(prompt), error=type(exc).__name__)
+            raise
+        from actl.core.audit import record
+
+        record("send", agent=agent, target=target, ok=True, chars=len(prompt))
+        return target
+
+    target = _resolve_live_target(config, agent)
+    if remote:
+        if reason := send_blocked_reason(target):
+            raise RuntimeError(reason)
         try:
             target = remote_send(agent, prompt)
         except Exception as exc:
@@ -311,7 +359,9 @@ def _send_to_selected(config: dict, agent: str, prompt: str) -> str:
 
         record("send", agent=agent, target=target, remote=True, ok=True, chars=len(prompt))
         return target
-    target = _resolve_live_target(config, agent)
+    guard_direct_writer(target)
+    if reason := send_blocked_reason(target):
+        raise RuntimeError(reason)
     try:
         send_prompt(target, prompt)
     except WriterDenied as denied:
@@ -584,7 +634,9 @@ def _copy_diagnostic(config: dict, agent: str) -> int:
     return 0 if result.text else 1
 
 
-def _discover(config: dict, detections: list[Detection] | None = None) -> list[Detection]:
+def _discover(
+    config: dict, detections: list[Detection] | None = None, *, apply: bool = False
+) -> list[Detection]:
     detections = detections if detections is not None else discover()
     print("#  pane_id  cwd                              command          detected      confidence mapping evidence")
     for index, detection in enumerate(detections, 1):
@@ -594,23 +646,52 @@ def _discover(config: dict, detections: list[Detection] | None = None) -> list[D
             f"{index:<2} {pane.pane_id:<8} {pane.current_path:<32} {pane.current_command:<16} "
             f"{detected:<13} {detection.confidence:<10} {mapping_state(config, detection):<8} {detection.evidence}"
         )
-    print("\nDiscovery is read-only; config was not modified.")
+    if not apply:
+        print("\n보기만 했어요 — 연결하려면 actl discover --apply")
+    return detections
+
+
+def _discover_json(config: dict, detections: list[Detection] | None = None) -> list[Detection]:
+    detections = detections if detections is not None else discover()
+    panes = []
+    for detection in detections:
+        pane = detection.pane
+        try:
+            tail = [line.strip() for line in capture_pane(pane.pane_id, history=50).splitlines() if line.strip()][-3:]
+        except Exception:
+            tail = []
+        panes.append(
+            {
+                "paneId": pane.pane_id,
+                "cwd": pane.current_path,
+                "command": pane.current_command,
+                "detected": detection.agent,
+                "confidence": detection.confidence,
+                "mapping": mapping_state(config, detection),
+                "evidence": detection.evidence,
+                "tail": tail,
+            }
+        )
+    print(json.dumps({"panes": panes}, ensure_ascii=False))
     return detections
 
 
 def _apply_discovery(config: dict, detections: list[Detection] | None = None) -> dict:
     detections = detections if detections is not None else discover()
-    backup = backup_config()
+    backup_config()
     updated, changes = reconcile(config, detections)
     if changes:
         save_config(updated)
-        print(f"Backup: {backup}")
-        print("Mappings changed:")
-        print("\n".join(changes))
-        return updated
-    print(f"Backup: {backup}")
-    print("No safe mapping changes detected.")
-    return config
+    summary_parts = []
+    for change in changes:
+        agent, detail = change.split(": ", 1)
+        label = AGENTS[agent].display_name
+        summary_parts.append(
+            f"{label} → {detail}" if detail != "stale mapping removed" else f"{label} 연결 해제"
+        )
+    summary = ", ".join(summary_parts) or "변경 없음"
+    print(f"연결했어요: {summary} (이전 설정은 백업해 뒀어요)")
+    return updated if changes else config
 
 
 def _map(config: dict, agent: str, session_id: str | None = None) -> dict:
@@ -951,13 +1032,25 @@ def _auto_reconcile(config: dict, *, announce: bool = True) -> dict:
     updated, changes = reconcile(config, detections)
     if not changes:
         return config
-    backup = backup_config()
+    backup_config()
     save_config(updated)
     if announce:
-        print("Mappings changed:")
-        print("\n".join(changes))
-        print(f"Backup: {backup}")
+        for change in changes:
+            agent, detail = change.split(": ", 1)
+            name = AGENTS[agent].display_name
+            if detail == "stale mapping removed":
+                print(f"자동 연결을 해제했어요: {name}")
+            else:
+                print(f"자동 연결했어요: {name} → {detail.split()[0]}")
     return updated
+
+
+def _status(config: dict, agent: str | None, *, json_output: bool) -> None:
+    try:
+        config = _auto_reconcile(config, announce=not json_output)
+    except Exception:
+        pass
+    _print_status(config, agent, json_output=json_output)
 
 
 def _persist_target(config: dict, agent: str, pane_id: str) -> str:
@@ -978,7 +1071,7 @@ def _persist_target(config: dict, agent: str, pane_id: str) -> str:
     updated["agents"] = agents
     backup = backup_config()
     save_config(updated)
-    print(f"Backup: {backup}")
+    print(f"백업: {backup} — 다음 단계: 문제가 생기면 이 백업으로 복구하세요")
     return pane_id
 
 
@@ -992,17 +1085,13 @@ def _resolve_live_target(config: dict, agent: str) -> str:
     the most recently started agent process; when start times tie or are
     unreadable, fall back to the inline pane prompt. Zero panes fail closed.
     """
-    stored_error: ValueError | None = None
     try:
         target = get_target(config, agent).target
         validation = validate_target(agent, target)
         if validation.valid:
             return target
-        stored_error = ValueError(
-            f"Configured target is {validation.state} for {AGENTS[agent].display_name}: {validation.detail}"
-        )
-    except ValueError as exc:
-        stored_error = exc
+    except ValueError:
+        pass
     matches = [d for d in discover() if d.agent == agent and d.confidence in STRONG_CONFIDENCE]
     if len(matches) == 1:
         # Never mutate the caller's config: copy agents (and the entry) before
@@ -1015,8 +1104,8 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         updated["agents"] = agents
         backup = backup_config()
         save_config(updated)
-        print(f"✓ {AGENTS[agent].display_name} re-mapped to {matches[0].pane.pane_id}")
-        print(f"Backup: {backup}")
+        print(f"✓ {AGENTS[agent].display_name} 연결을 다시 설정했어요: {matches[0].pane.pane_id} — 다음 단계: 계속 진행하세요")
+        print(f"백업: {backup} — 다음 단계: 문제가 생기면 이 백업으로 복구하세요")
         return matches[0].pane.pane_id
     if len(matches) > 1:
         from actl.core.discovery import newest_detection
@@ -1024,28 +1113,29 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         auto = newest_detection(matches)
         if auto is not None:
             pane_id = _persist_target(config, agent, auto.pane.pane_id)
-            print(f"✓ {AGENTS[agent].display_name} auto-mapped to {auto.pane.pane_id} (newest live pane)")
+            print(f"✓ {AGENTS[agent].display_name} 최신 실행 화면 {auto.pane.pane_id}에 연결을 다시 설정했어요 — 다음 단계: 계속 진행하세요")
             return pane_id
-        print(f"Multiple live {AGENTS[agent].display_name} panes found:")
+        print(f"{AGENTS[agent].display_name} 실행 화면이 여러 개예요 — 다음 단계: 번호 또는 %ID를 입력하세요")
         for idx, d in enumerate(matches, 1):
             print(f"  [{idx}] {d.pane.pane_id} — {d.evidence}")
-        raw = input("Choose pane: ").strip()
+        raw = input("실행 화면을 선택하세요 (번호 또는 %ID): ").strip()
         detection = None
         if raw.startswith("%"):
             detection = next((d for d in matches if d.pane.pane_id == raw), None)
             if detection is None:
-                raise ValueError(f"No pane matching {raw}")
+                raise ValueError(f"일치하는 실행 화면을 찾지 못했어요: {raw} — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         else:
             try:
                 detection = matches[int(raw) - 1]
             except (ValueError, IndexError):
-                raise ValueError("Invalid pane selection")
+                raise ValueError("실행 화면 선택이 잘못됐어요 — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         pane_id = _persist_target(config, agent, detection.pane.pane_id)
-        print(f"✓ {AGENTS[agent].display_name} mapped to {detection.pane.pane_id}")
+        print(f"✓ {AGENTS[agent].display_name} 연결했어요: {detection.pane.pane_id} — 다음 단계: 계속 진행하세요")
         return pane_id
-    if stored_error is not None:
-        raise stored_error
-    raise ValueError(f"{AGENTS[agent].display_name} is not currently mapped to a live pane")
+    raise ValueError(
+        f"{AGENTS[agent].display_name} 연결된 실행 화면을 확인하지 못했어요 "
+        "— 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
+    )
 
 
 def _paste_mode(agent: str, target: str) -> None:
@@ -1074,28 +1164,29 @@ def _paste_mode(agent: str, target: str) -> None:
     except WriterDenied as denied:
         print(f"✗ {denied.code}: {denied.detail}")
         return
-    print(f"✓ Sent to {AGENTS[agent].display_name}")
+    print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
 
 
 def _print_cli_help() -> None:
     print(
         "actl — Agent Control CLI\n"
         "\n"
-        "  actl                REPL (Agent > prompt, /help for commands)\n"
-        "  actl tui            Agent board: number=select+preview, c=copy, p=print,\n"
-        "                      m=remap, s=send, h=help, r=refresh, q=quit\n"
-        "  actl gui [--ssh T]  Windows GUI board (buttons, no terminal keys)\n"
-        "  actl serve [port] [--host HOST] [--token TOKEN]  Web board\n"
-        "  actl copy AGENT [--print]   Copy (or print) last response\n"
-        "  actl push FILE [--print]   Push file to MainPC over SSH session\n"
+        "  actl                대화형 모드 (Agent > 프롬프트, /help 명령)\n"
+        "  actl tui            에이전트 보드: 번호=선택+미리보기, c=복사, p=출력,\n"
+        "                      m=재매핑, s=전송, h=도움말, r=새로고침, q=종료\n"
+        "  actl gui [--ssh T]  Windows GUI 보드 (버튼으로 조작)\n"
+        "  actl serve [port] [--host HOST] [--token TOKEN]  웹 보드\n"
+        "  actl copy AGENT [--print]   마지막 응답 복사(또는 출력)\n"
+        "  echo \"질문\" | actl send AGENT   에이전트에 프롬프트 전송\n"
+        "  actl push FILE [--print]   SSH 세션으로 MainPC에 파일 전송\n"
         "  actl doctor               자가진단 (python/tmux/ssh/클립보드/매핑)\n"
         "  actl audit [N]            본문 없는 로컬 감사 로그\n"
         "  actl history [AGENT] [N]  결과 hash/source 이력 (본문 없음)\n"
-        "  actl map AGENT      Visual pane picker (number or %ID, e.g. %69)\n"
-        "  actl discover [--apply]     List (or apply) live pane detections\n"
-        "  actl status [AGENT] Probe-free mapping + liveness table\n"
-        "  actl bind opencode  One-command OpenCode session bind\n"
-        "  --ssh TARGET        Route tmux via ssh (MainPC board: actl tui --ssh asus)\n"
+        "  actl map AGENT      pane 선택기 (번호 또는 %ID, 예: %69)\n"
+        "  actl discover [--json] [--apply]  live pane 감지 목록(또는 연결 적용)\n"
+        "  actl status [AGENT] 매핑 및 실행 상태 표\n"
+        "  actl bind opencode  OpenCode 세션 한 번에 연결\n"
+        "  --ssh TARGET        ssh로 tmux 연결 (MainPC 보드: actl tui --ssh asus)\n"
     )
 
 
@@ -1136,7 +1227,7 @@ def repl() -> int:
         if event.pasted or not line.startswith("/"):
             try:
                 _send_to_selected(config, current, line)
-                print(f"✓ Sent to {AGENTS[current].display_name}")
+                print(f"{AGENTS[current].display_name}에게 보냈어요 · 답이 오면: actl copy {current}")
             except Exception as exc:
                 print(f"✗ {exc}")
             continue
@@ -1154,7 +1245,7 @@ def repl() -> int:
                     continue
                 nxt = _resolve_selection(parts[1])
                 if not nxt:
-                    print(f"Unknown agent: {parts[1]}")
+                    print(_unknown_agent(parts[1]))
                     continue
                 current = nxt
                 print(f"✓ {AGENTS[current].display_name} selected")
@@ -1176,7 +1267,7 @@ def repl() -> int:
             elif cmd == "/status":
                 name = _resolve_selection(parts[1]) if len(parts) > 1 else current
                 if len(parts) > 1 and not name:
-                    print(f"Unknown agent: {parts[1]}")
+                    print(_unknown_agent(parts[1]))
                 else:
                     _print_status(config, name)
             elif cmd == "/debug":
@@ -1193,7 +1284,7 @@ def repl() -> int:
             elif cmd == "/probe":
                 name = _resolve_selection(parts[1]) if len(parts) > 1 else current
                 if not name:
-                    print(f"Unknown agent: {parts[1] if len(parts) > 1 else ''}")
+                    print(_unknown_agent(parts[1] if len(parts) > 1 else ""))
                 else:
                     print("\n".join(probe_agent(name)))
             elif cmd == "/config":
@@ -1286,7 +1377,7 @@ def run_runtime_request_stdin(operation: str, *, stdin_text: str | None = None) 
     return code
 
 
-def main() -> None:
+def _dispatch(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="actl", description="Control multiple AI agent TUIs through tmux")
     parser.add_argument("--version", action="version", version=f"actl {VERSION}")
     parser.add_argument("--init", action="store_true", help="Create default config and exit")
@@ -1303,7 +1394,7 @@ def main() -> None:
     parser.add_argument("--bind", action="store_true", help="Bind an OpenCode session id (opencode-session)")
     parser.add_argument("--opencode-session", nargs="?", const="status", help="Session-aware OpenCode setup: --new | --bind --session ID | --status")
     parser.add_argument("--print", action="store_true", help="With copy: print the result instead of copying")
-    parser.add_argument("--json", action="store_true", help="With doctor: emit one machine-readable JSON object")
+    parser.add_argument("--json", action="store_true", help="With discover or doctor: emit one machine-readable JSON object")
     parser.add_argument(
         "--request-stdin",
         action="store_true",
@@ -1322,7 +1413,10 @@ def main() -> None:
     parser.add_argument("command", nargs="?", help="discover, map, unmap, bind, copy, extract, push, runtime, tui, gui, serve, help, doctor, or opencode-session")
     parser.add_argument("command_agent", nargs="?", help="Agent for map/unmap/copy/extract, port for serve, or runtime operation")
     parser.add_argument("command_extra", nargs="?", help="Pane for extract, or runtime operation")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.json and args.apply and (args.command == "discover" or args.discover):
+        raise SystemExit("--json cannot be combined with --apply")
 
     if args.ssh:
         from actl.core.tmux import set_remote_ssh
@@ -1342,6 +1436,13 @@ def main() -> None:
             raise SystemExit(3)
         raise SystemExit(run_runtime_request_stdin(args.command_agent))
 
+    if args.json and not args.apply and (
+        (args.command == "discover" and not args.command_agent) or args.discover
+    ):
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {"agents": {}}
+        _discover_json(config)
+        return
+
     ensure_config()
     if args.init:
         print(CONFIG_PATH)
@@ -1358,19 +1459,19 @@ def main() -> None:
         if args.command == "status":
             agent = _resolve_selection(args.command_agent) if args.command_agent else None
             if args.command_agent and not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
-            _print_status(load_config(), agent, json_output=args.json)
+                raise SystemExit(_unknown_agent(args.command_agent))
+            _status(load_config(), agent, json_output=args.json)
             return
         if args.command == "discover" and not args.command_agent:
             config = load_config()
-            detections = _discover(config)
+            detections = _discover(config, apply=args.apply)
             if args.apply:
                 _apply_discovery(config, detections)
             return
         if args.command in {"map", "unmap"} and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             if args.apply:
                 raise SystemExit("--apply is only valid with discover")
             if args.command == "map":
@@ -1391,7 +1492,7 @@ def main() -> None:
         if args.command == "bind" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             if agent != "opencode":
                 raise SystemExit("bind is only supported for opencode")
             _, code = _bind_opencode(load_config())
@@ -1399,27 +1500,34 @@ def main() -> None:
         if args.command == "copy" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             raise SystemExit(_copy(load_config(), agent, print_only=args.print))
         if args.command == "extract" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             raise SystemExit(_extract(load_config(), agent, args.command_extra or args.session))
         if args.command == "send" and args.command_agent:
             agent = _resolve_selection(args.command_agent)
             if not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
-            prompt = sys.stdin.read()
+                raise SystemExit(_unknown_agent(args.command_agent))
+            prompt = sys.stdin.read().rstrip("\r\n")
             if not prompt.strip():
-                print("empty prompt", file=sys.stderr)
+                print('보낼 내용이 비어 있어요 — echo "질문" | actl send AGENT', file=sys.stderr)
                 raise SystemExit(1)
             try:
                 target = _send_to_selected(load_config(), agent, prompt)
             except Exception as exc:
-                print(str(exc), file=sys.stderr)
+                detail = str(exc)
+                if "승인을 기다리고 있어요" in detail:
+                    print(detail, file=sys.stderr)
+                    raise SystemExit(2)
+                if detail == PANE_LOCK_ERROR:
+                    print(detail, file=sys.stderr)
+                    raise SystemExit(1)
+                print("보내지 못했어요 — 잠시 후 다시 보내 주세요", file=sys.stderr)
                 raise SystemExit(1)
-            print(f"sent to {target}")
+            print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
             return
         if args.command == "tui" and not args.command_agent:
             from actl.tui import run_tui
@@ -1450,7 +1558,7 @@ def main() -> None:
         if args.command == "history":
             agent = _resolve_selection(args.command_agent) if args.command_agent else None
             if args.command_agent and not agent:
-                raise SystemExit(f"Unknown agent: {args.command_agent}")
+                raise SystemExit(_unknown_agent(args.command_agent))
             try:
                 limit = int(args.command_extra or 50)
             except ValueError:
@@ -1464,7 +1572,7 @@ def main() -> None:
         )
     if args.discover:
         config = load_config()
-        detections = _discover(config)
+        detections = _discover(config, apply=args.apply)
         if args.apply:
             _apply_discovery(config, detections)
         return
@@ -1472,30 +1580,48 @@ def main() -> None:
         cfg = load_config()
         agent = None if args.status == "all" else _resolve_selection(args.status)
         if args.status != "all" and not agent:
-            raise SystemExit(f"Unknown agent: {args.status}")
-        _print_status(cfg, agent, json_output=args.json)
+            raise SystemExit(_unknown_agent(args.status))
+        _status(cfg, agent, json_output=args.json)
         return
     if args.probe:
         agent = _resolve_selection(args.probe)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.probe}")
+            raise SystemExit(_unknown_agent(args.probe))
         print("\n".join(probe_agent(agent)))
         return
     if args.debug:
         agent = _resolve_selection(args.debug)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.debug}")
+            raise SystemExit(_unknown_agent(args.debug))
         _debug(load_config(), agent)
         return
     if args.copy_diagnostic:
         agent = _resolve_selection(args.copy_diagnostic)
         if not agent:
-            raise SystemExit(f"Unknown agent: {args.copy_diagnostic}")
+            raise SystemExit(_unknown_agent(args.copy_diagnostic))
         raise SystemExit(_copy_diagnostic(load_config(), agent))
     if args.print_config:
         print(json.dumps(load_config(), indent=2, ensure_ascii=False))
         return
     raise SystemExit(repl())
+
+
+def main(argv: list[str] | None = None) -> None:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and Path(raw_argv[0]).name == "actl":
+        raw_argv = raw_argv[1:]
+    try:
+        _dispatch(raw_argv)
+    except TmuxError as exc:
+        if raw_argv[:1] == ["runtime"] and "--request-stdin" in raw_argv:
+            raise
+        reason = str(exc).splitlines()[0][:200] or type(exc).__name__
+        print(
+            "AI 작업창(tmux)이 켜져 있지 않아요 — ASUS에서 AI를 먼저 실행한 뒤 다시 시도하세요 "
+            f"({reason})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

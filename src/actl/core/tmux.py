@@ -8,7 +8,8 @@ import shlex
 import tempfile
 import threading
 import time
-from pathlib import Path
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from actl.core.models import PaneInfo
@@ -24,6 +25,80 @@ enforce_direct_writer_guard: bool = True
 
 class TmuxError(RuntimeError):
     pass
+
+
+PANE_LOCK_ERROR = "다른 곳에서 보내는 중이에요. 잠시 뒤 다시 보내 주세요."
+
+
+def _pane_lock_path(target: str) -> Path:
+    return _pane_lock_dir() / _pane_lock_name(target)
+
+
+def _pane_lock_dir() -> Path:
+    return Path(os.environ.get("ACTL_STATE_PATH", "~/.local/state/actl/state.json")).expanduser().parent
+
+
+def _pane_lock_name(target: str) -> str:
+    safe_target = re.sub(r"[^A-Za-z0-9_.-]", "_", target)
+    return f"pane-{safe_target}.lock"
+
+
+def _remote_pane_lock_command(lock_path: Path | PurePosixPath) -> str:
+    path = str(lock_path)
+    parent = str(lock_path.parent)
+    quoted_path = path if path.startswith('~/') else shlex.quote(path)
+    quoted_parent = parent if parent.startswith('~/') else shlex.quote(parent)
+    return f"mkdir -p {quoted_parent} && flock -x -w 2 {quoted_path} sh -c 'echo acquired; cat'"
+
+
+@contextmanager
+def _pane_lock(target: str):
+    lock_path = _pane_lock_path(target)
+    if REMOTE_SSH_TARGET:
+        remote_lock = PurePosixPath("~/.local/state/actl") / _pane_lock_name(target)
+        command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET, _remote_pane_lock_command(remote_lock)]
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **_no_window())
+        try:
+            assert process.stdout is not None
+            acquired: list[bytes] = []
+            done = threading.Event()
+
+            def read_lock_ready() -> None:
+                acquired.append(process.stdout.readline())
+                done.set()
+
+            threading.Thread(target=read_lock_ready, daemon=True).start()
+            if not done.wait(2.0) or acquired != [b"acquired\n"]:
+                process.kill()
+                process.wait()
+                raise TmuxError(PANE_LOCK_ERROR)
+            yield
+        finally:
+            if process.poll() is None:
+                if process.stdin is not None:
+                    process.stdin.close()
+                try:
+                    process.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+                    process.wait()
+        return
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    import fcntl
+    with lock_path.open("a+b") as handle:
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TmuxError(PANE_LOCK_ERROR)
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _maybe_guard_direct_writer(
@@ -71,6 +146,11 @@ class RemoteTransport:
         self._events: queue.Queue[str] = queue.Queue()
         self._responses: queue.Queue[object] | None = None
         self._reader: threading.Thread | None = None
+        # Cooperative preemption: set by scheduler when active replaceable P2
+        # must release the exclusive transport without killing Python threads.
+        self._preempt = threading.Event()
+        self._exclusive_generation = 0
+        self._needs_reset = False
 
     def connect(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -103,7 +183,8 @@ class RemoteTransport:
             candidate, _, rest = line.partition("\t")
             name, _, windows = rest.partition("\t")
             try:
-                if candidate.strip() and name.strip() and not name.strip().isdigit() and int(windows) > 0:
+                valid_session_id = re.fullmatch(r"\$\d+", candidate.strip())
+                if valid_session_id and name.strip() and not re.fullmatch(r"\d+", name.strip()) and int(windows) > 0:
                     session_id = candidate.strip()
                     break
             except ValueError:
@@ -112,10 +193,8 @@ class RemoteTransport:
             self.state = "DEGRADED"
             self._retry_at = now + 1.0
             raise TmuxError("remote tmux has no existing session; refusing to create one")
-        command = [
-            "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-            self.target, "tmux", "-C", "attach-session", "-t", shlex.quote(session_id),
-        ]
+        command = _remote_control_args(session_id)
+        command[6] = self.target
         try:
             self._process = subprocess.Popen(
                 command,
@@ -168,19 +247,21 @@ class RemoteTransport:
         if process is None or process.stdout is None:
             return
         frame: list[str] | None = None
-        failed = False
         for raw in iter(process.stdout.readline, ""):
             row = raw.rstrip("\r\n")
             if row.startswith("%begin "):
                 frame = []
-                failed = False
                 continue
             if frame is not None and row.startswith("%error "):
-                failed = True
+                output = "\n".join(frame) + ("\n" if frame else "")
+                pending = self._responses
+                if pending is not None:
+                    pending.put(TmuxError(output.strip() or "remote tmux command failed"))
+                frame = None
                 continue
             if frame is not None and row.startswith("%end "):
                 output = "\n".join(frame) + ("\n" if frame else "")
-                response = TmuxError(output.strip() or "remote tmux command failed") if failed else subprocess.CompletedProcess(
+                response = subprocess.CompletedProcess(
                     ["ssh", self.target, "tmux", "-C"], 0, output, ""
                 )
                 pending = self._responses
@@ -197,11 +278,85 @@ class RemoteTransport:
         pending = self._responses
         if pending is not None:
             pending.put(TmuxError("remote transport closed unexpectedly"))
+        self._invalidate_process(process)
+
+    def _invalidate_process(self, process: subprocess.Popen[str] | None = None) -> None:
+        """Drop and terminate only the currently owned control process."""
+        if process is not None and self._process is not process:
+            return
+        owned, self._process = self._process, None
+        self.state = "DEGRADED"
+        self._retry_at = time.monotonic() + 1.0
+        if owned is None or owned.poll() is not None:
+            return
+        try:
+            owned.kill()
+            owned.wait(timeout=0.5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def executeTmux(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
-        if not self._lock.acquire(timeout=10):
-            raise TmuxError("remote transport busy: maximum in-flight operations is 1")
+        """Serialize through the per-target priority scheduler, then the lock.
+
+        When already inside a scheduler worker, run exclusively without
+        re-queueing (avoids nested-submit deadlock).
+        """
+        from actl.core.remote_scheduler import (
+            KIND_GENERIC,
+            P2_BACKGROUND,
+            current_op_context,
+            in_scheduler_worker,
+            scheduler_for,
+        )
+
+        if in_scheduler_worker():
+            return self._execute_tmux_exclusive(argv)
+
+        ctx = current_op_context()
+
+        def work() -> subprocess.CompletedProcess[str]:
+            return self._execute_tmux_exclusive(argv)
+
+        # Individual tmux commands are never coalesced; coalesce applies only to
+        # high-level GUI operations submitted explicitly via scheduler.submit.
+        return scheduler_for(self.target).submit(
+            work,
+            priority=ctx.priority if ctx is not None else P2_BACKGROUND,
+            kind=ctx.kind if ctx is not None else KIND_GENERIC,
+            coalesce_key=None,
+            replaceable=ctx.replaceable if ctx is not None else True,
+            timeout=ctx.timeout if ctx is not None else 60.0,
+        )
+
+    def request_preempt(self) -> None:
+        """Signal the active exclusive wait to abort for a P0 user action."""
+        self._preempt.set()
+
+    def _execute_tmux_exclusive(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        from actl.core.remote_scheduler import RemoteOpCancelled, TransportBusyError, scheduler_for
+
+        # Safety belt: scheduler already serializes; lock rejects true races.
+        if not self._lock.acquire(timeout=0.05):
+            raise TransportBusyError(
+                "remote transport busy: maximum in-flight operations is 1"
+            )
+        self._exclusive_generation += 1
+        generation = self._exclusive_generation
+        cancel_event = None
         try:
+            cancel_event = scheduler_for(self.target).inflight_cancel_event()
+        except Exception:
+            cancel_event = None
+        try:
+            # Only the active op's cancel_event aborts. Stale preempt from a prior
+            # background abort must reset the control session, not cancel P0/P1.
+            if cancel_event is not None and cancel_event.is_set():
+                self._needs_reset = True
+                raise RemoteOpCancelled("remote transport preempted before exclusive start")
+            if self._needs_reset or self._preempt.is_set():
+                self.close(aggressive=True)
+                self._needs_reset = False
+                self._preempt.clear()
             self.connect()
             assert self._process is not None and self._process.stdin is not None
             command = argv[1:] if argv and argv[0] == "tmux" else argv
@@ -210,11 +365,28 @@ class RemoteTransport:
             self._responses = response_queue
             self._process.stdin.write(line + "\n")
             self._process.stdin.flush()
-            try:
-                response = response_queue.get(timeout=10)
-            except queue.Empty as exc:
-                self.state = "DEGRADED"
-                raise TmuxError("remote tmux command timed out after 10s") from exc
+            # Poll so an active replaceable op can release within FOREGROUND_ACQUIRE_MAX_S.
+            deadline = time.monotonic() + 10.0
+            response: object | None = None
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    self._needs_reset = True
+                    self._responses = None
+                    # Soft-close the SSH control process so the next op gets a clean session.
+                    self.close(aggressive=True)
+                    self._preempt.clear()
+                    raise RemoteOpCancelled("remote transport preempted during exclusive wait")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._invalidate_process()
+                    raise TmuxError("remote tmux command timed out after 10s")
+                try:
+                    response = response_queue.get(timeout=min(0.05, remaining))
+                    break
+                except queue.Empty:
+                    continue
+            if generation != self._exclusive_generation:
+                raise RemoteOpCancelled("remote transport generation invalidated")
             if isinstance(response, TmuxError):
                 raise response
             return response  # type: ignore[return-value]
@@ -230,23 +402,33 @@ class RemoteTransport:
             except queue.Empty:
                 return events
 
-    def close(self) -> None:
+    def close(self, *, aggressive: bool = False) -> None:
         process, self._process = self._process, None
         if process is None:
             self.state = "DISCONNECTED"
             return
+        wait_s = 0.25 if aggressive else 2.0
         try:
             if process.stdin is not None and process.poll() is None:
-                process.stdin.write("exit\n")
-                process.stdin.flush()
-            process.wait(timeout=2)
+                try:
+                    process.stdin.write("exit\n")
+                    process.stdin.flush()
+                except OSError:
+                    pass
+            process.wait(timeout=wait_s)
         except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-            process.wait()
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=0.5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
         reader = self._reader
         self._reader = None
         if reader is not None and reader is not threading.current_thread():
-            reader.join(timeout=1)
+            reader.join(timeout=0.2 if aggressive else 1.0)
         self.state = "DISCONNECTED"
 
 
@@ -266,10 +448,28 @@ def set_remote_ssh(target: str | None) -> None:
     if target and not re.fullmatch(r"[A-Za-z0-9_.@:-]+", target):
         raise ValueError("SSH target must be a host alias, user@host, or hostname")
     global REMOTE_SSH_TARGET, _REMOTE_TRANSPORT
+    from actl.core.remote_scheduler import close_scheduler
+
     if _REMOTE_TRANSPORT is not None and _REMOTE_TRANSPORT.target != target:
         _REMOTE_TRANSPORT.close()
+        close_scheduler(_REMOTE_TRANSPORT.target)
         _REMOTE_TRANSPORT = None
+    if target is None and REMOTE_SSH_TARGET:
+        close_scheduler(REMOTE_SSH_TARGET)
     REMOTE_SSH_TARGET = target
+
+
+def abort_remote_transport_for_preempt(target: str) -> None:
+    """Cooperatively abort an active replaceable exclusive wait on ``target``.
+
+    Signals the transport's preempt event. If an exclusive SSH control process
+    is mid-command, the waiter exits and closes that process cleanly so P0 can
+    reconnect. Does not kill Python threads. Does not touch unrelated hosts.
+    """
+    transport = _REMOTE_TRANSPORT
+    if transport is None or transport.target != target:
+        return
+    transport.request_preempt()
 
 
 def _remote_transport() -> RemoteTransport:
@@ -299,10 +499,17 @@ def _remote_args(args: list[str]) -> list[str]:
         return args
     command = ["ssh", "-n", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET]
     if os.name == "nt":
-        # ssh concatenates remote argv into a shell command. Quote each
-        # argument so tmux formats beginning with `#` survive that shell.
-        return command + [shlex.quote(part) for part in args]
+        # Windows OpenSSH handles the remote command as one argument. Passing
+        # separate argv items loses quoting through CreateProcess, especially
+        # for tmux formats beginning with `#`.
+        return command + [" ".join(shlex.quote(part) for part in args)]
     return command + [" ".join(shlex.quote(part) for part in args)]
+
+
+def _remote_control_args(session_id: str) -> list[str]:
+    parts = ["tmux", "-C", "attach-session", "-t", session_id]
+    command = ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", REMOTE_SSH_TARGET or ""]
+    return command + [" ".join(shlex.quote(part) for part in parts)]
 
 
 def _no_window() -> dict:
@@ -456,68 +663,69 @@ def send_prompt_staged(
                 )
             record("pre_send_hook", True)
 
-        try:
-            if REMOTE_SSH_TARGET:
-                # The persistent remote process cannot see MainPC temp paths.
-                # tmux control mode's double-quoted argument preserves LF/UTF-8.
-                _run([*base, "set-buffer", "-b", buffer_name, prompt])
-            else:
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
-                    fh.write(prompt)
-                    tmp_path = Path(fh.name)
-                _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
-            record("load_buffer", True)
-            side_effect = SIDE_EFFECT_POSSIBLE
-        except Exception as exc:
-            record("load_buffer", False, str(exc))
-            return _stage_result(
-                stages,
-                ok=False,
-                side_effect=side_effect,
-                error=str(exc),
-                buffer_name=buffer_name,
-            )
-
-        try:
-            # tmux 3.6: -p emits bracketed-paste delimiters only when the target
-            # application asked for them; -r preserves LF rather than translating
-            # every line to CR. This keeps one buffer insertion as one prompt.
-            _run([*base, "paste-buffer", "-p", "-r", "-b", buffer_name, "-t", target, "-d"])
-            record("paste_buffer", True)
-            side_effect = SIDE_EFFECT_OBSERVED
-        except Exception as exc:
-            record("paste_buffer", False, str(exc))
-            return _stage_result(
-                stages,
-                ok=False,
-                side_effect=SIDE_EFFECT_POSSIBLE,
-                delivery_disposition="DELIVERY_AMBIGUOUS",
-                error=str(exc),
-                buffer_name=buffer_name,
-            )
-
-        if press_enter:
+        with _pane_lock(target):
             try:
-                _run([*base, "send-keys", "-t", target, "Enter"])
-                record("enter", True)
+                if REMOTE_SSH_TARGET:
+                    # The persistent remote process cannot see MainPC temp paths.
+                    # tmux control mode's double-quoted argument preserves LF/UTF-8.
+                    _run([*base, "set-buffer", "-b", buffer_name, prompt])
+                else:
+                    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="actl-", suffix=".txt", delete=False) as fh:
+                        fh.write(prompt)
+                        tmp_path = Path(fh.name)
+                    _run([*base, "load-buffer", "-b", buffer_name, str(tmp_path)])
+                record("load_buffer", True)
+                side_effect = SIDE_EFFECT_POSSIBLE
             except Exception as exc:
-                record("enter", False, str(exc))
+                record("load_buffer", False, str(exc))
                 return _stage_result(
                     stages,
                     ok=False,
-                    side_effect=SIDE_EFFECT_OBSERVED,
+                    side_effect=side_effect,
+                    error=str(exc),
+                    buffer_name=buffer_name,
+                )
+
+            try:
+                # tmux 3.6: -p emits bracketed-paste delimiters only when the target
+                # application asked for them; -r preserves LF rather than translating
+                # every line to CR. This keeps one buffer insertion as one prompt.
+                _run([*base, "paste-buffer", "-p", "-r", "-b", buffer_name, "-t", target, "-d"])
+                record("paste_buffer", True)
+                side_effect = SIDE_EFFECT_OBSERVED
+            except Exception as exc:
+                record("paste_buffer", False, str(exc))
+                return _stage_result(
+                    stages,
+                    ok=False,
+                    side_effect=SIDE_EFFECT_POSSIBLE,
                     delivery_disposition="DELIVERY_AMBIGUOUS",
                     error=str(exc),
                     buffer_name=buffer_name,
                 )
 
-        return _stage_result(
-            stages,
-            ok=True,
-            side_effect=side_effect,
-            delivery_disposition="TRANSPORT_SENT",
-            buffer_name=buffer_name,
-        )
+            if press_enter:
+                try:
+                    _run([*base, "send-keys", "-t", target, "Enter"])
+                    record("enter", True)
+                except Exception as exc:
+                    record("enter", False, str(exc))
+                    return _stage_result(
+                        stages,
+                        ok=False,
+                        side_effect=SIDE_EFFECT_OBSERVED,
+                        delivery_disposition="DELIVERY_AMBIGUOUS",
+                        error=str(exc),
+                        buffer_name=buffer_name,
+                    )
+
+            return _stage_result(
+                stages,
+                ok=True,
+                side_effect=side_effect,
+                delivery_disposition="TRANSPORT_SENT",
+                buffer_name=buffer_name,
+            )
     finally:
         if tmp_path:
             tmp_path.unlink(missing_ok=True)
@@ -605,6 +813,53 @@ def capture_pane(target: str, history: int = 500, socket_path: str | None = None
     return _run(
         [*_tmux_base(socket_path), "capture-pane", "-p", "-J", "-S", f"-{history}", "-t", target]
     ).stdout
+
+
+def capture_pane_live(
+    target: str,
+    history: int = 16,
+    *,
+    timeout: float = 3.0,
+    socket_path: str | None = None,
+) -> str:
+    """Cheap bounded pane capture for Board live preview.
+
+    Uses a one-shot SSH/tmux invocation (not the exclusive control-mode
+    transport) so Founder preview polling cannot occupy the P0 SEND/COPY slot.
+    """
+    args = [
+        *_tmux_base(socket_path),
+        "capture-pane",
+        "-p",
+        "-J",
+        "-S",
+        f"-{history}",
+        "-t",
+        target,
+    ]
+    if not REMOTE_SSH_TARGET:
+        return capture_pane(target, history=history, socket_path=socket_path)
+    command = _remote_args(args)
+    try:
+        proc = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            shell=False,
+            **_no_window(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise TmuxError(f"live pane capture timed out after {timeout:.0f}s") from exc
+    except OSError as exc:
+        raise TmuxError(f"live pane capture failed: {exc}") from exc
+    if proc.returncode:
+        detail = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+        raise TmuxError(detail[-300:] or "live pane capture failed")
+    return proc.stdout
 
 
 def list_panes(socket_path: str | None = None) -> list[PaneInfo]:

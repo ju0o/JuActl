@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from actl.core.models import PaneInfo
 from actl.core.registry import AGENTS
 from actl.core.tmux import pane_field, target_exists
 
@@ -29,7 +30,9 @@ class TargetValidation:
 
     @property
     def valid(self) -> bool:
-        return self.state == "UP"
+        # TRANSPORT_BUSY means the mapping is still considered alive; controls
+        # may proceed once the scheduler grants the user-action slot.
+        return self.state in {"UP", "WORKING", "IDLE", "TRANSPORT_BUSY"}
 
 
 _PS_CACHE: tuple[float, str] = (0.0, "")
@@ -231,22 +234,59 @@ def claude_profile(process: ProcessInfo, *, env_reader=None) -> Path | None:
     return None
 
 
-def validate_target(agent: str, target: str) -> TargetValidation:
-    """Fail closed when a configured pane does not identify as its agent."""
-    if not target_exists(target):
-        return TargetValidation("DOWN", target, detail="Configured tmux target does not exist")
+def validate_target(agent: str, target: str, pane: PaneInfo | None = None) -> TargetValidation:
+    """Fail closed when a configured pane does not identify as its agent.
+
+    Temporary remote-transport contention is TRANSPORT_BUSY, never DOWN.
+    """
+    from actl.core.remote_scheduler import is_transport_contention
+
+    if pane is not None and target in {pane.pane_id, pane.target} and pane.pane_pid is not None:
+        pane_id, command, path, pane_pid = pane.pane_id, pane.current_command, pane.current_path, pane.pane_pid
+    else:
+        try:
+            exists = target_exists(target)
+        except Exception as exc:
+            if is_transport_contention(exc):
+                return TargetValidation(
+                    "TRANSPORT_BUSY",
+                    target,
+                    detail="remote transport busy — mapping remains alive (remap not required)",
+                )
+            return TargetValidation("UNKNOWN", target, detail=f"target probe failed: {exc}")
+        if not exists:
+            return TargetValidation("DOWN", target, detail="Configured tmux target does not exist")
+        try:
+            pane_id = pane_field(target, "#{pane_id}")
+            command = pane_field(target, "#{pane_current_command}")
+            path = pane_field(target, "#{pane_current_path}")
+            raw_pid = pane_field(target, "#{pane_pid}")
+        except Exception as exc:
+            if is_transport_contention(exc):
+                return TargetValidation(
+                    "TRANSPORT_BUSY",
+                    target,
+                    detail="remote transport busy — mapping remains alive (remap not required)",
+                )
+            detail = str(exc)
+            if "degraded" in detail.lower() or "backoff" in detail.lower() or "reconnect" in detail.lower():
+                return TargetValidation("DEGRADED", target, detail=detail)
+            return TargetValidation("DOWN", target, detail=f"Configured tmux target became unavailable: {exc}")
+        try:
+            pane_pid = int(raw_pid)
+        except ValueError:
+            return TargetValidation("MISMATCH", target, pane_id, command=command, path=path, detail="Pane PID unavailable")
     try:
-        pane_id = pane_field(target, "#{pane_id}")
-        command = pane_field(target, "#{pane_current_command}")
-        path = pane_field(target, "#{pane_current_path}")
-        raw_pid = pane_field(target, "#{pane_pid}")
+        processes = pane_processes(pane_pid)
     except Exception as exc:
-        return TargetValidation("DOWN", target, detail=f"Configured tmux target became unavailable: {exc}")
-    try:
-        pane_pid = int(raw_pid)
-    except ValueError:
-        return TargetValidation("MISMATCH", target, pane_id, command=command, path=path, detail="Pane PID unavailable")
-    processes = pane_processes(pane_pid)
+        if is_transport_contention(exc):
+            return TargetValidation(
+                "TRANSPORT_BUSY",
+                target,
+                pane_id,
+                detail="remote transport busy — mapping remains alive (remap not required)",
+            )
+        return TargetValidation("DEGRADED", target, pane_id, detail=str(exc))
     spec = AGENTS[agent]
     matched: ProcessInfo | None = None
     if agent == "cursor":

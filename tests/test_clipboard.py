@@ -234,9 +234,9 @@ def test_copy_message_honesty_for_osc52(monkeypatch, tmp_path):
     finally:
         _sys.stdout = old_out
     out = buf.getvalue()
-    assert "Result sent to terminal clipboard via OSC52" in out
+    assert "터미널 클립보드로 보냈어요" in out
     assert "copied via osc52" not in out
-    assert "/copy --print" in out or "/result" in out
+    assert "actl copy claude-pro --print" in out
 
 
 def test_copy_message_for_wl_copy_still_says_copied(monkeypatch):
@@ -252,7 +252,8 @@ def test_copy_message_for_wl_copy_still_says_copied(monkeypatch):
         cli._copy({}, "claude-pro")
     finally:
         _sys.stdout = old
-    assert "copied via wl-copy" in buf.getvalue()
+    assert "답을 복사했어요 — 붙여넣기 하세요" in buf.getvalue()
+    assert "wl-copy" not in buf.getvalue()
     assert "sent to terminal" not in buf.getvalue()
 
 
@@ -272,7 +273,7 @@ def test_copy_respects_preferred_osc52_config(monkeypatch):
     finally:
         _sys.stdout = old
     assert calls.get("preferred") == "osc52"
-    assert "sent to terminal clipboard via OSC52" in buf.getvalue()
+    assert "터미널 클립보드로 보냈어요" in buf.getvalue()
 
 
 def test_copy_respects_preferred_local_config(monkeypatch):
