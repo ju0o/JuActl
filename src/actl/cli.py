@@ -1032,13 +1032,25 @@ def _auto_reconcile(config: dict, *, announce: bool = True) -> dict:
     updated, changes = reconcile(config, detections)
     if not changes:
         return config
-    backup = backup_config()
+    backup_config()
     save_config(updated)
     if announce:
-        print("Mappings changed:")
-        print("\n".join(changes))
-        print(f"Backup: {backup}")
+        for change in changes:
+            agent, detail = change.split(": ", 1)
+            name = AGENTS[agent].display_name
+            if detail == "stale mapping removed":
+                print(f"자동 연결을 해제했어요: {name}")
+            else:
+                print(f"자동 연결했어요: {name} → {detail.split()[0]}")
     return updated
+
+
+def _status(config: dict, agent: str | None, *, json_output: bool) -> None:
+    try:
+        config = _auto_reconcile(config, announce=not json_output)
+    except Exception:
+        pass
+    _print_status(config, agent, json_output=json_output)
 
 
 def _persist_target(config: dict, agent: str, pane_id: str) -> str:
@@ -1448,7 +1460,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
             agent = _resolve_selection(args.command_agent) if args.command_agent else None
             if args.command_agent and not agent:
                 raise SystemExit(_unknown_agent(args.command_agent))
-            _print_status(load_config(), agent, json_output=args.json)
+            _status(load_config(), agent, json_output=args.json)
             return
         if args.command == "discover" and not args.command_agent:
             config = load_config()
@@ -1569,7 +1581,7 @@ def _dispatch(argv: list[str] | None = None) -> None:
         agent = None if args.status == "all" else _resolve_selection(args.status)
         if args.status != "all" and not agent:
             raise SystemExit(_unknown_agent(args.status))
-        _print_status(cfg, agent, json_output=args.json)
+        _status(cfg, agent, json_output=args.json)
         return
     if args.probe:
         agent = _resolve_selection(args.probe)
