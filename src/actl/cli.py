@@ -275,16 +275,14 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
         record("copy", agent=agent, target=target, ok=False, mode=preferred,
                source=result.source, confidence=result.confidence, error=type(exc).__name__)
         # Clipboard transport failed — offer manual fallback.
-        print(f"✗ Clipboard delivery failed: {exc}")
-        print("  Use /copy --print or /result for manual copy.")
+        print("복사하지 못했어요 — actl copy <agent> --print 로 답을 화면에 띄워 복사하세요")
         return 1
-    note = f" [{result.source}, confidence={result.confidence}]" if result.confidence not in {"high", "exact"} else ""
     if backend == "osc52":
         # OSC52 is best-effort: host cannot verify the Windows terminal actually
         # accepted the sequence, so never claim guaranteed clipboard success.
         print(f"터미널 클립보드로 보냈어요 (안 붙여지면 actl copy {agent} --print)")
     else:
-        print(f"✓ Last response copied via {backend}{note}")
+        print("답을 복사했어요 — 붙여넣기 하세요")
     from actl.core.audit import record
 
     record("copy", agent=agent, target=target, ok=True, mode=backend,

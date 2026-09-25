@@ -58,6 +58,18 @@ def test_send_and_osc52_messages_use_korean(monkeypatch):
         cli._copy({}, "codex")
     assert "터미널 클립보드로 보냈어요 (안 붙여지면 actl copy codex --print)" in out.getvalue()
 
+    monkeypatch.setattr(cli, "copy_text", lambda *_args, **_kwargs: "wl-copy")
+    out = io.StringIO()
+    with redirect_stdout(out):
+        cli._copy({}, "codex")
+    assert out.getvalue().strip() == "답을 복사했어요 — 붙여넣기 하세요"
+
+    monkeypatch.setattr(cli, "copy_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("secret detail")))
+    out = io.StringIO()
+    with redirect_stdout(out):
+        cli._copy({}, "codex")
+    assert out.getvalue().strip() == "복사하지 못했어요 — actl copy <agent> --print 로 답을 화면에 띄워 복사하세요"
+
 
 def test_status_activity_column_uses_observe_activity(monkeypatch):
     monkeypatch.setattr(cli, "AGENTS", {"codex": cli.AGENTS["codex"]})

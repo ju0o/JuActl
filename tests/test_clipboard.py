@@ -252,7 +252,8 @@ def test_copy_message_for_wl_copy_still_says_copied(monkeypatch):
         cli._copy({}, "claude-pro")
     finally:
         _sys.stdout = old
-    assert "copied via wl-copy" in buf.getvalue()
+    assert "답을 복사했어요 — 붙여넣기 하세요" in buf.getvalue()
+    assert "wl-copy" not in buf.getvalue()
     assert "sent to terminal" not in buf.getvalue()
 
 
