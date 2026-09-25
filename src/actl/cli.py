@@ -1504,13 +1504,16 @@ def _dispatch(argv: list[str] | None = None) -> None:
                 raise SystemExit(_unknown_agent(args.command_agent))
             prompt = sys.stdin.read().rstrip("\r\n")
             if not prompt.strip():
-                print("empty prompt", file=sys.stderr)
+                print('보낼 내용이 비어 있어요 — echo "질문" | actl send AGENT', file=sys.stderr)
                 raise SystemExit(1)
             try:
                 target = _send_to_selected(load_config(), agent, prompt)
             except Exception as exc:
-                print(str(exc), file=sys.stderr)
-                raise SystemExit(2 if "승인을 기다리고 있어요" in str(exc) else 1)
+                if "승인을 기다리고 있어요" in str(exc):
+                    print(str(exc), file=sys.stderr)
+                    raise SystemExit(2)
+                print("보내지 못했어요 — 잠시 후 다시 보내 주세요", file=sys.stderr)
+                raise SystemExit(1)
             print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
             return
         if args.command == "tui" and not args.command_agent:
