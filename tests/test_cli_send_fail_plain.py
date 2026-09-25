@@ -1,6 +1,7 @@
 import io
 
 import actl.cli as cli
+from actl.core.tmux import PANE_LOCK_ERROR
 
 
 def run_send(monkeypatch, error=None, prompt="질문"):
@@ -37,3 +38,9 @@ def test_send_approval_wait_keeps_message_and_exit_code(monkeypatch):
     code, stderr = run_send(monkeypatch, RuntimeError(message))
     assert code == 2
     assert stderr == message + "\n"
+
+
+def test_send_pane_lock_keeps_korean_message_and_failure_code(monkeypatch):
+    code, stderr = run_send(monkeypatch, RuntimeError(PANE_LOCK_ERROR))
+    assert code == 1
+    assert stderr == PANE_LOCK_ERROR + "\n"

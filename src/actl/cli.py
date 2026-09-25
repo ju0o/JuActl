@@ -16,7 +16,7 @@ from actl.core.registry import AGENTS, resolve_agent
 from actl.core.probe import probe_agent
 from actl.core.status import agent_status
 from actl.core.runtime import WriterDenied
-from actl.core.tmux import TmuxError, capture_pane, pane_field, send_keys, send_prompt, target_exists
+from actl.core.tmux import PANE_LOCK_ERROR, TmuxError, capture_pane, pane_field, send_keys, send_prompt, target_exists
 from actl.core.validation import pane_processes, require_valid_target, validate_target
 from actl.utils.clipboard import copy_text
 
@@ -1509,9 +1509,13 @@ def _dispatch(argv: list[str] | None = None) -> None:
             try:
                 target = _send_to_selected(load_config(), agent, prompt)
             except Exception as exc:
-                if "승인을 기다리고 있어요" in str(exc):
-                    print(str(exc), file=sys.stderr)
+                detail = str(exc)
+                if "승인을 기다리고 있어요" in detail:
+                    print(detail, file=sys.stderr)
                     raise SystemExit(2)
+                if detail == PANE_LOCK_ERROR:
+                    print(detail, file=sys.stderr)
+                    raise SystemExit(1)
                 print("보내지 못했어요 — 잠시 후 다시 보내 주세요", file=sys.stderr)
                 raise SystemExit(1)
             print(f"{AGENTS[agent].display_name}에게 보냈어요 · 답이 오면: actl copy {agent}")
