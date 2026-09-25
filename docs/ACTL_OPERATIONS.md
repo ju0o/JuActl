@@ -59,5 +59,5 @@ Windows에서는 다음이 소스 컴파일, 패키지 빌드, SHA-256 목록, d
 powershell -ExecutionPolicy Bypass -File scripts/qa.ps1
 ```
 
-실제 외부 tmux나 Windows/ASUS 운영 증거의 범위는
+실제 외부 tmux나 Windows 원격 운영 증거의 범위는
 [docs/TESTER.md](TESTER.md)를 참고하세요.
