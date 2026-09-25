@@ -1059,7 +1059,7 @@ def _persist_target(config: dict, agent: str, pane_id: str) -> str:
     updated["agents"] = agents
     backup = backup_config()
     save_config(updated)
-    print(f"Backup: {backup}")
+    print(f"백업: {backup} — 다음 단계: 문제가 생기면 이 백업으로 복구하세요")
     return pane_id
 
 
@@ -1074,6 +1074,7 @@ def _resolve_live_target(config: dict, agent: str) -> str:
     unreadable, fall back to the inline pane prompt. Zero panes fail closed.
     """
     stored_error: ValueError | None = None
+    stored_detail: str | None = None
     try:
         target = get_target(config, agent).target
         validation = validate_target(agent, target)
@@ -1082,6 +1083,7 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         stored_error = ValueError(
             f"Configured target is {validation.state} for {AGENTS[agent].display_name}: {validation.detail}"
         )
+        stored_detail = validation.detail
     except ValueError as exc:
         stored_error = exc
     matches = [d for d in discover() if d.agent == agent and d.confidence in STRONG_CONFIDENCE]
@@ -1096,8 +1098,8 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         updated["agents"] = agents
         backup = backup_config()
         save_config(updated)
-        print(f"✓ {AGENTS[agent].display_name} re-mapped to {matches[0].pane.pane_id}")
-        print(f"Backup: {backup}")
+        print(f"✓ {AGENTS[agent].display_name} 연결을 다시 설정했어요: {matches[0].pane.pane_id} — 다음 단계: 계속 진행하세요")
+        print(f"백업: {backup} — 다음 단계: 문제가 생기면 이 백업으로 복구하세요")
         return matches[0].pane.pane_id
     if len(matches) > 1:
         from actl.core.discovery import newest_detection
@@ -1105,28 +1107,31 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         auto = newest_detection(matches)
         if auto is not None:
             pane_id = _persist_target(config, agent, auto.pane.pane_id)
-            print(f"✓ {AGENTS[agent].display_name} auto-mapped to {auto.pane.pane_id} (newest live pane)")
+            print(f"✓ {AGENTS[agent].display_name}를 최신 live pane {auto.pane.pane_id}에 자동 연결했어요 — 다음 단계: 계속 진행하세요")
             return pane_id
-        print(f"Multiple live {AGENTS[agent].display_name} panes found:")
+        print(f"{AGENTS[agent].display_name} live pane이 여러 개예요 — 다음 단계: 번호 또는 %ID를 입력하세요")
         for idx, d in enumerate(matches, 1):
             print(f"  [{idx}] {d.pane.pane_id} — {d.evidence}")
-        raw = input("Choose pane: ").strip()
+        raw = input("pane을 선택하세요 (번호 또는 %ID): ").strip()
         detection = None
         if raw.startswith("%"):
             detection = next((d for d in matches if d.pane.pane_id == raw), None)
             if detection is None:
-                raise ValueError(f"No pane matching {raw}")
+                raise ValueError(f"일치하는 pane을 찾지 못했어요: {raw} — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         else:
             try:
                 detection = matches[int(raw) - 1]
             except (ValueError, IndexError):
-                raise ValueError("Invalid pane selection")
+                raise ValueError("pane 선택이 잘못됐어요 — 다음 단계: 목록의 번호 또는 %ID를 입력하세요")
         pane_id = _persist_target(config, agent, detection.pane.pane_id)
-        print(f"✓ {AGENTS[agent].display_name} mapped to {detection.pane.pane_id}")
+        print(f"✓ {AGENTS[agent].display_name} 연결했어요: {detection.pane.pane_id} — 다음 단계: 계속 진행하세요")
         return pane_id
-    if stored_error is not None:
-        raise stored_error
-    raise ValueError(f"{AGENTS[agent].display_name} is not currently mapped to a live pane")
+    if stored_error is not None and stored_detail:
+        raise ValueError(
+            f"{AGENTS[agent].display_name} live pane 연결을 확인하지 못했어요 ({stored_detail}) "
+            "— 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
+        )
+    raise ValueError(f"{AGENTS[agent].display_name} live pane을 찾지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
 
 
 def _paste_mode(agent: str, target: str) -> None:

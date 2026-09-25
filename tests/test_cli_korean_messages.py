@@ -2,7 +2,8 @@ import io
 from contextlib import redirect_stdout
 
 from actl import cli
-from actl.core.models import CopyResult
+from actl.core.models import CopyResult, PaneInfo
+from actl.core.discovery import Detection
 
 
 def test_help_unknown_send_and_copy_messages_are_korean(monkeypatch):
@@ -38,6 +39,32 @@ def test_copy_no_result_keeps_reason_in_audit(monkeypatch):
     assert captured["detail"] == "No completed assistant AgentMessage in matched Codex rollout"
     assert "아직 새 답이 없어요 — 작업이 끝나면 다시 해 보세요" in out.getvalue()
     assert "No completed assistant AgentMessage" in out.getvalue()
+
+
+def test_live_target_remap_and_missing_pane_messages_are_korean(monkeypatch):
+    monkeypatch.setattr(cli, "get_target", lambda *_: (_ for _ in ()).throw(ValueError("config error")))
+    monkeypatch.setattr(cli, "backup_config", lambda: "/tmp/config.bak")
+    monkeypatch.setattr(cli, "save_config", lambda *_: None)
+    detection = Detection(PaneInfo("%7", "agents:0.7", "codex", "/tmp", ""), "codex", "high", "pid 7: codex")
+    monkeypatch.setattr(cli, "discover", lambda: [detection])
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cli._resolve_live_target({}, "codex") == "%7"
+    text = out.getvalue()
+    assert "연결을 다시 설정했어요" in text
+    assert "백업:" in text
+    assert "다음 단계:" in text
+    assert "re-mapped" not in text
+    assert "Backup:" not in text
+
+    monkeypatch.setattr(cli, "discover", lambda: [])
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cli._copy({}, "codex") == 1
+    text = out.getvalue()
+    assert "live pane을 찾지 못했어요" in text
+    assert "다음 단계:" in text
+    assert "not currently mapped" not in text
 
 
 def test_send_and_osc52_messages_use_korean(monkeypatch):
