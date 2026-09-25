@@ -35,7 +35,7 @@ def fake_ssh(tmp_path: Path) -> tuple[Path, Path]:
         "#!/bin/sh\n"
         "echo \"actl $*\" >> \"$FAKE_SSH_LOG\"\n"
         "case \"$1\" in\n"
-        "  send) cat >/dev/null; echo 'sent to commandcode' ;;\n"
+        "  send) cat >/dev/null; echo '커맨드코드에게 보냈어요 · 답이 오면: actl copy commandcode' ;;\n"
         "  copy) echo 'RESULT::ACTL_E2E_PROBE' ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
