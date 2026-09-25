@@ -92,6 +92,7 @@ exit 1
 REMOTE_WAIT
     then failed prompt; fi
     if ! send_output=$(printf '%s' "$probe" | remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl send commandcode"); then failed send; fi
+    if [[ "$send_output" != *"에게 보냈어요"* ]]; then failed send; fi
     steps+=(send)
     if ! result=$(remote "ACTL_CONFIG_PATH='$remote_config_dir/config.json' HOME='$remote_home' ~/.local/bin/actl copy commandcode --print"); then failed result; fi
 else
@@ -100,11 +101,11 @@ else
     created=1
     if ! wait_for_prompt "$session:0.0"; then failed prompt; fi
     if ! send_output=$(printf '%s' "$probe" | ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" send commandcode); then failed send; fi
+    if [[ "$send_output" != *"에게 보냈어요"* ]]; then failed send; fi
     steps+=(send)
     if ! result=$(ACTL_CONFIG_PATH="$config" HOME="$run_home" "$root/scripts/actl" copy commandcode --print); then failed result; fi
 fi
 
-if [[ "$send_output" != *"에게 보냈어요"* ]]; then failed send; fi
 if [[ "$result" != "RESULT::$probe" ]]; then failed copy; fi
 steps+=(result copy)
 ms=$((( $(date +%s%N) - start_ns ) / 1000000))

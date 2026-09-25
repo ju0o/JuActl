@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -35,7 +36,7 @@ def fake_ssh(tmp_path: Path) -> tuple[Path, Path]:
         "#!/bin/sh\n"
         "echo \"actl $*\" >> \"$FAKE_SSH_LOG\"\n"
         "case \"$1\" in\n"
-        "  send) cat >/dev/null; echo '커맨드코드에게 보냈어요 · 답이 오면: actl copy commandcode' ;;\n"
+        "  send) cat >/dev/null; echo 'CommandCode에게 보냈어요 · 답이 오면: actl copy commandcode' ;;\n"
         "  copy) echo 'RESULT::ACTL_E2E_PROBE' ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n",
@@ -163,6 +164,38 @@ def test_ssh_reaches_send_and_copy_with_remote_bash(tmp_path):
     assert "actl send commandcode" in log.read_text(encoding="utf-8")
     assert "actl copy commandcode --print" in log.read_text(encoding="utf-8")
     assert not state.exists()
+
+
+def test_failed_send_reports_finished_steps_and_failed_step(tmp_path):
+    state, _ = fake_ssh(tmp_path)
+    actl = tmp_path / "remote-actl"
+    actl.write_text(
+        actl.read_text(encoding="utf-8").replace(
+            "CommandCode에게 보냈어요 · 답이 오면: actl copy commandcode",
+            "sent to commandcode",
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        PATH=f"{tmp_path}:{env['PATH']}",
+        FAKE_REMOTE_SESSION=str(state),
+        FAKE_REMOTE_ACTL=str(actl),
+        FAKE_SSH_LOG=str(tmp_path / "ssh.log"),
+    )
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--ssh", "asus"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["steps"] == []
+    assert payload["failed"] == "send"
+    assert isinstance(payload["ms"], int)
 
 
 def test_stub_agent_contract():
