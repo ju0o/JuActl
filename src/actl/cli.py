@@ -241,10 +241,7 @@ def _copy(config: dict, agent: str, *, print_only: bool = False) -> int:
     try:
         target = _resolve_live_target(config, agent)
     except ValueError as exc:
-        if str(exc).startswith("Configured target is ") or "live pane 연결을 확인하지 못했어요" in str(exc):
-            print(f"✗ {AGENTS[agent].display_name} 연결된 실행 화면을 확인하지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
-        else:
-            print(f"✗ {exc}")
+        print(f"✗ {exc}")
         return 1
     result = extract_last_response(agent, target, config)
     if not result.text:
@@ -1076,19 +1073,13 @@ def _resolve_live_target(config: dict, agent: str) -> str:
     the most recently started agent process; when start times tie or are
     unreadable, fall back to the inline pane prompt. Zero panes fail closed.
     """
-    stored_error: ValueError | None = None
-    stored_detail: str | None = None
     try:
         target = get_target(config, agent).target
         validation = validate_target(agent, target)
         if validation.valid:
             return target
-        stored_error = ValueError(
-            f"Configured target is {validation.state} for {AGENTS[agent].display_name}: {validation.detail}"
-        )
-        stored_detail = validation.detail
-    except ValueError as exc:
-        stored_error = exc
+    except ValueError:
+        pass
     matches = [d for d in discover() if d.agent == agent and d.confidence in STRONG_CONFIDENCE]
     if len(matches) == 1:
         # Never mutate the caller's config: copy agents (and the entry) before
@@ -1129,12 +1120,10 @@ def _resolve_live_target(config: dict, agent: str) -> str:
         pane_id = _persist_target(config, agent, detection.pane.pane_id)
         print(f"✓ {AGENTS[agent].display_name} 연결했어요: {detection.pane.pane_id} — 다음 단계: 계속 진행하세요")
         return pane_id
-    if stored_error is not None and stored_detail:
-        raise ValueError(
-            f"{AGENTS[agent].display_name} live pane 연결을 확인하지 못했어요 ({stored_detail}) "
-            "— 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
-        )
-    raise ValueError(f"{AGENTS[agent].display_name} 실행 화면을 찾지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요")
+    raise ValueError(
+        f"{AGENTS[agent].display_name} 연결된 실행 화면을 확인하지 못했어요 "
+        "— 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
+    )
 
 
 def _paste_mode(agent: str, target: str) -> None:

@@ -64,7 +64,7 @@ def test_live_target_remap_and_missing_pane_messages_are_korean(monkeypatch):
     with redirect_stdout(out):
         assert cli._copy({}, "codex") == 1
     text = out.getvalue()
-    assert "실행 화면을 찾지 못했어요" in text
+    assert "연결된 실행 화면을 확인하지 못했어요" in text
     assert "다음 단계:" in text
     assert "not currently mapped" not in text
 
@@ -141,3 +141,32 @@ def test_status_error_is_plain_in_text_and_keeps_detail_in_json(monkeypatch):
     with redirect_stdout(out):
         cli._print_status({}, "codex", json_output=True)
     assert '"detail":"raw failure"' in out.getvalue()
+
+
+def test_live_target_remap_and_zero_match_failure_stay_korean(monkeypatch):
+    detection = Detection(PaneInfo("%7", "agents:0.7", "codex", "/tmp", ""), "codex", "high", "pid 7: codex")
+    monkeypatch.setattr(cli, "get_target", lambda *_: type("Target", (), {"target": "%stale"})())
+    monkeypatch.setattr(
+        cli,
+        "validate_target",
+        lambda *_: TargetValidation("DOWN", "%stale", detail="Configured tmux target does not exist"),
+    )
+    monkeypatch.setattr(cli, "backup_config", lambda: "/tmp/config.bak")
+    monkeypatch.setattr(cli, "save_config", lambda *_: None)
+    monkeypatch.setattr(cli, "discover", lambda: [detection])
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert cli._resolve_live_target({}, "codex") == "%7"
+    assert "연결을 다시 설정했어요" in out.getvalue()
+    assert "다음 단계:" in out.getvalue()
+
+    monkeypatch.setattr(cli, "discover", lambda: [])
+    try:
+        cli._resolve_live_target({}, "codex")
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected no-live-pane failure")
+    assert message == "Codex 연결된 실행 화면을 확인하지 못했어요 — 다음 단계: 에이전트를 실행한 뒤 다시 시도하세요"
+    assert "Configured tmux target does not exist" not in message
+    assert "live pane" not in message
