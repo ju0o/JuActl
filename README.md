@@ -1,149 +1,81 @@
-# JuActl — MainPC 에이전트 무전기
+# JuActl
 
-asus tmux에서 돌고 있는 AI 에이전트 8종을 MainPC에서 버튼으로 조종.
-매핑·복사·전송 전부 자동. 터미널 명령어 외울 필요 없음.
+## 한 줄 소개
 
-지원: Claude Team, Claude Pro, OpenCode, Codex, Cursor, CommandCode, Cline, Grok.
+`actl`은 여러 AI 창을 한 번에 살펴보고, 지시를 보내고, 답을 복사하는 리모컨입니다.
+여러 AI 비서를 번갈아 사용하는 비개발자를 위한 도구입니다.
 
-## 오프라인 disposable E2E 처음 실행
+## 지금 되는 것
 
-Linux에서 `bash`, `python3`, `tmux`가 준비되어 있으면 네트워크 없이 임시
-설정과 tmux 세션으로 send→result→copy 흐름을 확인할 수 있다. 실행이 끝나면
-임시 설정과 세션은 자동으로 정리된다.
+- **보드:** 실행 중인 AI 창, 연결 상태, 작업 상태, 결과 준비 여부를 한 화면에서 봅니다.
+- **보내기:** 선택한 AI 창에 여러 줄 지시를 보냅니다. CLI, TUI, 웹 보드에서 쓸 수 있습니다.
+- **결과 복사:** 마지막 답을 클립보드로 복사하거나 `--print`로 화면에 그대로 출력합니다.
+- **창 연결:** `discover`가 tmux 창에서 AI를 찾아 보여 주고, 확실한 매핑만 `--apply`로 저장합니다.
+- **동시 전송 보호:** 창마다 전송 잠금이 있어 두 전송자가 같은 창에 글을 섞어 보내지 못합니다.
+- **여러 실행 방식:** Claude Team, Claude Pro, OpenCode, Codex, Cursor, CommandCode, Cline, Grok을 지원합니다.
 
-```bash
-bash scripts/e2e_disposable.sh
-```
+## 빠른 시작
 
-성공하면 `{"ok":true,...}` JSON이 출력된다. ASUS 같은 원격 호스트에서
-확인하려면 동일한 명령에 `--ssh HOST`를 붙인다.
-
-## 상태 / 설치
-
-현재 운영 화면은 **JuActl Board**이며, **Hermes** 연동 맥락과 에이전트
-상태를 한국어 라벨로 표시한다. 현재 확인된 기본 흐름은
-**보내기 → 결과 → 복사**이고, 같은 패널에 동시에 보내는 충돌 방지는 구현되어
-있다. 다만 실제 보드에서 중복 입력·결과·해제 순서를 확인하는 독립 운영 검증은
-아직 필요하다. DA 응답 누출과 SSH 연결 끊김의 원인은 아직 **조사 중**이다.
-Founder-only Windows E2E도 아직 **미검증**이다. 자세한 근거와 다음 단계는
-[BACKLOG.md](BACKLOG.md)와 [ROOT_CAUSE_REPORT.md](ROOT_CAUSE_REPORT.md)를
-참조한다.
-
-### MainPC 프로그램 설치
-
-```powershell
-git clone https://github.com/ju0o/JuActl.git juactl
-```
-```powershell
-cd juactl
-```
-```powershell
-.\scripts\build-installer.ps1
-```
-
-`dist\JuActl-Setup.exe`를 실행하면 Python이나 Git 없이 설치된다. 패키징은
-전용 임시 PyInstaller 환경에서 수행되어 전역 Python 패키지 경고에 영향을 받지 않는다.
-바탕화면/시작 메뉴 바로가기와 제거 프로그램이 함께 등록된다.
-개발/검증용으로 `dist\JuActlBoard.exe` 포터블 GUI와 `dist\JuActl.exe` CLI도 생성된다.
-빌드 스크립트는 PyInstaller와 Inno Setup을 사용하며, `dist\SHA256SUMS.txt`에 모든 산출물의 SHA-256을 기록한다.
-
-릴리즈 전 QA:
+AI 창을 먼저 tmux에서 실행하고, 저장소 루트에서 아래 순서로 실행합니다.
 
 ```bash
-./scripts/qa.sh
-```
-
-Windows에서는 `powershell -ExecutionPolicy Bypass -File scripts\qa.ps1` 후
-`powershell -ExecutionPolicy Bypass -File scripts\build-installer.ps1`를 실행한다.
-
-## MainPC에서 실행 (웹 보드)
-
-asus에서 서버 기동 (loopback 기본, SSH tunnel 권장):
-
-```bash
-actl serve 8765 --host 0.0.0.0 --token "붙여넣을-강한-토큰"
-```
-
-loopback 밖으로 열면 Bearer 토큰이 필수다. 토큰을 생략하면 일회성 토큰을
-생성해 터미널에 한 번 출력한다. 보안을 우선하면 기본값 `127.0.0.1`과 SSH
-port-forward를 사용한다.
-
-MainPC 브라우저:
-
-```
-http://100.82.108.31:8765/
-```
-
-상태에 따라 3초(실행 중)~12초(안정 상태) adaptive 감시와 stale pane 자동 재매핑, 카드 클릭=미리보기, pane 행 클릭=즉시 매핑,
-복사는 브라우저 클립보드 직행.
-
-## MainPC에서 실행 (CLI 원격)
-
-```powershell
-actl tui --ssh asus
-actl copy grok --print --ssh asus
-actl discover --ssh asus
+python3 -m pip install -e .
+actl --init
 actl doctor
-# asus의 실제 pane 매핑까지 확인할 때
-actl doctor --ssh asus
+actl discover --apply
+actl tui
 ```
 
-## TUI 보드 키 (asus 로컬 / ssh 터미널)
-
-5초 자동 새로고침, 활동 상태는 CPU와 pane tail을 함께 확인하며 불충분하면 `미확인`,
-숫자=선택+미리보기, `c`=복사(실패시 자동출력), `p`=출력,
-`m`=재매핑, `s`=전송, `v`=pane보드, `V`=복사검증,
-`h`=도움말, `r`=새로고침, `q`=종료.
-
-## 자동 매핑 규칙
-
-- pane 1개 → 자동 매핑.
-- 같은 에이전트 pane 여러 개 → 가장 최근 시작 프로세스 자동 선택.
-  기존 live 매핑은 유지. 동점/판독불가만 직접 질문.
-- OpenCode 서버(`opencode serve`)는 매핑하지 않는다. TUI 매핑과
-  `session_id` 바인딩은 별도이며, exact 결과 복사가 필요하면 asus에서
-  `~/.local/bin/actl bind opencode`를 실행한다.
-- pane이 죽거나 바뀌면 stale 제거 후 위 규칙으로 재매핑.
-
-## CLI 명령
-
-- `actl` — REPL (`/help` 전체 명령)
-- `actl copy AGENT [--print]` — 마지막 응답 복사/출력
-- `actl extract AGENT [PANE]` — 기계 파이프 (stdout 텍스트만)
-- `actl send AGENT` — stdin 프롬프트 전송 (원격 위임용)
-- `actl map AGENT` — 번호 또는 `%ID` 직접 입력 (예: `%69`)
-- `actl push FILE [--print]` — 현 SSH 세션 경유 base64 전송
-- `actl discover [--apply]` / `actl status [--json]` / `actl doctor [--json]` / `actl audit [N]` / `actl history [AGENT] [N]`
-- `actl gui [--ssh T]` / `actl tui` / `actl serve [port]`
-- 별칭: `claude-team`/`ct`, `claude-pro`/`cp`, `opencode`/`oc`,
-  `codex`/`cx`, `cursor`/`cu`, `commandcode`/`cmd`, `cline`/`cl`, `grok`/`gr`.
-
-## 클립보드
-
-- MainPC 네이티브: PowerShell `Set-Clipboard` 직행.
-- SSH: OSC52 (Windows Terminal 허용, 차단 시 `p` 출력 후 수동 복사).
-- 로컬 리눅스: `wl-copy` → `xclip` → `xsel`.
-
-## 감사 로그
-
-복사·전송·매핑·해제 동작은 응답 본문 없이 시각, 대상, 결과 길이, 상관관계와
-짧은 결과 hash만 로컬 JSONL에 기록한다. 기본 경로는
-`~/.local/state/actl/audit.jsonl`이며 `ACTL_AUDIT_PATH`로 바꿀 수 있다.
-감사 로그는 prompt/response 본문과 절대 storage 경로를 기록하지 않으며, Unix에서는 디렉터리 `0700`, 파일 `0600`으로 생성된다.
+TUI에서 숫자를 눌러 창을 선택하고, `s`로 지시를 보내고, `c`로 마지막 답을 복사합니다.
+답을 터미널에 출력하려면 다음처럼 실행합니다.
 
 ```bash
-actl audit 50
-actl history commandcode 20
+actl copy codex --print
 ```
 
-## 문제 해결
+명령줄에서 바로 보내려면 표준 입력을 사용합니다.
 
-| 증상 | 조치 |
-|---|---|
-| 매핑 stale | 보드 `r` 또는 `actl discover --apply` |
-| OpenCode bind 요구 | 구버전 → `git pull` (신버전 자동 바인딩) |
-| 클립보드 안 붙음 | `p` 출력 후 수동 복사, OSC52 허용 확인 |
-| Windows `termios` 에러 | 구버전 → `git pull` (lazy import 패치됨) |
-| GUI cmd 팝업 | 구버전 → `git pull` (`CREATE_NO_WINDOW` 패치됨) |
+```bash
+echo "요청 내용" | actl send codex
+```
 
-자세한 MainPC↔asus 절차는 [MAINPC_SETUP.md](MAINPC_SETUP.md).
+웹 보드를 쓰려면 다음을 실행한 뒤 표시된 주소를 브라우저에서 엽니다.
+
+```bash
+actl serve
+```
+
+원격 tmux를 SSH로 조작하는 경우에는 명령에 `--ssh <SSH_TARGET>`을 붙입니다.
+예: `actl tui --ssh <SSH_TARGET>`.
+
+주요 명령은 `actl help`에서 확인할 수 있습니다. 상세한 원격 운영 절차는
+[MAINPC_SETUP.md](MAINPC_SETUP.md), 테스트와 라이브 검증 경계는
+[docs/TESTER.md](docs/TESTER.md)에 정리되어 있습니다.
+
+## 다른 프로그램과의 관계
+
+```text
+actl (리모컨)
+  → Agent Relay (셋톱박스: PM → Worker → QA)
+    → JuControler (허브: JuPlan · JuCeipt · Tester)
+```
+
+`actl`은 AI 창을 조작하고 결과를 가져오는 도구입니다. Agent Relay는 승인된
+작업을 PM·Worker·QA 흐름으로 실행하며, JuControler는 여러 프로젝트와 도구를
+한 곳에서 감독합니다.
+
+## 아직 안 되는 것
+
+- AI 프로그램을 설치하거나 로그인하거나, tmux 창을 대신 만들어 주지는 않습니다.
+- 연결된 live tmux 창이 없으면 실제 지시 전송과 결과 수집을 할 수 없습니다.
+- SSH 터미널이 OSC52 클립보드를 막으면 자동 붙여넣기 대신 `--print` 수동 복사가 필요합니다.
+- Windows 설치와 실제 원격 운영은 이 저장소의 오프라인 테스트만으로 완료되었다고 볼 수 없습니다.
+- AI의 답변 품질이나 작업 완료를 JuActl이 보증하지는 않습니다.
+
+## English summary
+
+JuActl's `actl` is a remote control for people who use several AI assistants.
+It shows agent panes, sends prompts, and copies the latest result.
+Each pane has a send lock so concurrent senders cannot mix input.
+It supports CLI, TUI, web board, local tmux, and SSH-routed tmux workflows.
+Agent Relay and JuControler sit above it for execution and project supervision.
