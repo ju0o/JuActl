@@ -61,12 +61,12 @@ def _print_status(config: dict, agent: str | None = None, *, json_output: bool =
             if not json_output:
                 pane = {"UP": "켜짐", "DOWN": "꺼짐", "UNMAPPED": "연결 안 됨"}.get(s["pane"], s["pane"])
                 activity = _activity_label(s.get("activity", "UNKNOWN")) if s.get("pane") == "UP" else "미확인"
-                print(f"{s['agent']:<12} {pane:<6} {activity:<6} {s['target']:<14} cmd={s['command']:<14} path={s['path']}")
+                print(f"{s['agent']:<12} {pane:<6} {activity:<6} {s['target']:<14} 명령={s['command']:<14} 경로={s['path']}")
         except Exception as exc:
             row = {"id": name, "agent": AGENTS[name].display_name, "state": "ERROR", "detail": str(exc)}
             rows.append(row)
             if not json_output:
-                print(f"{AGENTS[name].display_name:<12} ERROR {exc}")
+                print(f"{AGENTS[name].display_name:<12} 확인 필요 — actl doctor 로 점검하세요")
     if json_output:
         print(json.dumps(rows, ensure_ascii=False, separators=(",", ":")))
 

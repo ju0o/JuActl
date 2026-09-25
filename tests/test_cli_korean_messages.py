@@ -81,3 +81,21 @@ def test_status_activity_column_uses_observe_activity(monkeypatch):
     with redirect_stdout(out):
         cli._print_status({}, "codex")
     assert "작업 중" in out.getvalue()
+    assert "명령=codex" in out.getvalue()
+    assert "경로=/tmp" in out.getvalue()
+
+
+def test_status_error_is_plain_in_text_and_keeps_detail_in_json(monkeypatch):
+    monkeypatch.setattr(cli, "AGENTS", {"codex": cli.AGENTS["codex"]})
+    monkeypatch.setattr(cli, "agent_status", lambda *_: (_ for _ in ()).throw(RuntimeError("raw failure")))
+
+    out = io.StringIO()
+    with redirect_stdout(out):
+        cli._print_status({}, "codex")
+    assert out.getvalue().strip() == "Codex        확인 필요 — actl doctor 로 점검하세요"
+    assert "raw failure" not in out.getvalue()
+
+    out = io.StringIO()
+    with redirect_stdout(out):
+        cli._print_status({}, "codex", json_output=True)
+    assert '"detail":"raw failure"' in out.getvalue()
