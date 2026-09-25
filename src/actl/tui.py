@@ -387,17 +387,20 @@ def _verify_row(agent: str, target: str, config: dict) -> str:
     from actl.core.validation import validate_target
 
     if target == "-" or target.endswith("?"):
-        return "매핑: 없음 — m 눌러 pane 선택"
-    validation = validate_target(agent, target)
+        return "매핑: 없음 — 다음 단계: 작업창을 선택하세요"
+    try:
+        validation = validate_target(agent, target)
+    except Exception:
+        return "매핑: 확인 필요 — 다음 단계: 다시 매핑하세요"
     if not validation.valid:
-        return f"매핑: {validation.state} — {validation.detail} (m 눌러 재매핑)"
+        return "매핑: 확인 필요 — 다음 단계: 다시 매핑하세요"
     try:
         result = extract_last_response(agent, target, config)
-    except Exception as exc:
-        return f"매핑: 정상 proc 확인, 추출 실패: {exc}"
+    except Exception:
+        return "매핑: 정상 · 결과 확인 실패 — 다음 단계: 다시 시도하세요"
     if result.text:
-        return f"매핑: 정상 · 복사: 가능 ({len(result.text)}자, {result.source})"
-    return f"매핑: 정상 · 복사: 불가 ({result.detail or '응답 없음'})"
+        return f"매핑: 정상 · 복사 가능 ({len(result.text)}자) — 다음 단계: 복사하세요"
+    return "매핑: 정상 · 복사 불가 — 다음 단계: 응답을 기다리세요"
 
 
 def _unmapped_panes(config: dict, agent: str) -> list:

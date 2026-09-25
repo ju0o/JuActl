@@ -213,7 +213,7 @@ async function select(agent, silent){
   document.querySelectorAll('#agents .card').forEach(el=>el.classList.toggle('sel', el.dataset.agent===agent));
   try {
     const d = await api('/api/preview?agent='+encodeURIComponent(agent));
-    document.getElementById('paneTitle').textContent = `▚ ${d.display} ${d.target} — live`;
+    document.getElementById('paneTitle').textContent = `▚ ${d.display} ${d.target} — 실시간`;
     document.getElementById('verify').textContent = d.verify;
     document.getElementById('preview').textContent = d.text;
     if(!silent) log(`${d.display} 미리보기`);
